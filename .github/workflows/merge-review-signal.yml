@@ -1,0 +1,23 @@
+name: Mobile review signal
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_thread:
+    types: [resolved, unresolved]
+  pull_request:
+    types: [edited, ready_for_review, converted_to_draft, reopened]
+
+permissions: {}
+
+concurrency:
+  group: mobile-review-signal-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  signal:
+    name: Mobile review signal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - run: echo 'Review metadata changed; trusted main rechecks all merge evidence.'

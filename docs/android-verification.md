@@ -25,6 +25,7 @@ From the repository root:
 ```sh
 node tests/policy.mjs
 node tools/check-policy.mjs
+node tests/merge-controller.mjs
 node tests/secret-scan-metadata.mjs
 bash android/scripts/test-ci-instrumented.sh
 bash android/scripts/test-setup-emulator.sh
@@ -62,13 +63,17 @@ the private `android/scripts/test-worker-journey.sh` from this public repository
 It requires private website Worker source and dependencies; public CI does not
 replace that separate integration.
 
-CI runs on `ubuntu-24.04` for every pull request and each push to `main`, with
+Client CI runs on `ubuntu-24.04` for every pull request and each push to `main`, with
 read-only contents permissions, no repository secrets, no private source, no
 provider calls and no deployment/signing. The build job installs command-line
 tools 19.0 with the pinned checksum and required Android platforms/build tools;
 it does not download emulator images. Each instrumentation job provisions only
 its matrix emulator. CI does not use shared Gradle caches or a screenshot
 recording input.
+
+The separate trusted-main merge controller is not client CI and never checks
+out a PR revision. Its synthetic boundary tests run in `Mobile policy`; see the
+[merge policy](agent-merge-policy.md) for event, permission and bootstrap limits.
 
 Artifacts are retained for seven days and limited to synthetic JUnit/build/
 Roborazzi reports and the allowlisted instrumentation files: ANR summaries,
