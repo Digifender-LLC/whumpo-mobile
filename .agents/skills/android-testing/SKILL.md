@@ -21,6 +21,12 @@ node tools/check-policy.mjs
 node tests/secret-scan-metadata.mjs
 bash android/scripts/test-ci-instrumented.sh
 bash android/scripts/test-setup-emulator.sh
+bash android/scripts/test-ci-install-sdk.sh
+bash -n \
+  android/scripts/ci-instrumented.sh \
+  android/scripts/test-ci-instrumented.sh \
+  android/scripts/ci-install-sdk.sh \
+  android/scripts/test-ci-install-sdk.sh
 ```
 
 Run Gradle checks serially from `android/`:

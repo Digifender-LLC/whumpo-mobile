@@ -12,24 +12,55 @@ const inputs = {
 
 assert.deepEqual(checkPolicy(inputs), [], 'current workflow policy should pass');
 
-const updatedCheckoutSha = 'f'.repeat(40);
-assert.deepEqual(checkPolicy({
-  ...inputs,
-  android: inputs.android.replaceAll(
-    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
-    `actions/checkout@${updatedCheckoutSha}`),
-  ci: inputs.ci.replaceAll(
-    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
-    `actions/checkout@${updatedCheckoutSha}`)
-}), [], 'approved action identities accept updated full commit pins');
+function mutateActionReferences(base, action, replacement) {
+  const escapedAction = action.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = () => new RegExp(`${escapedAction}@([a-f0-9]{40})`, 'g');
+  const matches = [...`${base.android}\n${base.ci}`.matchAll(pattern())];
+  assert.ok(matches.length > 0, `${action} must have a full SHA fixture to mutate`);
+  let changes = 0;
+  const update = text => text.replace(pattern(), (match, sha) => {
+    const updated = replacement(sha);
+    assert.notEqual(updated, match, `${action} fixture must change`);
+    changes += 1;
+    return updated;
+  });
+  const updated = {...base, android: update(base.android), ci: update(base.ci)};
+  assert.ok(changes > 0, `${action} fixture must be mutated`);
+  assert.notDeepEqual(updated, base, `${action} fixture must change before policy validation`);
+  return updated;
+}
 
-function rejects(change, expected, label) {
-  const fixture = {...inputs, ...change};
+const alternatePins = [
+  ['actions/checkout', 'f'.repeat(40)],
+  ['actions/setup-java', 'e'.repeat(40)],
+  ['gradle/actions/wrapper-validation', 'd'.repeat(40)],
+  ['actions/setup-node', 'c'.repeat(40)],
+  ['actions/upload-artifact', 'b'.repeat(40)],
+  ['reactivecircus/android-emulator-runner', 'a'.repeat(40)]
+];
+let updatedInputs = inputs;
+for (const [action, sha] of alternatePins) {
+  updatedInputs = mutateActionReferences(updatedInputs, action, () => `${action}@${sha}`);
+}
+assert.deepEqual(checkPolicy(updatedInputs), [], 'all approved actions accept changed full commit pins');
+
+function rejectsInputs(base, change, expected, label) {
+  const fixture = {...base, ...change};
   assert.ok(checkPolicy(fixture).some(error => error.includes(expected)), label);
 }
 
-rejects({android: inputs.android.replace('actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1', 'actions/checkout@v7')},
-  'immutable action pins', 'unpinned actions must fail');
+function rejects(change, expected, label) {
+  rejectsInputs(inputs, change, expected, label);
+}
+
+for (const base of [inputs, updatedInputs]) {
+  rejectsInputs(mutateActionReferences(base, 'actions/checkout', () => 'actions/checkout@v7'), {},
+    'immutable action pins', 'unpinned actions must fail for current and updated pins');
+  rejectsInputs(mutateActionReferences(base, 'actions/setup-node',
+    sha => `example/setup-node@${sha}`), {},
+  'approved action identities and immutable pins',
+  'unexpected action identities must fail for current and updated pins');
+}
 rejects({ci: inputs.ci.replace('  pull_request:\n', '  pull_request_target:\n')},
   'pull_request trigger', 'privileged pull_request_target must fail');
 rejects({ci: inputs.ci.replace('      contents: read', '      contents: write')},
@@ -38,10 +69,6 @@ rejects({ci: inputs.ci.replace(
   '        run: |\n          node tests/policy.mjs',
   '        env:\n          TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        run: |\n          node tests/policy.mjs')},
   'public-runner boundary', 'repository tokens must not be available to PR jobs');
-rejects({ci: inputs.ci.replace(
-  'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1',
-  `example/setup-node@${updatedCheckoutSha}`)},
-  'approved action identities and immutable pins', 'unexpected action identities must fail');
 rejects({android: inputs.android.replace('runs-on: ubuntu-24.04', 'runs-on: [self-hosted, linux]')},
   'isolated hosted runner', 'persistent runners must fail');
 rejects({android: inputs.android.replace('testLocalDebugUnitTest testDeployedDebugUnitTest', 'testLocalDebugUnitTest')},
@@ -53,6 +80,9 @@ rejects({dependabot: inputs.dependabot.replace('directory: /android', 'directory
 rejects({instrumentation: inputs.instrumentation.replace(
   '-Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest', '')},
   'client instrumentation command and exclusion', 'missing WorkerJourneyTest exclusion must fail');
+rejects({ci: inputs.ci.replace('          bash android/scripts/test-ci-install-sdk.sh\n', '')},
+  'policy command bash android/scripts/test-ci-install-sdk.sh',
+  'SDK installer regression must remain in the policy job');
 
 assert.deepEqual(checkTrackedPaths([
   'README.md',

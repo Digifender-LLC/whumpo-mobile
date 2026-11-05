@@ -6,9 +6,12 @@ The wrapper pins Gradle 9.8.2; `android/gradle/libs.versions.toml` pins AGP 9.5.
 Kotlin 2.4.21 and Compose Multiplatform 1.12.2. Do not upgrade them independently.
 
 The public build uses Temurin 21.0.13+9, Android platform `android-37.0`, and
-build-tools 36.0.0 and 37.0.0. CI installs command-line tools 19.0 after verifying
-the checksum pinned by `android/scripts/setup-emulator.sh`; it does not download
-system images for the build job. No Gradle dependency cache is shared between jobs.
+build-tools 36.0.0 and 37.0.0. CI always downloads command-line tools 19.0,
+verifies the checksum in `android/scripts/ci-install-sdk.sh`, and only then
+replaces the selected tools tree. Build mode does not install the emulator
+package or download system images. `bash android/scripts/test-ci-install-sdk.sh`
+mock-tests the installer without network access. No Gradle dependency cache is
+shared between jobs.
 
 Run these commands from `android/`:
 
