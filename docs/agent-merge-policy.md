@@ -74,9 +74,12 @@ revision-bound dispatch below. The signal is not a required check or scheduler.
 The workflow checks repository name, immutable ID and `refs/heads/main`, then
 checks out the trusted event SHA with credential persistence disabled. It installs
 no repository dependencies, builds no PR code and downloads no artifacts.
-The short-lived workflow token is exposed only to the trusted controller process;
-it has repository contents write for the exact-head squash endpoint, with
-pull-requests/actions/checks read. Public PR execution keeps read-only permissions.
+The short-lived workflow token is available to pinned trusted-job actions,
+including checkout, and to the controller process. `persist-credentials: false`
+prevents checkout from persisting credentials in Git configuration; it does not
+prevent job-level token access. The token has repository contents write for the
+exact-head squash endpoint, with pull-requests/actions/checks read. Public PR
+execution keeps read-only permissions.
 Fork workflow events are ignored before reading their PR evidence.
 
 Workflow-run `head_sha` and attached PR head/base are the evidence association;
