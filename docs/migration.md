@@ -78,16 +78,19 @@ exception. An unchanged hosted Actions billing or runner refusal is an
 infrastructure blocker, not a source failure; do not retry it unchanged or change
 settings to work around it.
 
-Controller bootstrap is blocked until a repository ruleset is saved with the
-five exact checks bound to GitHub Actions app ID `15368` as their required
-status-check source, and each has a successful run from that source. This is a
-technical readiness condition, not a new owner-permission loop; this packet does
-not change ruleset settings.
+Controller bootstrap requires a saved ruleset with the five exact checks bound
+to GitHub Actions app ID `15368` as their required status-check source, and
+successful runs for all five from that source. This is a technical readiness
+condition, not a new owner-permission loop; this packet does not change ruleset
+settings.
 
 Any future controller must only merge same-repository, non-fork, non-draft code
 PRs, with advisory reviews and no human approval quota or sensitive-path exclusion.
 It must require all five checks to pass for the exact current PR head and base,
 resolved review threads, and two fresh reads that detect head/base/status races.
+For `pull_request` runs, associate evidence with the run `head_sha` and attached
+PR head/base; the checkout is GitHub's synthetic merge result, not a raw-head
+checkout. The controller must reject stale base or check evidence.
 Protections must require the checks with GitHub Actions app ID `15368` as their
 status-check source, allow zero human approvals, and disallow deletion and
 non-fast-forward updates. The app ID is the required-check source, not a merge

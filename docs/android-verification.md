@@ -4,7 +4,7 @@
 
 | GitHub check name | Workflow / job | Coverage |
 | --- | --- | --- |
-| `Mobile policy` | `.github/workflows/ci.yml` / `mobile-policy` | Shell regressions and dependency-free policy/source-contract tests |
+| `Mobile policy` | `.github/workflows/ci.yml` / `mobile-policy` | Instrumentation/setup/SDK-installer shell regressions and dependency-free policy/source-contract tests |
 | `Secret scan` | `.github/workflows/ci.yml` / `secret-scan` | Gitleaks 8.30.1 over full Git history, including fetched tags |
 | `Assemble, lint and unit tests` | `.github/workflows/android.yml` / `build` | Wrapper validation, both debug flavors and AndroidTest APKs, lint, shared JVM/host and app unit tasks |
 | `Instrumented tests (API 28)` | `.github/workflows/android.yml` / `instrumented` matrix API 28 | Client instrumented suites on disposable x86_64 Google APIs emulator |
@@ -29,7 +29,12 @@ node tests/merge-controller.mjs
 node tests/secret-scan-metadata.mjs
 bash android/scripts/test-ci-instrumented.sh
 bash android/scripts/test-setup-emulator.sh
-bash -n android/scripts/ci-instrumented.sh android/scripts/test-ci-instrumented.sh android/scripts/ci-install-sdk.sh
+bash android/scripts/test-ci-install-sdk.sh
+bash -n \
+  android/scripts/ci-instrumented.sh \
+  android/scripts/test-ci-instrumented.sh \
+  android/scripts/ci-install-sdk.sh \
+  android/scripts/test-ci-install-sdk.sh
 ```
 
 With a credential-free environment, a configured JDK 21 and Android SDK, run

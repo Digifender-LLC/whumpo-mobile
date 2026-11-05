@@ -19,10 +19,12 @@ The exact required checks are:
 4. `Instrumented tests (API 28)` (`Android` workflow, `instrumented` matrix)
 5. `Instrumented tests (API 36)` (`Android` workflow, `instrumented` matrix)
 
-All five must have successful, current evidence for the PR's exact head SHA and
-current base SHA. Confirm every review thread is resolved. Do not accept a
-success from a superseded commit, infer success from a workflow definition, or
-turn a missing status into a pass.
+All five must have successful, current evidence associated with the workflow
+run's `head_sha` and attached PR head/base SHAs. A `pull_request` workflow
+checks out GitHub's synthetic merge commit, so a pass validates that merge
+result, not a raw-head-only tree. Confirm every review thread is resolved. Do
+not accept a success from a superseded commit, infer success from a workflow
+definition, or turn a missing status into a pass.
 
 ## Trusted controller requirements
 
@@ -33,11 +35,10 @@ path is the fallback. If CI-event automation or hosted Actions is unavailable,
 report the actual infrastructure status; do not retry an unchanged billing or
 runner refusal, alter settings, or add a public-PR runner exception.
 
-Bootstrap is blocked until a repository ruleset is saved with the five exact
-check names bound as required checks to GitHub Actions app ID `15368`, and all
-five have successful runs from that source. This is a technical readiness
-condition, not a new owner-permission loop; this packet does not edit ruleset
-settings.
+Controller bootstrap requires a saved ruleset with the five exact check names
+bound as required checks to GitHub Actions app ID `15368`, and successful runs
+for all five from that source. This is a technical readiness condition, not a
+new owner-permission loop; this packet does not edit ruleset settings.
 
 The controller must:
 
@@ -45,8 +46,11 @@ The controller must:
   `contents: read` and cannot merge.
 - Only process same-repository, non-fork, non-draft code PRs. It must not apply
   special sensitive-path exclusions.
-- Require the five named checks above, all attached to the current head, with
-  the current base SHA recorded; require all review threads resolved.
+- Require the five named checks above, associated with each run's current
+  `head_sha` and attached PR head/base; require all review threads resolved.
+  Because `pull_request` jobs test the synthetic merge commit, compare the run
+  metadata and current PR state rather than assuming the checkout is the raw
+  head tree.
 - Read PR, head/base, checks, threads and protection evidence; immediately before
   merge, read them again and compare. Any head/base/status/thread race aborts the
   merge. A later legitimate CI event or the existing hourly inventory can
