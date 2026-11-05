@@ -10,7 +10,7 @@ export const workflows = {
 const root = `/repos/${repository}`;
 const sha = /^[a-f0-9]{40}$/;
 const required = Object.values(workflows).flat();
-const threadQuery = 'query($number:Int!,$after:String){repository(owner:"Digifender-LLC",name:"whumpo-mobile"){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}';
+const threadQuery = 'query($number:Int!,$after:String){repository(owner:"Digifender-LLC",name:"whumpo-mobile"){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id isResolved} pageInfo{hasNextPage endCursor}}}}}';
 const identity = r => r?.id === repositoryId && r.full_name === repository && r.private === false && r.fork === false;
 
 export function protectionsReady(rules) {
@@ -42,7 +42,7 @@ export function eligible(s) {
   const validPath = name => typeof name === 'string' && !name.includes('\0') && name.split('/').every(part => part && part !== '.' && part !== '..');
   if (s.files.some(f => !validPath(f.filename) || !['added', 'modified', 'removed', 'renamed', 'copied', 'changed', 'unchanged'].includes(f.status)
     || f.status === 'renamed' && !validPath(f.previous_filename))) return 'file-metadata';
-  if (!Array.isArray(s.threads) || s.threads.some(t => t.isResolved !== true)) return 'review-threads';
+  if (!Array.isArray(s.threads) || s.threads.some(t => typeof t.id !== 'string' || !t.id || t.isResolved !== true)) return 'review-threads';
   for (const [name, jobs] of Object.entries(workflows)) {
     const r = s.runs?.[name];
     if (!r || r.path !== `.github/workflows/${name}` || r.event !== 'pull_request' || r.head_sha !== p.head.sha
@@ -50,7 +50,8 @@ export function eligible(s) {
       || !Number.isSafeInteger(r.run_attempt) || r.run_attempt < 1) return `workflow:${name}`;
     if (!r.pull_requests?.some(pr => pr.number === p.number && pr.head?.sha === p.head.sha && pr.base?.sha === s.main
       && pr.base.ref === 'main' && pr.base.repo?.id === repositoryId && pr.head.repo?.id === repositoryId)) return `workflow-revisions:${name}`;
-    if (r.suite?.app?.id !== 15368 || r.suite.head_sha !== p.head.sha) return `workflow-source:${name}`;
+    if (r.suite?.app?.id !== 15368 || r.suite.head_sha !== p.head.sha
+      || r.suite.status !== 'completed' || r.suite.conclusion !== 'success') return `workflow-source:${name}`;
     if (!Array.isArray(r.jobs) || r.jobs.length !== jobs.length || jobs.some(job => r.jobs.filter(j => j.name === job
       && j.status === 'completed' && j.conclusion === 'success' && j.head_sha === p.head.sha && j.run_attempt === r.run_attempt).length !== 1)) return `jobs:${name}`;
   }

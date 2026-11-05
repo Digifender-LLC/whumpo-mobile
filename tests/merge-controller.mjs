@@ -16,7 +16,7 @@ function fixture() {
   ], runs: Object.fromEntries(Object.entries(workflows).map(([name, jobs], i) => [name, {
     id: 100 + i, check_suite_id: 200 + i, path: `.github/workflows/${name}`, event: 'pull_request', head_sha: head,
     repository: repo, head_repository: repo, status: 'completed', conclusion: 'success', run_attempt: 1, pull_requests: [pr],
-    suite: {app: {id: 15368}, head_sha: head}, jobs: jobs.map(name => ({name, status: 'completed', conclusion: 'success', head_sha: head, run_attempt: 1}))
+    suite: {app: {id: 15368}, head_sha: head, status: 'completed', conclusion: 'success'}, jobs: jobs.map(name => ({name, status: 'completed', conclusion: 'success', head_sha: head, run_attempt: 1}))
   }]))}));
 }
 assert.equal(eligible(fixture()), null, 'sensitive workflow changes have no blanket exclusion');
@@ -36,6 +36,7 @@ for (const mutate of [
   s => s.rules.shift(), s => s.runs['ci.yml'].head_sha = other,
   s => s.runs['ci.yml'].pull_requests[0].base.sha = other, s => s.runs['ci.yml'].pull_requests = [],
   s => s.runs['ci.yml'].suite.app.id = 1, s => s.runs['ci.yml'].event = 'push',
+  s => s.runs['ci.yml'].suite.conclusion = 'failure',
   s => s.runs['ci.yml'].status = 'queued', s => s.runs['android.yml'].jobs[1].conclusion = 'skipped',
   s => s.runs['android.yml'].jobs[2].run_attempt = 0, s => s.runs['ci.yml'].jobs.push(s.runs['ci.yml'].jobs[0])
 ]) {
@@ -72,7 +73,7 @@ for (const change of [s => s.pr.head.sha = other, s => {s.main = other; s.pr.bas
   f = fake({onRead: (s, n) => {if (n === 2) change(s);}});
   assert.equal((await reconcile(f.api, 2, main, false)).merged, false); assert.equal(f.writes.length, 0);
 }
-f = fake({onRead: (s, n) => {if (n === 2) s.threads.push({isResolved: true});}});
+f = fake({onRead: (s, n) => {if (n === 2) s.threads.push({id: 'synthetic-thread', isResolved: true});}});
 assert.equal((await reconcile(f.api, 2, main, false)).reason, 'changed-evidence'); assert.equal(f.writes.length, 0);
 f = fake(); let finalRefs = 0;
 const finalRace = async (path, options) => {
