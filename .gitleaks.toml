@@ -1,0 +1,4 @@
+title = "Whumpo Mobile secret scan"
+
+[extend]
+useDefault = true

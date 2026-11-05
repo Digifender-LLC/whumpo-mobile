@@ -15,7 +15,7 @@ SH
 cat >"$fixture/android/scripts/test-worker-journey.sh" <<'SH'
 #!/usr/bin/env bash
 echo journey >>"$CALLS"
-exit "$JOURNEY_STATUS"
+exit 99
 SH
 cat >"$fixture/bin/adb" <<'SH'
 #!/usr/bin/env bash
@@ -52,10 +52,10 @@ exec "$@"
 SH
 chmod +x "$fixture/android/gradlew" "$fixture/bin/"*
 export PATH="$fixture/bin:$PATH" ANDROID_SERIAL=emulator-5554
-export CALLS="$fixture/calls" GRADLE_STATUS=0 JOURNEY_STATUS=0 ADB_STATUS=0
+export CALLS="$fixture/calls" GRADLE_STATUS=0 ADB_STATUS=0
 out="$fixture/android/androidApp/build/outputs/instrumented-diagnostics"
 run() {
-  local api=$1 expected=$2 journey=$3 status=0
+  local api=$1 expected=$2 status=0
   : >"$CALLS"
   bash "$fixture/android/scripts/ci-instrumented.sh" "$api" || status=$?
   [[ "$status" == "$expected" && "$(cat "$out/test-exit-code.txt")" == "$expected" ]]
@@ -67,7 +67,7 @@ run() {
   [[ "$(sed -n '/^adb|/p' "$CALLS")" == "$expectedAdb" ]]
   [[ "$(grep -c '^unexpected-' "$CALLS" || true)" == 0 ]]
   ! grep -Fq dumpsys "$CALLS"
-  [[ "$(grep -c '^journey$' "$CALLS" || true)" == "$journey" ]]
+  [[ "$(grep -c '^journey$' "$CALLS" || true)" == 0 ]]
   [[ "$(find "$out" -maxdepth 1 -type f -printf '%f\n' | sort)" == $'anr-after.json\nanr-before.json\ndevice-state.txt\ntest-exit-code.txt\ntree-failures.txt' ]]
   [[ -s "$out/device-state.txt" && -s "$out/tree-failures.txt" ]]
   ! grep -r 'synthetic-private' "$out"
@@ -78,11 +78,21 @@ run() {
       [[ "$(cat "$out/anr-$stage.json")" == '{"version":1,"status":"unavailable","reason":"capture"}' ]]
     fi
   done
-  echo "API $api, Gradle=$GRADLE_STATUS, journey=$JOURNEY_STATUS, adb=$ADB_STATUS: status $status preserved"
+  echo "API $api, Gradle=$GRADLE_STATUS, adb=$ADB_STATUS: status $status preserved; Worker journey excluded"
 }
-run 36 0 1
-run 28 0 0
-GRADLE_STATUS=42 run 36 42 0
-JOURNEY_STATUS=17 run 36 17 1
-ADB_STATUS=9 run 36 0 1
-GRADLE_STATUS=42 ADB_STATUS=9 run 36 42 0
+run 36 0
+run 28 0
+GRADLE_STATUS=42 run 36 42
+ADB_STATUS=9 run 36 0
+GRADLE_STATUS=42 ADB_STATUS=9 run 28 42
+
+reject() {
+  local status=0
+  : >"$CALLS"
+  rm -rf "$out"
+  "$@" || status=$?
+  [[ "$status" == 2 && ! -s "$CALLS" && ! -e "$out/test-exit-code.txt" ]]
+}
+reject bash "$fixture/android/scripts/ci-instrumented.sh" 27
+reject env ANDROID_SERIAL=R58-synthetic-physical bash "$fixture/android/scripts/ci-instrumented.sh" 36
+echo "Invalid API and physical device serials rejected before tests or diagnostics"

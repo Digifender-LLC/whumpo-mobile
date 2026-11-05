@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  mobile-policy:
+    name: Mobile policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - name: Run shell regressions and policy contracts
+        run: |
+          node tests/policy.mjs
+          node tools/check-policy.mjs
+          node tests/secret-scan-metadata.mjs
+          bash android/scripts/test-ci-instrumented.sh
+          bash android/scripts/test-setup-emulator.sh
+          bash -n android/scripts/ci-instrumented.sh android/scripts/test-ci-instrumented.sh android/scripts/ci-install-sdk.sh
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256_X64: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - name: Create sanitized diagnostics directory
+        run: mkdir -p "$GITHUB_WORKSPACE/scan-diagnostics"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: scan-source
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - name: Install pinned Gitleaks
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks.tgz"
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o "$archive"
+          echo "$GITLEAKS_SHA256_X64  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+      - name: Test sanitized metadata contract
+        working-directory: scan-source
+        env:
+          GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
+        run: node tests/secret-scan-metadata.mjs
+      - name: Scan full Git history
+        working-directory: scan-source
+        run: |
+          set -euo pipefail
+          report="$(mktemp "$RUNNER_TEMP/gitleaks-report.XXXXXX")"
+          raw_log="$(mktemp "$RUNNER_TEMP/gitleaks-log.XXXXXX")"
+          trap 'rm -f "$report" "$raw_log"' EXIT
+          set +e
+          "$RUNNER_TEMP/gitleaks" detect --no-banner --redact --config .gitleaks.toml --source . --report-format json --report-path "$report" >"$raw_log" 2>&1
+          result=$?
+          set -e
+          node tools/secret-scan-metadata.mjs "$report" "$result" > "$GITHUB_WORKSPACE/scan-diagnostics/findings.json"
+          cat "$GITHUB_WORKSPACE/scan-diagnostics/findings.json"
+          exit "$result"
+      - name: Upload sanitized finding metadata
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: secret-scan-metadata
+          path: scan-diagnostics/findings.json
+          if-no-files-found: ignore
+          retention-days: 7
