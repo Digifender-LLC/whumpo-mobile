@@ -13,6 +13,11 @@
 These are the exact source-defined names. A workflow file does not prove a run
 occurred or that repository protections require its checks.
 
+`Mobile policy` checks tracked paths and Git index modes against known private
+source/configuration, generated-output and signing-file boundaries. It does not
+detect backend code copied under an otherwise allowed path; Gitleaks and
+independent source review remain required.
+
 ## Credential-free local commands
 
 From the repository root:

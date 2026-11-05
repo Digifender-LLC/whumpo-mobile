@@ -1,5 +1,66 @@
+import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+
+const forbiddenRootDirectories = new Set(['src', 'frontend', 'schema', 'integrations']);
+const forbiddenPathSegments = new Set([
+  '.git', '.gradle', '.kotlin', '.wrangler', '.cache', 'cache', 'build',
+  'node_modules', '.secrets'
+]);
+const privateBackendHarness = /^tests\/(?:android-local-worker(?:[./-]|$)|test-worker-journey(?:[./-]|$)|worker-journey(?:[./-]|$)|backend(?:\/|[.-]|$))/i;
+
+export function checkTrackedPaths(paths) {
+  const errors = [];
+  for (const entry of paths) {
+    const path = typeof entry === 'string' ? entry : entry?.path;
+    if (typeof path !== 'string' || path.length === 0 || path.startsWith('/')) {
+      errors.push('invalid tracked path');
+      continue;
+    }
+    const segments = path.split('/');
+    const filename = segments.at(-1).toLowerCase();
+    const forbidden = forbiddenRootDirectories.has(segments[0])
+      || segments.some(segment => forbiddenPathSegments.has(segment)
+        || segment === '.env'
+        || segment.startsWith('.env.'))
+      || segments.some(segment => ['.dev.vars', 'local.properties', 'google-services.json'].includes(segment))
+      || /^wrangler(?:\.[^/]+)?$/i.test(segments[0])
+      || privateBackendHarness.test(path)
+      || /\.(?:keystore|jks|p12|apk|aab)$/i.test(filename);
+    if (forbidden) errors.push(`forbidden tracked path: ${path}`);
+
+    if (typeof entry !== 'string'
+      && (!['100644', '100755'].includes(entry?.mode) || entry?.stage !== 0)) {
+      errors.push(`unsupported tracked file mode: ${path}`);
+    }
+  }
+  return errors;
+}
+
+function readTrackedIndex(rootPath) {
+  const paths = execFileSync('git', ['ls-files', '-z'], {cwd: rootPath, encoding: 'utf8'})
+    .split('\0')
+    .filter(Boolean);
+  const stages = new Map();
+  const stageRecords = execFileSync('git', ['ls-files', '--stage', '-z'], {cwd: rootPath, encoding: 'utf8'})
+    .split('\0')
+    .filter(Boolean);
+  for (const record of stageRecords) {
+    const separator = record.indexOf('\t');
+    if (separator < 0) throw new Error('Malformed tracked index record');
+    const [mode, , stageText] = record.slice(0, separator).split(' ');
+    const path = record.slice(separator + 1);
+    const entries = stages.get(path) || [];
+    entries.push({mode, stage: Number(stageText)});
+    stages.set(path, entries);
+  }
+  return paths.flatMap(path => {
+    const entries = stages.get(path);
+    return entries?.length
+      ? entries.map(entry => ({path, ...entry}))
+      : [{path, mode: null, stage: null}];
+  });
+}
 
 export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependabot}) {
   const errors = [];
@@ -24,17 +85,25 @@ export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependa
       && !/^ *runs-on: (?!ubuntu-24\.04)/m.test(text), `${name} isolated hosted runner`);
   }
 
-  const pins = [
-    ['actions/checkout', '3d3c42e5aac5ba805825da76410c181273ba90b1'],
-    ['actions/setup-java', 'b843ebf9b913146b38da2eaa7aeddf76074ae1ad'],
-    ['gradle/actions/wrapper-validation', '8da46b539cd8fe6ab27ca75128919a18d757604c'],
-    ['actions/setup-node', '949feb2413d6458794dcd2491c4babbbce0c15c1'],
-    ['actions/upload-artifact', 'cf430e030ddbb5b0abf93d22962f4752f3646cd9'],
-    ['reactivecircus/android-emulator-runner', 'a421e43855164a8197daf9d8d40fe71c6996bb0d']
+  const expectedActions = [
+    'actions/checkout',
+    'actions/setup-java',
+    'gradle/actions/wrapper-validation',
+    'actions/setup-node',
+    'actions/upload-artifact',
+    'reactivecircus/android-emulator-runner'
   ];
-  for (const [action, sha] of pins) {
-    const combined = `${android}\n${ci}`;
-    require(combined.includes(`${action}@${sha}`), `pinned action ${action}`);
+  const combined = `${android}\n${ci}`;
+  const actionUses = [...combined.matchAll(/^\s*(?:-\s*)?uses:\s*([^\s#]+)/gm)]
+    .map(match => match[1]);
+  const actionNames = actionUses.map(value => value.slice(0, value.lastIndexOf('@')));
+  require(actionUses.length > 0 && actionUses.every(value => {
+    const separator = value.lastIndexOf('@');
+    return expectedActions.includes(value.slice(0, separator))
+      && /^[a-f0-9]{40}$/.test(value.slice(separator + 1));
+  }), 'approved action identities and immutable pins');
+  for (const action of expectedActions) {
+    require(actionNames.includes(action), `required action identity ${action}`);
   }
 
   for (const [label, text, timeout] of [
@@ -95,8 +164,8 @@ export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependa
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const root = new URL('../', import.meta.url);
-    const read = path => readFileSync(new URL(path, root), 'utf8');
+    const root = fileURLToPath(new URL('../', import.meta.url));
+    const read = path => readFileSync(new URL(path, pathToFileURL(`${root}/`)), 'utf8');
     const errors = checkPolicy({
       android: read('.github/workflows/android.yml'),
       ci: read('.github/workflows/ci.yml'),
@@ -104,6 +173,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       sdkInstaller: read('android/scripts/ci-install-sdk.sh'),
       dependabot: read('.github/dependabot.yml')
     });
+    errors.push(...checkTrackedPaths(readTrackedIndex(root)));
     if (errors.length) {
       console.error(`Policy contract failures: ${errors.join('; ')}`);
       process.exitCode = 1;

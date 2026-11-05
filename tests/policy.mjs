@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {checkPolicy} from '../tools/check-policy.mjs';
+import {checkPolicy, checkTrackedPaths} from '../tools/check-policy.mjs';
 
 const inputs = {
   android: readFileSync(new URL('../.github/workflows/android.yml', import.meta.url), 'utf8'),
@@ -11,6 +11,17 @@ const inputs = {
 };
 
 assert.deepEqual(checkPolicy(inputs), [], 'current workflow policy should pass');
+
+const updatedCheckoutSha = 'f'.repeat(40);
+assert.deepEqual(checkPolicy({
+  ...inputs,
+  android: inputs.android.replaceAll(
+    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+    `actions/checkout@${updatedCheckoutSha}`),
+  ci: inputs.ci.replaceAll(
+    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+    `actions/checkout@${updatedCheckoutSha}`)
+}), [], 'approved action identities accept updated full commit pins');
 
 function rejects(change, expected, label) {
   const fixture = {...inputs, ...change};
@@ -27,6 +38,10 @@ rejects({ci: inputs.ci.replace(
   '        run: |\n          node tests/policy.mjs',
   '        env:\n          TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        run: |\n          node tests/policy.mjs')},
   'public-runner boundary', 'repository tokens must not be available to PR jobs');
+rejects({ci: inputs.ci.replace(
+  'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1',
+  `example/setup-node@${updatedCheckoutSha}`)},
+  'approved action identities and immutable pins', 'unexpected action identities must fail');
 rejects({android: inputs.android.replace('runs-on: ubuntu-24.04', 'runs-on: [self-hosted, linux]')},
   'isolated hosted runner', 'persistent runners must fail');
 rejects({android: inputs.android.replace('testLocalDebugUnitTest testDeployedDebugUnitTest', 'testLocalDebugUnitTest')},
@@ -38,5 +53,49 @@ rejects({dependabot: inputs.dependabot.replace('directory: /android', 'directory
 rejects({instrumentation: inputs.instrumentation.replace(
   '-Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest', '')},
   'client instrumentation command and exclusion', 'missing WorkerJourneyTest exclusion must fail');
+
+assert.deepEqual(checkTrackedPaths([
+  'README.md',
+  'android/build.gradle.kts',
+  'android/gradle/wrapper/gradle-wrapper.jar',
+  'android/scripts/test-worker-journey.sh',
+  'docs/migration.md',
+  'tests/fixtures/mobile-v1/operations.json',
+  'tests/policy.mjs'
+]), [], 'public scripts, fixtures, build scripts and documentation paths should pass');
+
+for (const path of [
+  'src/worker.ts',
+  'frontend/app.tsx',
+  'schema/control.sql',
+  'integrations/cms/index.ts',
+  'node_modules/package/index.js',
+  'wrangler.jsonc',
+  'tests/android-local-worker.mjs',
+  '.git/config',
+  'android/.gradle/caches/file',
+  'android/.kotlin/sessions/file',
+  'android/.wrangler/state.json',
+  'android/cache/build-state.json',
+  'android/app/build/outputs/apk/debug/app.apk',
+  'android/app/release.aab',
+  '.env',
+  'android/.env.production',
+  '.dev.vars',
+  '.secrets/worker',
+  'android/local.properties',
+  'android/app/google-services.json',
+  'android/signing/upload.keystore',
+  'android/signing/upload.jks',
+  'android/signing/upload.p12'
+]) {
+  assert.ok(checkTrackedPaths([path]).some(error => error.startsWith('forbidden tracked path:')), path);
+}
+
+assert.deepEqual(checkTrackedPaths([{path: 'README.md', mode: '100644', stage: 0}]), []);
+for (const mode of ['120000', '160000']) {
+  assert.ok(checkTrackedPaths([{path: 'docs/link', mode, stage: 0}])
+    .some(error => error.startsWith('unsupported tracked file mode:')), mode);
+}
 
 console.log('Mobile policy negative fixtures passed.');

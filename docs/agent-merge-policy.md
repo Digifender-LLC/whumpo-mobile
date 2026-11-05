@@ -1,5 +1,8 @@
 # Agent merge policy
 
+This policy applies to public repository `Digifender-LLC/whumpo-mobile`
+(GitHub repository ID `1446445212`).
+
 ## Authorized scope
 
 The owner authorizes automatic merging of same-repository, non-fork, non-draft
@@ -30,6 +33,12 @@ path is the fallback. If CI-event automation or hosted Actions is unavailable,
 report the actual infrastructure status; do not retry an unchanged billing or
 runner refusal, alter settings, or add a public-PR runner exception.
 
+Bootstrap is blocked until a repository ruleset is saved with the five exact
+check names bound as required checks to GitHub Actions app ID `15368`, and all
+five have successful runs from that source. This is a technical readiness
+condition, not a new owner-permission loop; this packet does not edit ruleset
+settings.
+
 A future controller must:
 
 - Run from trusted `main` and be the sole merge writer; public PR workflows keep
@@ -41,8 +50,10 @@ A future controller must:
 - Read PR, head/base, checks, threads and protection evidence; immediately before
   merge, read them again and compare. Any head/base/status/thread race aborts the
   merge and schedules bounded reevaluation rather than acting on stale evidence.
-- Use protections that require the checks, zero human approvals, an
-  Actions-bound merge actor, no deletion and no non-fast-forward updates.
+- Use protections that require the five checks with GitHub Actions app ID
+  `15368` as their required status-check source, zero human approvals, no
+  deletion and no non-fast-forward updates. This source binding is not a merge
+  actor identity.
 - Never use a bypass guard or native queued auto-merge. Preserve one writer per
   branch and cap retries at three; future Caps/Fusion orchestration must preserve
   those limits.

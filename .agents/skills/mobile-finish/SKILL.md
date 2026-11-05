@@ -10,7 +10,7 @@ description: Finish Whumpo Mobile changes with exact local evidence and current 
    implemented, locally verified, CI-verified, deployed and accepted separate.
 2. Run the credential-free local gate in `docs/android-verification.md` before
    pushing. Record exact commands, exit statuses, test counts/`NO-SOURCE` and
-   environment limits in `/home/ubuntu/.devin-files/mobile-ci-verification.md`.
+   environment limits in private session evidence outside the repository.
 3. Public branch names, commits, PR titles and discussion are neutral and
    project-focused. Do not add optional AI/Devin branding, generated-by/session
    footers, agent co-author trailers or session links. Preserve legally,

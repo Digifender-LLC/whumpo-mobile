@@ -49,6 +49,9 @@ source and the website main branch during import review.
 
 ## CI and release boundaries
 
+This public policy targets `Digifender-LLC/whumpo-mobile` (GitHub repository ID
+`1446445212`).
+
 This follow-up adds public `CI` and `Android` workflow definitions for every pull
 request and `main` push. They use read-only permissions and isolated
 `ubuntu-24.04` hosted runners, with no repository secrets, signing, provider calls
@@ -75,14 +78,22 @@ exception. An unchanged hosted Actions billing or runner refusal is an
 infrastructure blocker, not a source failure; do not retry it unchanged or change
 settings to work around it.
 
+Controller bootstrap is blocked until a repository ruleset is saved with the
+five exact checks bound to GitHub Actions app ID `15368` as their required
+status-check source, and each has a successful run from that source. This is a
+technical readiness condition, not a new owner-permission loop; this packet does
+not change ruleset settings.
+
 Any future controller must only merge same-repository, non-fork, non-draft code
 PRs, with advisory reviews and no human approval quota or sensitive-path exclusion.
 It must require all five checks to pass for the exact current PR head and base,
 resolved review threads, and two fresh reads that detect head/base/status races.
-Protections must require the checks, require an Actions-bound merge actor, allow
-zero human approvals, and disallow deletion and non-fast-forward updates. Do not
-use a bypass guard or native queued auto-merge. Use one writer per branch and cap
-bounded retries at three. No controller behavior is claimed by this PR.
+Protections must require the checks with GitHub Actions app ID `15368` as their
+status-check source, allow zero human approvals, and disallow deletion and
+non-fast-forward updates. The app ID is the required-check source, not a merge
+actor. Do not use a bypass guard or native queued auto-merge. Use one writer per
+branch and cap bounded retries at three. No controller behavior is claimed by
+this PR.
 
 Any future integration cutover is a separate reviewed change with a rollback plan
 that restores website ownership; this packet does not cut over or remove the
