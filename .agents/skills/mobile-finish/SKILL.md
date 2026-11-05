@@ -13,13 +13,15 @@ description: Finish Whumpo Mobile changes with exact local evidence and current 
    environment limits in private session evidence outside the repository.
 3. Public branch names, commits, PR titles and discussion are neutral and
    project-focused. Do not add optional AI/Devin branding, generated-by/session
-   footers, agent co-author trailers or session links. Preserve legally,
+   footers, agent co-author trailers or session links. Remove optional tool-added
+   session/Desktop/Requested-by text with a normal post-create body edit.
+   Preserve substantive evidence and actual authenticated authorship. Preserve legally,
    technically and audit-required identity; never impersonate or rewrite history.
 4. Require the exact five checks documented in `docs/agent-merge-policy.md`, on
    the current PR head and base with resolved review threads. Do not claim
    workflow definitions or stale statuses are passes.
-5. This repository has no trusted-main merge controller in this packet. Its
-   absence is a bootstrap limitation, not a new owner-approval rule. Do not
+5. The trusted-main controller must be reviewed, verified and merged before
+   it can own merges. That bootstrap is not a new owner-approval rule. Do not
    substitute native queued auto-merge, change settings, bypass protections, or
    treat a hosted Actions billing/runner refusal as a source failure. Controller
    bootstrap and source cutover are separately reviewed work.

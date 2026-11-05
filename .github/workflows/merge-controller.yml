@@ -1,0 +1,78 @@
+name: Mobile merge controller
+
+on:
+  workflow_run:
+    workflows: [CI, Android, Mobile review signal]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        description: Same-repository PR number
+        type: number
+        required: true
+      mode:
+        description: Read-only by default; existing stewardship may explicitly reconcile
+        type: choice
+        options: [readiness, reconcile]
+        default: readiness
+        required: true
+      head_sha:
+        description: Exact PR head SHA required for reconciliation
+        type: string
+      base_sha:
+        description: Exact main SHA required for reconciliation
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: mobile-merge-controller
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Mobile merge controller
+    if: github.repository == 'Digifender-LLC/whumpo-mobile' && github.repository_id == '1446445212' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'reconcile'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - name: Reconcile exact-revision evidence from trusted main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/merge-controller.mjs
+
+  readiness:
+    name: Mobile merge readiness (read-only)
+    if: github.repository == 'Digifender-LLC/whumpo-mobile' && github.repository_id == '1446445212' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.mode == 'readiness'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - name: Inspect one PR without merging
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MERGE_CONTROLLER_DRY_RUN: '1'
+        run: node tools/merge-controller.mjs

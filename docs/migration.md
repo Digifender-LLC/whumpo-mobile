@@ -69,8 +69,8 @@ ownership; private website gates remain unchanged. Client instrumentation exclud
 the private `WorkerJourneyTest`, which remains a separate website integration
 requirement and is not replaced by these client checks.
 
-The separate trusted-main merge controller is not part of this packet and is not
-installed. Until its separately reviewed bootstrap, the existing external hourly
+The separate trusted-main merge controller is implemented in source; installation
+requires its separately reviewed bootstrap. Until then, the existing external hourly
 coordination path remains the fallback; unavailable event-driven automation is a
 bootstrap/infrastructure limitation, not a new owner-approval requirement. Do not
 use native queued auto-merge, bypass protection or create a public-PR runner
@@ -84,7 +84,7 @@ successful runs for all five from that source. This is a technical readiness
 condition, not a new owner-permission loop; this packet does not change ruleset
 settings.
 
-Any future controller must only merge same-repository, non-fork, non-draft code
+The controller only merges same-repository, non-fork, non-draft code
 PRs, with advisory reviews and no human approval quota or sensitive-path exclusion.
 It must require all five checks to pass for the exact current PR head and base,
 resolved review threads, and two fresh reads that detect head/base/status races.
@@ -95,8 +95,11 @@ Protections must require the checks with GitHub Actions app ID `15368` as their
 status-check source, allow zero human approvals, and disallow deletion and
 non-fast-forward updates. The app ID is the required-check source, not a merge
 actor. Do not use a bypass guard or native queued auto-merge. Use one writer per
-branch and cap bounded retries at three. No controller behavior is claimed by
-this PR.
+branch and cap bounded retries at three. Its implementation makes no mutation
+retries and fails closed on unknown outcomes. See the
+[merge policy](agent-merge-policy.md) for the no-checkout review signal, read-only
+manual inspection and trusted-main write boundary. Source/synthetic test results
+do not prove installed workflow behavior.
 
 Any future integration cutover is a separate reviewed change with a rollback plan
 that restores website ownership; this packet does not cut over or remove the
