@@ -7,9 +7,21 @@ on:
   workflow_dispatch:
     inputs:
       pull_number:
-        description: PR number to inspect without merging
+        description: Same-repository PR number
         type: number
         required: true
+      mode:
+        description: Read-only by default; existing stewardship may explicitly reconcile
+        type: choice
+        options: [readiness, reconcile]
+        default: readiness
+        required: true
+      head_sha:
+        description: Exact PR head SHA required for reconciliation
+        type: string
+      base_sha:
+        description: Exact main SHA required for reconciliation
+        type: string
 
 permissions: {}
 
@@ -20,7 +32,7 @@ concurrency:
 jobs:
   reconcile:
     name: Mobile merge controller
-    if: github.repository == 'Digifender-LLC/whumpo-mobile' && github.repository_id == '1446445212' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_run'
+    if: github.repository == 'Digifender-LLC/whumpo-mobile' && github.repository_id == '1446445212' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'reconcile'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -43,7 +55,7 @@ jobs:
 
   readiness:
     name: Mobile merge readiness (read-only)
-    if: github.repository == 'Digifender-LLC/whumpo-mobile' && github.repository_id == '1446445212' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    if: github.repository == 'Digifender-LLC/whumpo-mobile' && github.repository_id == '1446445212' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.mode == 'readiness'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

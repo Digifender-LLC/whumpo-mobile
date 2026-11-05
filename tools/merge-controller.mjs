@@ -126,10 +126,11 @@ export async function snapshot(api, number) {
   return {repo, pr, main, rules, files, threads: reviewThreads, runs};
 }
 
-export async function reconcile(api, number, controllerSha, dryRun = true) {
+export async function reconcile(api, number, controllerSha, dryRun = true, expected) {
   const first = await snapshot(api, number), firstReason = eligible(first);
   if (firstReason) return {number, merged: false, reason: firstReason};
   if (first.main !== controllerSha) return {number, merged: false, reason: 'controller-revision'};
+  if (expected && (first.pr.head.sha !== expected.head || first.main !== expected.base)) return {number, merged: false, reason: 'stale-dispatch'};
   const second = await snapshot(api, number), secondReason = eligible(second);
   if (secondReason) return {number, merged: false, reason: secondReason};
   if (first.main !== second.main || first.pr.head.sha !== second.pr.head.sha) return {number, merged: false, reason: 'changed-revisions'};
@@ -152,14 +153,18 @@ export async function reconcile(api, number, controllerSha, dryRun = true) {
 
 export async function runController(api, event, eventName, controllerSha, dryRun) {
   if (!identity(event.repository) || event.repository.default_branch !== 'main' || !sha.test(controllerSha)) throw Error('Untrusted event');
-  let numbers;
-  if (eventName === 'workflow_dispatch' && dryRun === true) {
+  let numbers, expected;
+  if (eventName === 'workflow_dispatch') {
     const number = Number(event.inputs?.pull_number);
     if (!Number.isSafeInteger(number) || number < 1) throw Error('One positive PR number required');
+    if (dryRun === false) {
+      if (event.inputs?.mode !== 'reconcile' || !sha.test(event.inputs.head_sha) || !sha.test(event.inputs.base_sha)) throw Error('Revision-bound reconciliation required');
+      expected = {head: event.inputs.head_sha, base: event.inputs.base_sha};
+    } else if (dryRun !== true || ![undefined, 'readiness'].includes(event.inputs?.mode)) throw Error('Unsupported dispatch mode');
     numbers = [number];
   } else if (eventName === 'workflow_run' && dryRun === false) {
     const run = event.workflow_run;
-    if (!['pull_request', 'pull_request_review', 'pull_request_review_thread'].includes(run?.event)
+    if (!['pull_request', 'pull_request_review', 'pull_request_review_comment'].includes(run?.event)
       || run.status !== 'completed' || run.conclusion !== 'success'
       || !identity(run.repository) || !identity(run.head_repository) || !Array.isArray(run.pull_requests)) return [];
     numbers = [...new Set(run.pull_requests.map(p => p.number))];
@@ -167,7 +172,7 @@ export async function runController(api, event, eventName, controllerSha, dryRun
   } else throw Error('Unsupported event/mode');
   const results = [];
   for (const number of numbers) {
-    const result = await reconcile(api, number, controllerSha, dryRun);
+    const result = await reconcile(api, number, controllerSha, dryRun, expected);
     results.push(result);
     if (result.merged) break;
   }

@@ -3,8 +3,8 @@ name: Mobile review signal
 on:
   pull_request_review:
     types: [submitted, edited, dismissed]
-  pull_request_review_thread:
-    types: [resolved, unresolved]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
   pull_request:
     types: [edited, ready_for_review, converted_to_draft, reopened]
 

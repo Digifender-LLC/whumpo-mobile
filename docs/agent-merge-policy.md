@@ -67,9 +67,10 @@ The controller must:
 
 Completion of `CI`, `Android` or `Mobile review signal` can trigger automatic
 reconciliation. The signal is a permission-free, no-checkout echo job on review,
-thread-resolution and PR readiness metadata events. It carries no credentials,
-does not count as CI evidence and prevents a resolved thread being stranded after
-CI already completed. It is not a required check or a new scheduler.
+review-comment and PR readiness metadata events. It carries no credentials and
+does not count as CI evidence. Thread resolution alone has no documented Actions
+trigger; the existing hourly stewardship handles that gap through explicit,
+revision-bound dispatch below. The signal is not a required check or scheduler.
 The workflow checks repository name, immutable ID and `refs/heads/main`, then
 checks out the trusted event SHA with credential persistence disabled. It installs
 no repository dependencies, builds no PR code and downloads no artifacts.
@@ -95,11 +96,27 @@ merge response stop processing without a mutation retry. A successful merge stop
 the event batch because the base has changed. A workflow run started from older
 main refuses to act after main moves.
 
-Manual `workflow_dispatch` is read-only and accepts one PR number. Its token may
+Default manual `workflow_dispatch` is read-only and accepts one PR number. Its token may
 not expose repository merge settings; missing evidence is a blocker, never
 inferred from permission defaults. Controller/readiness jobs are not required
 checks. No native auto-merge, approvals, settings mutations or new credentials
 are used. Review descriptions remain advisory; unresolved threads block.
+
+Existing hourly stewardship may explicitly select `mode=reconcile`, providing
+the observed `head_sha` and `base_sha` plus one PR number, with `ref=main`.
+That selects the same trusted-main reconcile job, not a separate merge writer;
+missing, malformed or stale revisions fail closed, and every normal readiness
+guard is still required. Dispatch requests use only an already-authorized native
+capability; if it is unavailable, report the limitation rather than adding a
+credential, scheduler, webhook or direct merge path. This is distinct from the
+default read-only readiness job. Do not retry an unchanged hosted refusal.
+
+After the reviewed workflow is installed, the dispatch interface is:
+
+```sh
+gh workflow run merge-controller.yml --repo Digifender-LLC/whumpo-mobile --ref main \
+  -f mode=reconcile -f pull_number="$PR" -f head_sha="$HEAD" -f base_sha="$BASE"
+```
 
 Run `node tests/merge-controller.mjs` for synthetic boundary/race/API tests; it
 also runs in `Mobile policy`. Tests never issue a real merge. Source tests and a

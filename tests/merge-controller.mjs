@@ -85,11 +85,24 @@ f = fake({newerFailure: true}); assert.equal((await reconcile(f.api, 2, main, fa
 f = fake({unconfirmed: true}); await assert.rejects(reconcile(f.api, 2, main, false)); assert.equal(f.writes.length, 1, 'unknown write outcomes are never retried');
 f = fake(); const event = {repository: repo, workflow_run: {...fixture().runs['ci.yml']}};
 assert.equal((await runController(f.api, event, 'workflow_run', main, false))[0].merged, true);
-f = fake(); event.workflow_run.event = 'pull_request_review_thread';
+f = fake(); event.workflow_run.event = 'pull_request_review_comment';
 assert.equal((await runController(f.api, event, 'workflow_run', main, false))[0].merged, true);
 f = fake(); event.workflow_run.head_repository = {...repo, fork: true};
 assert.deepEqual(await runController(f.api, event, 'workflow_run', main, false), []); assert.equal(f.reads, 0);
 await assert.rejects(runController(f.api, {repository: repo, inputs: {pull_number: 2}}, 'workflow_dispatch', main, false));
+const dispatch = {repository: repo, inputs: {pull_number: '2', mode: 'reconcile', head_sha: head, base_sha: main}};
+f = fake(); assert.equal((await runController(f.api, dispatch, 'workflow_dispatch', main, false))[0].merged, true);
+for (const change of [i => i.head_sha = other, i => i.base_sha = other]) {
+  const stale = structuredClone(dispatch); change(stale.inputs); f = fake();
+  assert.equal((await runController(f.api, stale, 'workflow_dispatch', main, false))[0].reason, 'stale-dispatch');
+  assert.equal(f.writes.length, 0);
+}
+for (const change of [i => delete i.head_sha, i => i.base_sha = 'main', i => i.mode = 'readiness']) {
+  const bad = structuredClone(dispatch); change(bad.inputs); f = fake();
+  await assert.rejects(runController(f.api, bad, 'workflow_dispatch', main, false)); assert.equal(f.writes.length, 0);
+}
+f = fake(); assert.equal((await runController(f.api, {repository: repo, inputs: {pull_number: 2, mode: 'readiness'}}, 'workflow_dispatch', main, true))[0].eligible, true);
+assert.equal(f.writes.length, 0);
 await assert.rejects(runController(f.api, {repository: repo}, 'pull_request_target', main, false));
 
 const calls = []; const api = githubApi('synthetic-token', async (url, options) => {calls.push({url, options}); return {ok: true, json: async () => ({})};});
@@ -111,5 +124,7 @@ for (const match of workflow.matchAll(/uses: ([^\s]+)/g)) assert.match(match[1],
 const signal = readFileSync(new URL('../.github/workflows/merge-review-signal.yml', import.meta.url), 'utf8');
 assert.ok(signal.includes('permissions: {}'));
 assert.ok(!/uses:|checkout|secrets\.|github.token|pull_request_target|write|self-hosted|schedule:/.test(signal));
-assert.ok(signal.includes('types: [resolved, unresolved]'));
+assert.ok(signal.includes('pull_request_review_comment:'));
+assert.ok(!signal.includes('pull_request_review_thread:'));
+assert.ok(workflow.includes('default: readiness'));
 console.log('Mobile merge controller synthetic identity/protection/CI/race/API boundary tests passed. No real merge request executed.');
