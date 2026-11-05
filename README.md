@@ -18,8 +18,7 @@ From `android/`:
 
 ```sh
 ./gradlew :shared:jvmTest :shared:compileKotlinJvm
-./gradlew assembleLocalDebug assembleDeployedDebug lintLocalDebug lintDeployedDebug
-./gradlew :shared:testAndroidHostTest testLocalDebugUnitTest testDeployedDebugUnitTest
+./gradlew assembleLocalDebug assembleDeployedDebug assembleLocalDebugAndroidTest assembleDeployedDebugAndroidTest lintLocalDebug lintDeployedDebug :shared:testAndroidHostTest testLocalDebugUnitTest testDeployedDebugUnitTest
 ```
 
 See [build notes](docs/android-build.md) for variants and test boundaries.
@@ -41,9 +40,20 @@ customer data, real diagnostic captures or Firebase configuration. Preserve
 authorization, privacy and signing boundaries. Public contribution code must not
 run with release secrets or on a trusted persistent runner.
 
-This import does not install CI workflows or replace the existing private
-integration gates. CI and repository ownership cutover require a reviewed follow-up;
-see the migration notes before making changes that affect client/server contracts.
+The repository now defines credential-free public CI for pull requests and pushes
+to `main`. The five checks are `Mobile policy`, `Secret scan`,
+`Assemble, lint and unit tests`, `Instrumented tests (API 28)` and
+`Instrumented tests (API 36)`. Workflow definitions are source, not evidence that
+GitHub has run them or that branch protections require them. No merge controller,
+repository-settings change or website-ownership cutover is included; see
+[verification](docs/android-verification.md),
+[merge policy](docs/agent-merge-policy.md) and [migration notes](docs/migration.md).
+
+For public materials, use neutral, project-focused branch names, commit messages,
+PR titles and discussion. Do not add optional AI/Devin branding, generated-by or
+session footers, agent co-author trailers or session links. Preserve legally,
+technically or audit-required attribution; never impersonate a person or rewrite
+history.
 
 ## License
 

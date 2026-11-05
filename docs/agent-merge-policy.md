@@ -1,0 +1,68 @@
+# Agent merge policy
+
+This policy applies to public repository `Digifender-LLC/whumpo-mobile`
+(GitHub repository ID `1446445212`).
+
+## Authorized scope
+
+The owner authorizes automatic merging of same-repository, non-fork, non-draft
+code PRs when the required policy is satisfied. Reviews are advisory; do not add
+an Autoapprover requirement, human approval quota or sensitive-path exclusion.
+This authority does not permit merging a fork PR, bypassing a required check,
+changing repository settings in a code packet, or deploying/releasing the app.
+
+The exact required checks are:
+
+1. `Mobile policy` (`CI` workflow, job `mobile-policy`)
+2. `Secret scan` (`CI` workflow, job `secret-scan`)
+3. `Assemble, lint and unit tests` (`Android` workflow, job `build`)
+4. `Instrumented tests (API 28)` (`Android` workflow, `instrumented` matrix)
+5. `Instrumented tests (API 36)` (`Android` workflow, `instrumented` matrix)
+
+All five must have successful, current evidence associated with the workflow
+run's `head_sha` and attached PR head/base SHAs. A `pull_request` workflow
+checks out GitHub's synthetic merge commit, so a pass validates that merge
+result, not a raw-head-only tree. Confirm every review thread is resolved. Do
+not accept a success from a superseded commit, infer success from a workflow
+definition, or turn a missing status into a pass.
+
+## Trusted controller requirements
+
+The trusted-main merge controller is not implemented or installed by this
+packet. Its separate, reviewed bootstrap is a technical limitation, not a new
+owner-approval loop. Until bootstrap, the existing external hourly coordination
+path is the fallback. If CI-event automation or hosted Actions is unavailable,
+report the actual infrastructure status; do not retry an unchanged billing or
+runner refusal, alter settings, or add a public-PR runner exception.
+
+Controller bootstrap requires a saved ruleset with the five exact check names
+bound as required checks to GitHub Actions app ID `15368`, and successful runs
+for all five from that source. This is a technical readiness condition, not a
+new owner-permission loop; this packet does not edit ruleset settings.
+
+A future controller must:
+
+- Run from trusted `main` and be the sole merge writer; public PR workflows keep
+  `contents: read` and cannot merge.
+- Only process same-repository, non-fork, non-draft code PRs. It must not apply
+  special sensitive-path exclusions.
+- Require the five named checks above, associated with each run's current
+  `head_sha` and attached PR head/base; require all review threads resolved.
+  Because `pull_request` jobs test the synthetic merge commit, compare the run
+  metadata and current PR state rather than assuming the checkout is the raw
+  head tree.
+- Read PR, head/base, checks, threads and protection evidence; immediately before
+  merge, read them again and compare. Any head/base/status/thread race aborts the
+  merge and schedules bounded reevaluation rather than acting on stale evidence.
+- Use protections that require the five checks with GitHub Actions app ID
+  `15368` as their required status-check source, zero human approvals, no
+  deletion and no non-fast-forward updates. This source binding is not a merge
+  actor identity.
+- Never use a bypass guard or native queued auto-merge. Preserve one writer per
+  branch and cap retries at three; future Caps/Fusion orchestration must preserve
+  those limits.
+
+The first public CI/policy packet does not implement or claim this controller,
+change branch protections, create settings selectors or schedulers, or change
+the existing website integration ownership. A future source cutover requires a
+separate review and a rollback plan that restores website ownership.

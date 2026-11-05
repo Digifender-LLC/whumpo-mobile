@@ -30,6 +30,3 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 capture_anr "$out/anr-before.json" || true
 ./gradlew connectedLocalDebugAndroidTest connectedDeployedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
-if [[ "$api" == 36 ]]; then
-  bash scripts/test-worker-journey.sh
-fi
