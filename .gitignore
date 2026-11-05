@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.dev.vars
+.secrets/
+*.jks
+*.keystore
+*.p12
+google-services.json
+local.properties
+.gradle/
+.kotlin/
+**/build/
+.idea/
+*.iml

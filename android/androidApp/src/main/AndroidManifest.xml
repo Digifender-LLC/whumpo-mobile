@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Backups are disabled and every domain is excluded for both cloud backup and
+      device-to-device transfer: account-scoped state (drafts, sessions, pending
+      operations) lives in no-backup storage and its Keystore key is not exportable.
+      WP5 added INTERNET: the app calls /api/mobile/v1 and nothing else. Photos arrive through the system photo picker,
+      so there is still no storage, camera or location permission.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:name=".WhumpoApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
+        android:fullBackupContent="@xml/full_backup_content"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Whumpo"
+        tools:targetApi="33">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Share sheet: one photo or plain text. The app only remembers it until the owner confirms (ShareDialog). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <!--
+              Verified App Links: the browser hand-off returns to /app/return, and /app/projects/{id} and /app/activity/{eventId}
+              open those items behind the sign-in gate. Only these paths are claimed; everything else stays in the browser.
+              Verification needs https://whumpo.com/.well-known/assetlinks.json, an owner task: docs/android/assetlinks-setup.md.
+            -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="whumpo.com"
+                    android:path="/app/return" />
+                <data
+                    android:scheme="https"
+                    android:host="whumpo.com"
+                    android:pathPrefix="/app/projects/" />
+                <data
+                    android:scheme="https"
+                    android:host="whumpo.com"
+                    android:pathPrefix="/app/activity/" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

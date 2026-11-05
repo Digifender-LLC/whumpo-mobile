@@ -1,0 +1,17 @@
+# Gradle and Android build outputs
+.gradle/
+.kotlin/
+build/
+/captures/
+# Machine-local SDK path; never commit it
+local.properties
+# IDE state
+.idea/
+*.iml
+# Signing material must never enter the repository
+*.jks
+*.keystore
+# Keystores are decoded to the CI runner temp dir only
+*.p12
+# Firebase app config (project identifiers); injected at build time, never committed
+google-services.json

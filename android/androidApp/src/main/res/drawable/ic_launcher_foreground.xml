@@ -1,0 +1,14 @@
+<!-- Simplified Whumpo mark for the adaptive icon: a soft "W" inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M34,42l8,26l12,-22l12,22l8,-26"
+        android:strokeWidth="8"
+        android:strokeColor="#FFF8FAFC"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>
