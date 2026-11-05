@@ -1,0 +1,204 @@
+{
+ "contract": 1,
+ "note": "Server-issued review metadata and what a client may enable. Presentation is by capability; text never grants approval.",
+ "cases": [
+  {
+   "name": "specification apply, current client",
+   "review": {
+    "kind": "specification",
+    "reviewId": "33333333-3333-4333-8333-000000000001",
+    "project": {
+     "id": "11111111-1111-4111-8111-000000000001",
+     "name": "Example Detailing"
+    },
+    "state": "pending",
+    "expiresAt": "2026-10-04T12:30:00.000Z",
+    "canApprove": true,
+    "control": {
+     "type": "specificationApply",
+     "reviewId": "33333333-3333-4333-8333-000000000001",
+     "proposalDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "expectedRevision": 3
+    },
+    "requiresFreshPasskey": true,
+    "disclosure": {
+     "title": "Save these private website changes",
+     "lines": [
+      "Updates the services list on Example Detailing.",
+      "Saves a private version only; nothing is published."
+     ]
+    },
+    "preview": {
+     "path": "/api/specification-reviews/33333333-3333-4333-8333-000000000001/preview"
+    },
+    "unavailableReason": null
+   },
+   "client": "current",
+   "enabled": true
+  },
+  {
+   "name": "site publication, current client",
+   "review": {
+    "kind": "site",
+    "reviewId": "33333333-3333-4333-8333-000000000002",
+    "project": {
+     "id": "11111111-1111-4111-8111-000000000001",
+     "name": "Example Detailing"
+    },
+    "state": "pending",
+    "expiresAt": "2026-10-04T12:30:00.000Z",
+    "canApprove": true,
+    "control": {
+     "type": "confirm",
+     "kind": "site",
+     "reviewId": "33333333-3333-4333-8333-000000000002"
+    },
+    "requiresFreshPasskey": false,
+    "disclosure": {
+     "title": "Publish this website version",
+     "lines": [
+      "Makes the reviewed version public at the project address."
+     ]
+    },
+    "preview": {
+     "path": "/api/site-versions/77777777-7777-4777-8777-000000000001/preview"
+    },
+    "unavailableReason": null
+   },
+   "client": "current",
+   "enabled": true
+  },
+  {
+   "name": "site publication, client without site.confirm",
+   "review": {
+    "kind": "site",
+    "reviewId": "33333333-3333-4333-8333-000000000002",
+    "project": {
+     "id": "11111111-1111-4111-8111-000000000001",
+     "name": "Example Detailing"
+    },
+    "state": "pending",
+    "expiresAt": "2026-10-04T12:30:00.000Z",
+    "canApprove": true,
+    "control": {
+     "type": "confirm",
+     "kind": "site",
+     "reviewId": "33333333-3333-4333-8333-000000000002"
+    },
+    "requiresFreshPasskey": false,
+    "disclosure": {
+     "title": "Publish this website version",
+     "lines": [
+      "Makes the reviewed version public at the project address."
+     ]
+    },
+    "preview": {
+     "path": "/api/site-versions/77777777-7777-4777-8777-000000000001/preview"
+    },
+    "unavailableReason": null
+   },
+   "client": "withoutSiteControls",
+   "enabled": false,
+   "reason": "client_update_required"
+  },
+  {
+   "name": "expired review",
+   "review": {
+    "kind": "specification",
+    "reviewId": "33333333-3333-4333-8333-000000000001",
+    "project": {
+     "id": "11111111-1111-4111-8111-000000000001",
+     "name": "Example Detailing"
+    },
+    "state": "expired",
+    "expiresAt": "2026-10-04T12:30:00.000Z",
+    "canApprove": false,
+    "control": null,
+    "requiresFreshPasskey": true,
+    "disclosure": {
+     "title": "Save these private website changes",
+     "lines": [
+      "Updates the services list on Example Detailing.",
+      "Saves a private version only; nothing is published."
+     ]
+    },
+    "preview": {
+     "path": "/api/specification-reviews/33333333-3333-4333-8333-000000000001/preview"
+    },
+    "unavailableReason": "expired"
+   },
+   "client": "current",
+   "enabled": false,
+   "reason": "expired"
+  }
+ ],
+ "clients": {
+  "current": {
+   "contract": 1,
+   "build": 42,
+   "platform": "android",
+   "controls": [
+    "specification.apply",
+    "site.confirm",
+    "application.confirm",
+    "app.restore"
+   ],
+   "interaction": {
+    "versions": [
+     1
+    ],
+    "fieldTypes": [
+     "text",
+     "long-text",
+     "choice",
+     "multi-choice",
+     "boolean",
+     "number",
+     "date",
+     "datetime",
+     "resource"
+    ],
+    "bindings": [
+     "answer.value@1",
+     "interaction.answers@1",
+     "owned.projects@1",
+     "site.content@1",
+     "agent.task-continue@1",
+     "site.content-prepare@1"
+    ]
+   }
+  },
+  "withoutSiteControls": {
+   "contract": 1,
+   "build": 42,
+   "platform": "android",
+   "controls": [
+    "application.confirm"
+   ],
+   "interaction": {
+    "versions": [
+     1
+    ],
+    "fieldTypes": [
+     "text",
+     "long-text",
+     "choice",
+     "multi-choice",
+     "boolean",
+     "number",
+     "date",
+     "datetime",
+     "resource"
+    ],
+    "bindings": [
+     "answer.value@1",
+     "interaction.answers@1",
+     "owned.projects@1",
+     "site.content@1",
+     "agent.task-continue@1",
+     "site.content-prepare@1"
+    ]
+   }
+  }
+ }
+}

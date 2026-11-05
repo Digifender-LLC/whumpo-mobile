@@ -1,0 +1,721 @@
+{
+ "contract": 1,
+ "note": "Each case is a valid fixture mutated into one violation. Request cases run through validateRequest; responseOf cases mutate the named operation response.",
+ "cases": [
+  {
+   "name": "stale build below the minimum",
+   "operation": "chat.send",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":39,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000001",
+     "expectedRevision": 4,
+     "content": "Add a ceramic coating service for $300."
+    }
+   },
+   "expect": "client_update_required"
+  },
+  {
+   "name": "unknown contract version",
+   "operation": "chat.send",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":2,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000001",
+     "expectedRevision": 4,
+     "content": "Add a ceramic coating service for $300."
+    }
+   },
+   "expect": "client_update_required"
+  },
+  {
+   "name": "interaction version other than current",
+   "operation": "chat.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1,2],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "query": {
+     "limit": 25
+    }
+   },
+   "expect": "client_update_required"
+  },
+  {
+   "name": "non-android platform",
+   "operation": "chat.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"ios\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "query": {
+     "limit": 25
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "unknown header field",
+   "operation": "chat.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]},\"package\":\"com.example\"}"
+    },
+    "query": {
+     "limit": 25
+    }
+   },
+   "expect": "unknown_field"
+  },
+  {
+   "name": "unknown capability string",
+   "operation": "chat.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"site.unpublish\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "query": {
+     "limit": 25
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "missing client header",
+   "operation": "chat.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001"
+    },
+    "query": {
+     "limit": 25
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "cookie on a mobile route",
+   "operation": "chat.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}",
+     "cookie": "__Host-whumpo_session=0000000000000000000000000000000000000000000000000000000000000001"
+    },
+    "query": {
+     "limit": 25
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "absent bearer is not native authority",
+   "operation": "chat.read",
+   "request": {
+    "headers": {
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "query": {
+     "limit": 25
+    }
+   },
+   "expect": "proof_required"
+  },
+  {
+   "name": "bearer must be a 256-bit hex token",
+   "operation": "chat.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer short",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "query": {
+     "limit": 25
+    }
+   },
+   "expect": "proof_required"
+  },
+  {
+   "name": "anonymous route refuses a bearer",
+   "operation": "session.loginOptions",
+   "request": {
+    "headers": {
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}",
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001"
+    },
+    "body": {
+     "version": 1
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "chat message with extra field",
+   "operation": "chat.send",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000001",
+     "expectedRevision": 4,
+     "content": "Add a ceramic coating service for $300.",
+     "userId": "11111111-1111-4111-8111-000000000001"
+    }
+   },
+   "expect": "unknown_field"
+  },
+  {
+   "name": "chat message without request ID",
+   "operation": "chat.send",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "expectedRevision": 4,
+     "content": "Add a ceramic coating service for $300."
+    }
+   },
+   "expect": "missing_field"
+  },
+  {
+   "name": "chat message over 1000 characters",
+   "operation": "chat.send",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000001",
+     "expectedRevision": 4,
+     "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "raw Chat command string as a control",
+   "operation": "review.confirm",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000002",
+     "expectedRevision": 5,
+     "control": "/confirm 33333333-3333-4333-8333-000000000001"
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "unknown control type",
+   "operation": "review.confirm",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000002",
+     "expectedRevision": 5,
+     "control": {
+      "type": "unpublish"
+     }
+    }
+   },
+   "expect": "unsupported_control"
+  },
+  {
+   "name": "provider grant revocation is not native",
+   "operation": "review.confirm",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000002",
+     "expectedRevision": 5,
+     "control": {
+      "type": "githubGrant",
+      "operation": "confirm",
+      "reviewId": "33333333-3333-4333-8333-000000000001",
+      "confirmation": "REVOKE_APP_ACCESS"
+     }
+    }
+   },
+   "expect": "unsupported_control"
+  },
+  {
+   "name": "backup confirmation is not native",
+   "operation": "review.confirm",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000002",
+     "expectedRevision": 5,
+     "control": {
+      "type": "confirm",
+      "kind": "backup",
+      "reviewId": "33333333-3333-4333-8333-000000000001"
+     }
+    }
+   },
+   "expect": "unsupported_control"
+  },
+  {
+   "name": "shortcut control is not native",
+   "operation": "review.confirm",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000002",
+     "expectedRevision": 5,
+     "control": {
+      "type": "shortcut",
+      "kind": "project",
+      "projectId": "11111111-1111-4111-8111-000000000001"
+     }
+    }
+   },
+   "expect": "unsupported_control"
+  },
+  {
+   "name": "control with extra approval field",
+   "operation": "review.confirm",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000002",
+     "expectedRevision": 5,
+     "control": {
+      "type": "confirm",
+      "kind": "site",
+      "reviewId": "33333333-3333-4333-8333-000000000002",
+      "approved": true
+     }
+    }
+   },
+   "expect": "unknown_field"
+  },
+  {
+   "name": "client lacking the control capability",
+   "operation": "review.confirm",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"site.confirm\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000002",
+     "expectedRevision": 5,
+     "control": {
+      "type": "appRestore",
+      "projectId": "11111111-1111-4111-8111-000000000001",
+      "reviewId": "33333333-3333-4333-8333-000000000001",
+      "confirmation": "RESTORE"
+     }
+    }
+   },
+   "expect": "client_update_required"
+  },
+  {
+   "name": "app restore without literal confirmation",
+   "operation": "review.confirm",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000002",
+     "expectedRevision": 5,
+     "control": {
+      "type": "appRestore",
+      "projectId": "11111111-1111-4111-8111-000000000001",
+      "reviewId": "33333333-3333-4333-8333-000000000001",
+      "confirmation": "yes"
+     }
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "interaction client capability differs from the header",
+   "operation": "interaction.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "interactionId": "66666666-6666-4666-8666-000000000001",
+     "client": {
+      "versions": [
+       1
+      ],
+      "fieldTypes": [
+       "text"
+      ],
+      "bindings": [
+       "answer.value@1",
+       "interaction.answers@1",
+       "owned.projects@1",
+       "site.content@1",
+       "agent.task-continue@1",
+       "site.content-prepare@1"
+      ]
+     }
+    }
+   },
+   "expect": "client_update_required"
+  },
+  {
+   "name": "interaction field type outside the native set",
+   "operation": "interaction.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "interactionId": "66666666-6666-4666-8666-000000000001",
+     "client": {
+      "versions": [
+       1
+      ],
+      "fieldTypes": [
+       "text",
+       "long-text",
+       "choice",
+       "multi-choice",
+       "boolean",
+       "number",
+       "date",
+       "datetime",
+       "resource",
+       "attachment"
+      ],
+      "bindings": [
+       "answer.value@1",
+       "interaction.answers@1",
+       "owned.projects@1",
+       "site.content@1",
+       "agent.task-continue@1",
+       "site.content-prepare@1"
+      ]
+     }
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "photo binding not yet admitted",
+   "operation": "interaction.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "interactionId": "66666666-6666-4666-8666-000000000001",
+     "client": {
+      "versions": [
+       1
+      ],
+      "fieldTypes": [
+       "text",
+       "long-text",
+       "choice",
+       "multi-choice",
+       "boolean",
+       "number",
+       "date",
+       "datetime",
+       "resource"
+      ],
+      "bindings": [
+       "answer.value@1",
+       "interaction.answers@1",
+       "owned.projects@1",
+       "site.content@1",
+       "agent.task-continue@1",
+       "site.content-prepare@1",
+       "owned.photos@1"
+      ]
+     }
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "interaction cancel carrying answers",
+   "operation": "interaction.mutate",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "requestId": "55555555-5555-4555-8555-000000000003",
+     "interactionId": "66666666-6666-4666-8666-000000000001",
+     "definitionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "expectedAnswerRevision": 0,
+     "operation": "cancel",
+     "answers": {
+      "services": "Ceramic coating, $300"
+     }
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "handoff redirect off the verified host",
+   "operation": "session.handoffStart",
+   "request": {
+    "headers": {
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "purpose": "signup",
+     "state": "SSSSSSSSSSSSSSSSSSSSSSSS",
+     "codeChallenge": "DwBzhbb51LfusnSGBa_hqYSgo7-j8BTQnip4TOnlzRo",
+     "codeChallengeMethod": "S256",
+     "redirectUri": "https://evil.example/app/return"
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "handoff redirect with a query string",
+   "operation": "session.handoffStart",
+   "request": {
+    "headers": {
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "purpose": "signup",
+     "state": "SSSSSSSSSSSSSSSSSSSSSSSS",
+     "codeChallenge": "DwBzhbb51LfusnSGBa_hqYSgo7-j8BTQnip4TOnlzRo",
+     "codeChallengeMethod": "S256",
+     "redirectUri": "https://whumpo.com/app/return?x=1"
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "handoff custom-scheme redirect",
+   "operation": "session.handoffStart",
+   "request": {
+    "headers": {
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "purpose": "signup",
+     "state": "SSSSSSSSSSSSSSSSSSSSSSSS",
+     "codeChallenge": "DwBzhbb51LfusnSGBa_hqYSgo7-j8BTQnip4TOnlzRo",
+     "codeChallengeMethod": "S256",
+     "redirectUri": "com.example.app://return"
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "handoff plain PKCE method",
+   "operation": "session.handoffStart",
+   "request": {
+    "headers": {
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "purpose": "signup",
+     "state": "SSSSSSSSSSSSSSSSSSSSSSSS",
+     "codeChallenge": "DwBzhbb51LfusnSGBa_hqYSgo7-j8BTQnip4TOnlzRo",
+     "codeChallengeMethod": "plain",
+     "redirectUri": "https://whumpo.com/app/return"
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "handoff short state",
+   "operation": "session.handoffStart",
+   "request": {
+    "headers": {
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "purpose": "signup",
+     "state": "short",
+     "codeChallenge": "DwBzhbb51LfusnSGBa_hqYSgo7-j8BTQnip4TOnlzRo",
+     "codeChallengeMethod": "S256",
+     "redirectUri": "https://whumpo.com/app/return"
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "exchange verifier too short",
+   "operation": "session.handoffExchange",
+   "request": {
+    "headers": {
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "handoffId": "dddddddd-dddd-4ddd-8ddd-000000000001",
+     "code": "0000000000000000000000000000000000000000000000000000000000000002",
+     "state": "SSSSSSSSSSSSSSSSSSSSSSSS",
+     "codeVerifier": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "chat limit above 50",
+   "operation": "chat.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "query": {
+     "limit": 51
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "unknown query parameter",
+   "operation": "project.list",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "query": {
+     "limit": 25,
+     "ownerId": "11111111-1111-4111-8111-000000000001"
+    }
+   },
+   "expect": "unknown_field"
+  },
+  {
+   "name": "GET carrying a body",
+   "operation": "project.read",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "device token with whitespace",
+   "operation": "device.register",
+   "request": {
+    "headers": {
+     "authorization": "Bearer 0000000000000000000000000000000000000000000000000000000000000001",
+     "whumpo-client": "{\"contract\":1,\"build\":42,\"platform\":\"android\",\"controls\":[\"specification.apply\",\"site.confirm\",\"application.confirm\",\"app.restore\"],\"interaction\":{\"versions\":[1],\"fieldTypes\":[\"text\",\"long-text\",\"choice\",\"multi-choice\",\"boolean\",\"number\",\"date\",\"datetime\",\"resource\"],\"bindings\":[\"answer.value@1\",\"interaction.answers@1\",\"owned.projects@1\",\"site.content@1\",\"agent.task-continue@1\",\"site.content-prepare@1\"]}}"
+    },
+    "body": {
+     "version": 1,
+     "fcmRegistrationToken": "synthetic-bad token with spaces",
+     "notificationsEnabled": true
+    }
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "preview path outside the allowlist (response)",
+   "operation": "project.versions",
+   "request": null,
+   "expect": "invalid_request",
+   "responseOf": "project.versions",
+   "mutate": "previewPath"
+  },
+  {
+   "name": "approvable review without a control (response)",
+   "operation": "review.list",
+   "request": null,
+   "expect": "invalid_request",
+   "responseOf": "review.list",
+   "mutate": "approvableWithoutControl"
+  },
+  {
+   "name": "unknown review kind (response)",
+   "operation": "review.list",
+   "request": null,
+   "expect": "invalid_request",
+   "responseOf": "review.list",
+   "mutate": "unknownReviewKind"
+  },
+  {
+   "name": "approval on a non-pending review (response)",
+   "operation": "review.list",
+   "request": null,
+   "expect": "invalid_request",
+   "responseOf": "review.list",
+   "mutate": "approvableExpired"
+  },
+  {
+   "name": "unknown response field is rejected",
+   "operation": "project.read",
+   "request": null,
+   "expect": "unknown_field",
+   "responseOf": "project.read",
+   "mutate": "extraField"
+  }
+ ]
+}

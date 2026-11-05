@@ -1,0 +1,71 @@
+{
+ "note": "Synthetic Whumpo-Client header values. The header selects a contract and capabilities; it grants no authority.",
+ "minimumBuild": 40,
+ "current": {
+  "contract": 1,
+  "build": 42,
+  "platform": "android",
+  "controls": [
+   "specification.apply",
+   "site.confirm",
+   "application.confirm",
+   "app.restore"
+  ],
+  "interaction": {
+   "versions": [
+    1
+   ],
+   "fieldTypes": [
+    "text",
+    "long-text",
+    "choice",
+    "multi-choice",
+    "boolean",
+    "number",
+    "date",
+    "datetime",
+    "resource"
+   ],
+   "bindings": [
+    "answer.value@1",
+    "interaction.answers@1",
+    "owned.projects@1",
+    "site.content@1",
+    "agent.task-continue@1",
+    "site.content-prepare@1"
+   ]
+  }
+ },
+ "withoutApplicationControls": {
+  "contract": 1,
+  "build": 42,
+  "platform": "android",
+  "controls": [
+   "site.confirm"
+  ],
+  "interaction": {
+   "versions": [
+    1
+   ],
+   "fieldTypes": [
+    "text",
+    "long-text",
+    "choice",
+    "multi-choice",
+    "boolean",
+    "number",
+    "date",
+    "datetime",
+    "resource"
+   ],
+   "bindings": [
+    "answer.value@1",
+    "interaction.answers@1",
+    "owned.projects@1",
+    "site.content@1",
+    "agent.task-continue@1",
+    "site.content-prepare@1"
+   ]
+  }
+ }
+}

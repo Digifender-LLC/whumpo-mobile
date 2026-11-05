@@ -1,0 +1,195 @@
+{
+ "contract": 1,
+ "cases": {
+  "client_update_required": {
+   "status": 426,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "client_update_required",
+     "message": "Update Whumpo to continue.",
+     "minimumBuild": 40,
+     "contract": 1,
+     "next": "update_app"
+    }
+   }
+  },
+  "proof_required_signin": {
+   "status": 401,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "proof_required",
+     "message": "Sign in to continue.",
+     "proof": "signin"
+    }
+   }
+  },
+  "proof_required_fresh": {
+   "status": 401,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "proof_required",
+     "message": "Verify your passkey to continue.",
+     "proof": "fresh_passkey"
+    }
+   }
+  },
+  "identity_incomplete": {
+   "status": 403,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "identity_incomplete",
+     "message": "Finish setting up your account in the browser.",
+     "next": "browser"
+    }
+   }
+  },
+  "onboarding_required": {
+   "status": 409,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "onboarding_required",
+     "message": "Start your first project in welcome before opening your workspace.",
+     "next": "browser"
+    }
+   }
+  },
+  "identity_changed": {
+   "status": 409,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "identity_changed",
+     "message": "Your account access changed. Sign in again to continue.",
+     "proof": "signin"
+    }
+   }
+  },
+  "request_conflict": {
+   "status": 409,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "request_conflict",
+     "message": "This request ID was already used for another message."
+    }
+   }
+  },
+  "stale_revision": {
+   "status": 409,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "stale_revision",
+     "message": "Your conversation changed. Refresh and review it again.",
+     "currentRevision": 6
+    }
+   }
+  },
+  "chat_busy": {
+   "status": 409,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "chat_busy",
+     "message": "Your previous reply is still being prepared."
+    }
+   }
+  },
+  "review_unavailable": {
+   "status": 409,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "review_unavailable",
+     "message": "This review is stale or expired. Ask for a fresh review."
+    }
+   }
+  },
+  "not_found": {
+   "status": 404,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "not_found",
+     "message": "This item is unavailable."
+    }
+   }
+  },
+  "invalid_request": {
+   "status": 400,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "invalid_request",
+     "message": "Check the request and try again."
+    }
+   }
+  },
+  "invalid_cursor": {
+   "status": 400,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "invalid_cursor",
+     "message": "Start the list again."
+    }
+   }
+  },
+  "unsupported_control": {
+   "status": 400,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "unsupported_control",
+     "message": "This action is not available in the app."
+    }
+   }
+  },
+  "payload_too_large": {
+   "status": 413,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "payload_too_large",
+     "message": "This request is too large."
+    }
+   }
+  },
+  "unsupported_media_type": {
+   "status": 415,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "unsupported_media_type",
+     "message": "Use a prepared JPEG photo."
+    }
+   }
+  },
+  "rate_limited": {
+   "status": 429,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "rate_limited",
+     "message": "Too many requests. Try again in a minute.",
+     "retryAfterSeconds": 60
+    }
+   }
+  },
+  "unavailable": {
+   "status": 503,
+   "body": {
+    "version": 1,
+    "error": {
+     "code": "unavailable",
+     "message": "Whumpo is temporarily unavailable."
+    }
+   }
+  }
+ }
+}

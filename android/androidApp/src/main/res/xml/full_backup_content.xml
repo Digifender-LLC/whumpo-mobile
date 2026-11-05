@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and lower: exclude every domain from Auto Backup and adb backup. -->
+<full-backup-content>
+    <exclude domain="root" path="." />
+    <exclude domain="device_root" path="." />
+    <exclude domain="external" path="." />
+</full-backup-content>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Test APK only: a content provider that serves synthetic shared photos (TestShareProvider). Exported so the app can read it. -->
+    <application>
+        <provider
+            android:name="com.whumpo.android.TestShareProvider"
+            android:authorities="${applicationId}.testshares"
+            android:exported="true" />
+    </application>
+</manifest>

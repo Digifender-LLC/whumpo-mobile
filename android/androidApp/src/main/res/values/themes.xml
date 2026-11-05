@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window theme only; Compose draws everything else with WhumpoTheme. -->
+    <style name="Theme.Whumpo" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/cloud_white</item>
+    </style>
+</resources>

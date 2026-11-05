@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Whumpo palette, docs/brand/whumpo-identity.md (v1.1). -->
+<resources>
+    <color name="deep_sky">#FF0F2D5B</color>
+    <color name="cloud_white">#FFF8FAFC</color>
+    <color name="ic_launcher_background">#FF60B5FF</color>
+</resources>

@@ -1,0 +1,61 @@
+{
+ "contract": 1,
+ "note": "FCM data payloads carry an opaque event ID and kind only. Valid then invalid.",
+ "valid": [
+  {
+   "v": "1",
+   "eventId": "bbbbbbbb-bbbb-4bbb-8bbb-000000000001",
+   "kind": "review_pending"
+  },
+  {
+   "v": "1",
+   "eventId": "bbbbbbbb-bbbb-4bbb-8bbb-000000000001",
+   "kind": "operation_completed"
+  },
+  {
+   "v": "1",
+   "eventId": "bbbbbbbb-bbbb-4bbb-8bbb-000000000001",
+   "kind": "attention_required"
+  }
+ ],
+ "invalid": [
+  {
+   "name": "project name leaked",
+   "message": {
+    "v": "1",
+    "eventId": "bbbbbbbb-bbbb-4bbb-8bbb-000000000001",
+    "kind": "review_pending",
+    "projectName": "Example Detailing"
+   },
+   "expect": "unknown_field"
+  },
+  {
+   "name": "message text leaked",
+   "message": {
+    "v": "1",
+    "eventId": "bbbbbbbb-bbbb-4bbb-8bbb-000000000001",
+    "kind": "operation_completed",
+    "body": "Your site is live"
+   },
+   "expect": "unknown_field"
+  },
+  {
+   "name": "unknown kind",
+   "message": {
+    "v": "1",
+    "eventId": "bbbbbbbb-bbbb-4bbb-8bbb-000000000001",
+    "kind": "payment_due"
+   },
+   "expect": "invalid_request"
+  },
+  {
+   "name": "old version",
+   "message": {
+    "v": "0",
+    "eventId": "bbbbbbbb-bbbb-4bbb-8bbb-000000000001",
+    "kind": "review_pending"
+   },
+   "expect": "invalid_request"
+  }
+ ]
+}
