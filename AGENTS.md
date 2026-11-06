@@ -7,7 +7,7 @@ they do not prove that GitHub settings enforce them.
 ## Project and toolchain
 
 - Kotlin Multiplatform and Compose Multiplatform; Gradle project in `android/`.
-- Use JDK 21 (CI: Temurin 21.0.13+9), Gradle 9.8.2, AGP 9.5.0,
+- Use JDK 21 (CI: Temurin 21.0.13+9), Gradle 9.8.2, AGP 9.5.1,
   Kotlin 2.4.21, Compose Multiplatform 1.12.2 and Android platform 37.0.
 - CI installs only required SDK packages, verifies command-line tools 19.0 by
   checksum, and does not share Gradle caches between jobs.
