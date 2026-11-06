@@ -18,6 +18,7 @@ Run shell and policy tests from the repository root, one at a time:
 ```sh
 node tests/policy.mjs
 node tools/check-policy.mjs
+node tests/merge-controller.mjs
 node tests/secret-scan-metadata.mjs
 bash android/scripts/test-ci-instrumented.sh
 bash android/scripts/test-setup-emulator.sh

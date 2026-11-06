@@ -18,8 +18,9 @@ they do not prove that GitHub settings enforce them.
 
 - Never add credentials, `.env`/`.dev.vars`, keystores, signing material,
   Firebase configuration, customer data, or real diagnostic captures.
-- Public CI uses read-only `contents` permissions on isolated `ubuntu-24.04`
-  hosted runners. Do not use repository secrets, persistent runners, provider
+- Public PR CI uses read-only `contents` permissions on isolated `ubuntu-24.04`
+  hosted runners. Only the trusted-main controller has scoped merge permission;
+  it never executes PR code or artifacts. Do not use repository secrets, persistent runners, provider
   calls, backend source, deploy/release jobs or `pull_request_target`.
 - Keep tests local, synthetic and backend-free. The private website Worker
   journey is not part of this public repository or client CI.
@@ -35,7 +36,9 @@ they do not prove that GitHub settings enforce them.
 
 - Use neutral, project-focused future branch names, commit messages, PR titles,
   issues and comments. Do not add optional AI/Devin branding, generated-by or
-  session footers, agent co-author trailers, or session links.
+  session footers, agent co-author trailers, or session links. If tooling appends
+  optional session/Desktop/Requested-by text, remove only that text with a normal
+  body edit after creation; preserve substantive evidence and authenticated authorship.
 - Preserve actual authorship, authentication actors, audit/signature data,
   license and other legally or technically required identifiers. Never
   impersonate a person, rewrite history, or expose private coordination details.
@@ -48,9 +51,10 @@ they do not prove that GitHub settings enforce them.
 Same-repository, non-fork, non-draft code PRs are authorized for automatic merge
 once the documented exact-head checks and policy are satisfied. Reviews are
 advisory; no human approval quota or sensitive-path exclusion applies. The trusted
-main-branch merge controller is not implemented or installed in this packet.
-Its separately reviewed bootstrap is an automation limitation, not a new owner
-approval requirement. Do not use native queued auto-merge or bypass protection.
+main-branch controller implementation cannot execute until separately reviewed
+and merged with exact CI and active protections verified. That bootstrap is an
+automation limitation, not a new owner approval requirement. Do not use native
+queued auto-merge or bypass protection.
 See [agent merge policy](docs/agent-merge-policy.md).
 
 ## Required checks
