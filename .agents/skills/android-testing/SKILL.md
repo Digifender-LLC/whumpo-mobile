@@ -8,7 +8,7 @@ description: Run the public Whumpo Mobile credential-free build, host, unit, and
 Read `AGENTS.md`, `docs/android-build.md` and
 `docs/android-verification.md` before changing or testing Android code.
 
-Use the pinned wrapper/toolchain: JDK 21, Gradle 9.8.2, AGP 9.5.0, Kotlin
+Use the pinned wrapper/toolchain: JDK 21, Gradle 9.8.2, AGP 9.5.1, Kotlin
 2.4.21, Compose Multiplatform 1.12.2 and Android platform 37.0. Keep provider
 credentials, signing material, `.env` files, private website source and customer
 data out of public tests and build environments.

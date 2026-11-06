@@ -20,7 +20,6 @@ androidxCredentials = "1.6.0"
 androidxLifecycle = "2.11.0"
 # The stable replacement for the deprecated PredictiveBackHandler; the same artifact Compose Multiplatform already pulls in.
 navigationEvent = "1.1.0"
-androidxNavigation = "2.10.2"
 androidxTestCore = "1.6.1"
 androidxTestExtJunit = "1.2.1"
 androidxTestRunner = "1.6.2"
@@ -47,7 +46,6 @@ androidx-credentials = { module = "androidx.credentials:credentials", version.re
 androidx-credentials-play-services-auth = { module = "androidx.credentials:credentials-play-services-auth", version.ref = "androidxCredentials" }
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidxLifecycle" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidxLifecycle" }
-androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "androidxNavigation" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTestCore" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
