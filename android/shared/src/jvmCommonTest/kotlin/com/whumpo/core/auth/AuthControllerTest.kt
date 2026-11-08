@@ -229,7 +229,7 @@ class AuthControllerTest {
         val observed = restarted.observe()
         restarted.overrides["/bootstrap"] = 200 to unfinished()
         restarted.auth.start()
-        restarted.await(AuthState.FinishSetup(canCheck = true))
+        restarted.await(AuthState.FinishSetup(canCheck = true, canOpen = true))
         assertFalse(observed.contains(AuthState.Ready))
 
         restarted.auth.openSetup()
@@ -237,7 +237,7 @@ class AuthControllerTest {
         assertEquals(listOf("https://whumpo.com/welcome"), restarted.browser.opened.toList())
         restarted.auth.checkSetupAgain()
         restarted.settle()
-        restarted.await(AuthState.FinishSetup(canCheck = true))
+        restarted.await(AuthState.FinishSetup(canCheck = true, canOpen = true))
         assertFalse(observed.contains(AuthState.Ready))
 
         restarted.overrides.remove("/bootstrap")
@@ -370,7 +370,7 @@ class AuthControllerTest {
     fun anIncompleteAccountIsSentToTheBrowserAndGetsNoSession() = test {
         overrides["/session/login/verify"] = 403 to err("identity_incomplete", ""","next":"browser"""")
         auth.signInWithPasskey()
-        await(AuthState.FinishSetup())
+        await(AuthState.FinishSetup(canOpen = true))
         assertFalse(dir.exists())
 
         auth.openSetup()
@@ -384,7 +384,7 @@ class AuthControllerTest {
         val unfinished = """{"version":1,"onboarding":{"complete":false,"browserPath":"/welcome"},"chat":null,"projectCount":0,"pendingReviewCount":0}"""
         overrides["/bootstrap"] = 200 to unfinished
         auth.signInWithPasskey()
-        await(AuthState.FinishSetup(canCheck = true))
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
 
         auth.openSetup()
         settle()
@@ -392,7 +392,7 @@ class AuthControllerTest {
 
         auth.checkSetupAgain()
         settle()
-        await(AuthState.FinishSetup(canCheck = true))
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
         overrides.remove("/bootstrap")
         auth.checkSetupAgain()
         await(AuthState.Ready)
@@ -460,7 +460,7 @@ class AuthControllerTest {
     fun failedSetupRechecksAreRecoverableAndRefreshTheBrowserPath() = test {
         overrides["/bootstrap"] = 200 to unfinished()
         auth.signInWithPasskey()
-        await(AuthState.FinishSetup(canCheck = true))
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
         settle()
         val observed = observe()
 
@@ -474,7 +474,7 @@ class AuthControllerTest {
         settle()
         overrides["/bootstrap"] = 200 to unfinished("/welcome/resume")
         auth.checkSetupAgain()
-        await(AuthState.FinishSetup(canCheck = true))
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
         settle()
         auth.openSetup()
         settle()
@@ -532,7 +532,7 @@ class AuthControllerTest {
         bootstrapGate = null
         overrides["/bootstrap"] = 200 to unfinished("/welcome/new-account")
         auth.checkSetupAgain()
-        await(AuthState.FinishSetup(canCheck = true))
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
         settle()
         assertEquals("Bearer $nextToken", calls.last { it.path == "/bootstrap" }.auth)
         auth.openSetup()
@@ -599,7 +599,7 @@ class AuthControllerTest {
     fun switchingAccountsClosesTheGateAndNeverReusesThePreviousSetupPath() = test {
         overrides["/bootstrap"] = 200 to unfinished("/welcome/old-account")
         auth.signInWithPasskey()
-        await(AuthState.FinishSetup(canCheck = true))
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
         sessions.begin("0".repeat(63) + "3")
         sessions.establish("n***@example.test", "2026-10-11T12:00:00Z", null)
         await(AuthState.FinishSetup(canCheck = true))

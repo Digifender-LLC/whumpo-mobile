@@ -93,10 +93,11 @@ class AuthController(
             session is SessionManager.State.SignedIn -> when {
                 current is Step.Ready && current.token == token -> AuthState.Ready
                 current is Step.Setup && current.kind == SetupKind.Onboarding && current.token == token ->
-                    AuthState.FinishSetup(current.busy, current.problem, canCheck = true)
+                    AuthState.FinishSetup(current.busy, current.problem, canCheck = true, canOpen = current.path != null)
                 else -> AuthState.FinishSetup(
                     busy = current is Step.Setup && current.token == null && current.busy,
                     canCheck = true,
+                    canOpen = current is Step.Setup && current.kind == SetupKind.Account,
                 )
             }
             else -> when (current) {
@@ -105,7 +106,7 @@ class AuthController(
                 is Step.Problem -> AuthState.SignedOut(current.problem)
                 is Step.Waiting -> AuthState.WaitingForBrowser(current.exchanging)
                 is Step.Setup -> if (current.kind == SetupKind.Account) {
-                    AuthState.FinishSetup(current.busy, current.problem)
+                    AuthState.FinishSetup(current.busy, current.problem, canOpen = true)
                 } else {
                     signedOut
                 }

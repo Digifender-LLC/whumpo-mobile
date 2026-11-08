@@ -92,7 +92,7 @@ class OnboardingGateTest {
             worker.bootstrapHold = null
         }
 
-        compose.waitUntil(10_000) { graph.auth.state.value == AuthState.FinishSetup(canCheck = true) }
+        compose.waitUntil(10_000) { graph.auth.state.value == AuthState.FinishSetup(canCheck = true, canOpen = true) }
         compose.onNodeWithTag("nav-chat").assertDoesNotExist()
         worker.onboardingComplete = true
         compose.onNodeWithTag("auth-check-setup").assertIsEnabled().performClick()
@@ -134,7 +134,7 @@ class OnboardingGateTest {
         compose.waitUntil(10_000) { present("auth-check-setup") && !present("nav-chat") }
         assertNull(Fixtures.container.accountState.read(Fixtures.ownerB, StateSlot.CHAT_DRAFT))
         compose.onNodeWithTag("auth-check-setup").performClick()
-        Fixtures.awaitAuth { it == AuthState.FinishSetup(canCheck = true) }
+        Fixtures.awaitAuth { it == AuthState.FinishSetup(canCheck = true, canOpen = true) }
         compose.onNodeWithTag("nav-chat").assertDoesNotExist()
         assertEquals("Bearer $tokenB", worker.requestsSnapshot().last { it.path.endsWith("/bootstrap") }.headers["authorization"])
 

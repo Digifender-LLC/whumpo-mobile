@@ -143,7 +143,7 @@ fun FinishSetupScreen(state: AuthState.FinishSetup, actions: AuthActions, modifi
         state.problem?.let { ProblemCard(it) }
         WhumpoPrimaryButton(
             onClick = actions::openSetup,
-            enabled = !state.busy,
+            enabled = !state.busy && state.canOpen,
             modifier = Modifier.fillMaxWidth().heightIn(min = Target).testTag("auth-open-setup").semantics {
                 liveRegion = LiveRegionMode.Polite
             },
