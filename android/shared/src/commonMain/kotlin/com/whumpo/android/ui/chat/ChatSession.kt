@@ -13,7 +13,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,7 +54,7 @@ enum class SendStatus {
 /** The message being sent. [requestId] is the turn ID and is reused for every retry of this one send. */
 data class Outbound(val requestId: String, val content: String, val expectedRevision: Int, val status: SendStatus)
 
-enum class ReviewStep { Ready, Reauthenticating, Confirming, Done, Failed, NoLongerCurrent, UpdateRequired }
+enum class ReviewStep { Ready, Reauthenticating, Confirming, Pending, Uncertain, Done, Failed, NoLongerCurrent, UpdateRequired }
 
 data class ReviewFlow(
     val turnId: String,
@@ -63,9 +65,11 @@ data class ReviewFlow(
     val requestId: String,
     val step: ReviewStep,
     val message: String? = null,
+    /** A committed failure or an unresolved request must not offer another POST. */
+    val retryAllowed: Boolean = true,
 ) {
     val busy: Boolean get() = step == ReviewStep.Confirming || step == ReviewStep.Reauthenticating
-    val canConfirm: Boolean get() = (step == ReviewStep.Ready || step == ReviewStep.Failed) && review.control != null
+    val canConfirm: Boolean get() = (step == ReviewStep.Ready || step == ReviewStep.Failed) && retryAllowed && review.control != null
 }
 
 enum class HapticKind { Confirm, Reject }
@@ -120,6 +124,9 @@ class ChatSession(
     private var pollJob: Job? = null
     private var seq = 0
     private val confirmIds = mutableMapOf<String, String>()
+    // Submitted payloads and outcomes outlive their sheet; reopening cannot replace them with a new revision/control.
+    private val confirmAttempts = mutableMapOf<String, ReviewFlow>()
+    private val checkingOutcomes = mutableSetOf<String>()
 
     private fun newWork() = CoroutineScope(scope.coroutineContext + SupervisorJob(parent))
 
@@ -129,6 +136,8 @@ class ChatSession(
         work = newWork()
         pollJob = null
         confirmIds.clear()
+        confirmAttempts.clear()
+        checkingOutcomes.clear()
         mutable.value = ChatState()
     }
 
@@ -166,10 +175,15 @@ class ChatSession(
 
     private suspend fun refresh() {
         try {
-            applyPage(client.getChat(limit = PAGE_LIMIT))
+            val page = client.getChat(limit = PAGE_LIMIT)
+            currentCoroutineContext().ensureActive()
+            applyPage(page)
         } catch (e: MobileApiException) {
             refreshFailed(e)
         }
+        // A receipt can be older than the newest page, or readable even when that page cannot be refreshed.
+        confirmAttempts.values.filter { it.step == ReviewStep.Pending || it.step == ReviewStep.Uncertain }
+            .toList().forEach { checkOutcome(it) }
     }
 
     private fun applyPage(page: ChatPage) {
@@ -179,15 +193,24 @@ class ChatSession(
             val announce = if (s.phase is Phase.Ready && reply != null) "Whumpo replied: ${reply.assistantText.orEmpty().take(ANNOUNCE_CHARS)}" else s.announcement
             s.copy(phase = Phase.Ready, turns = page.items, revision = page.revision, offline = false, announcement = announce)
         }
+        confirmAttempts.values.filter { it.canConfirm && !reviewStillCurrent(it) }.toList().forEach {
+            setStep(it.requestId, ReviewStep.NoLongerCurrent, "This review is no longer current.", retryAllowed = false)
+        }
         if (page.items.any { it.status == "pending" }) startPolling()
     }
 
     private fun refreshFailed(e: MobileApiException) {
+        val confirmationUnresolved = confirmAttempts.values.any {
+            it.step == ReviewStep.Confirming || it.step == ReviewStep.Pending || it.step == ReviewStep.Uncertain
+        }
         mutable.update { s ->
             when {
                 e is MobileApiException.ClientUpdateRequired -> s.copy(phase = Phase.UpdateRequired)
-                s.turns.isNotEmpty() -> s.copy(offline = e is MobileApiException.Transport, notice = if (e is MobileApiException.Transport) s.notice else e.userMessage())
-                else -> s.copy(phase = Phase.Failed(e.headline(), e.safeLine()))
+                s.turns.isNotEmpty() -> s.copy(
+                    offline = e is MobileApiException.Transport,
+                    notice = if (e is MobileApiException.Transport) s.notice else if (confirmationUnresolved) e.headline() else e.userMessage(),
+                )
+                else -> s.copy(phase = Phase.Failed(e.headline(), if (confirmationUnresolved) "Check the confirmation result before trying again." else e.safeLine()))
             }
         }
     }
@@ -312,7 +335,16 @@ class ChatSession(
         val id = confirmIds.getOrPut(review.reviewId) { newId() }
         // The confirm is a new turn, so the server wants the CURRENT workspace revision (stale_revision otherwise). The turn's own
         // revision is old as soon as anything is said after the review; the control still binds the exact reviewed change.
-        mutable.update { it.copy(review = ReviewFlow(turn.id, it.revision, review, id, step, message)) }
+        val previous = confirmAttempts[id]
+        val flow = when {
+            previous == null -> ReviewFlow(turn.id, mutable.value.revision, review, id, step, message)
+            previous.canConfirm && (step != ReviewStep.Ready || previous.review.control != review.control) ->
+                previous.copy(step = ReviewStep.NoLongerCurrent, message = "This review is no longer current.", retryAllowed = false)
+            else -> previous
+        }
+        if (previous != null) confirmAttempts[id] = flow
+        mutable.update { it.copy(review = flow) }
+        if (flow.step == ReviewStep.Pending || flow.step == ReviewStep.Uncertain) launchWork { checkOutcome(flow) }
     }
 
     /** Closing a sheet confirms nothing. A confirm already sent keeps going and reports through the live region. */
@@ -324,8 +356,14 @@ class ChatSession(
     fun confirmReview() {
         val flow = mutable.value.review ?: return
         if (!flow.canConfirm) return
+        if (!reviewStillCurrent(flow)) {
+            setStep(flow.requestId, ReviewStep.NoLongerCurrent, "This review is no longer current.", retryAllowed = false)
+            return
+        }
+        if (confirmAttempts[flow.requestId]?.canConfirm == false) return
+        val attempt = confirmAttempts.getOrPut(flow.requestId) { flow }
         setStep(flow.requestId, ReviewStep.Confirming, null)
-        launchWork { runConfirm(flow) }
+        launchWork { runConfirm(attempt) }
     }
 
     private suspend fun runConfirm(flow: ReviewFlow) {
@@ -333,9 +371,12 @@ class ChatSession(
         var reauthenticated = false
         while (true) {
             try {
-                finishConfirm(flow, client.confirmReview(flow.requestId, flow.revision, control))
+                val ack = client.confirmReview(flow.requestId, flow.revision, control)
+                currentCoroutineContext().ensureActive()
+                finishConfirm(flow, ack)
                 return
             } catch (e: MobileApiException) {
+                currentCoroutineContext().ensureActive()
                 if (e is MobileApiException.ProofRequired && e.proof == MobileApiException.ProofRequired.Proof.FRESH_PASSKEY && !reauthenticated) {
                     reauthenticated = true
                     setStep(flow.requestId, ReviewStep.Reauthenticating, null)
@@ -369,7 +410,7 @@ class ChatSession(
                 refresh()
             }
             e is MobileApiException.ClientUpdateRequired -> setStep(flow.requestId, ReviewStep.UpdateRequired, "Update Whumpo to review this change.")
-            e is MobileApiException.Transport && e.outcomeUnknown -> {
+            e is MobileApiException.Transport && e.outcomeUnknown || e is MobileApiException.InvalidResponse -> {
                 setStep(flow.requestId, ReviewStep.Confirming, "Didn't hear back yet. Checking.")
                 checkOutcome(flow)
             }
@@ -377,42 +418,82 @@ class ChatSession(
         }
     }
 
-    /** Reads the conversation to see whether a lost confirm took effect. Never confirms again by itself. */
+    /** Resolves this request, independently of the newest chat page. Recovery only reads; it never confirms. */
     private suspend fun checkOutcome(flow: ReviewFlow) {
-        refresh()
-        val review = mutable.value.turns.firstOrNull { it.id == flow.turnId }?.review
-        if (review != null && review.state == "applied") {
-            setStep(flow.requestId, ReviewStep.Done, receiptFor(flow.review.kind))
-            announce(receiptFor(flow.review.kind), HapticKind.Confirm)
-        } else {
-            failConfirm(flow, "Didn't hear back. Nothing is confirmed yet. Try again to use the same request.")
+        if (!confirmAttempts.containsKey(flow.requestId) || !checkingOutcomes.add(flow.requestId)) return
+        try {
+            val turn = client.resolveSend(flow.requestId)
+            currentCoroutineContext().ensureActive()
+            when {
+                turn == null -> {
+                    if (!reviewStillCurrent(flow)) {
+                        setStep(flow.requestId, ReviewStep.NoLongerCurrent, "This review is no longer current.", retryAllowed = false)
+                    } else {
+                        failConfirm(flow, "The request was not found. You can try again with the same request.")
+                    }
+                }
+                turn.id != flow.requestId -> uncertainConfirm(flow)
+                else -> applyConfirmOutcome(flow, turn.status)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MobileApiException) {
+            currentCoroutineContext().ensureActive()
+            if (e is MobileApiException.ClientUpdateRequired) {
+                setStep(flow.requestId, ReviewStep.UpdateRequired, "Update Whumpo to check this change.", retryAllowed = false)
+            } else {
+                uncertainConfirm(flow)
+            }
+        } finally {
+            checkingOutcomes.remove(flow.requestId)
         }
     }
 
     private suspend fun finishConfirm(flow: ReviewFlow, ack: WriteAccepted) {
-        when (ack.turnStatus) {
-            "failed" -> failConfirm(flow, "Whumpo couldn't finish this change. Check Activity before trying again.")
+        if (ack.requestId == flow.requestId && ack.accepted) applyConfirmOutcome(flow, ack.turnStatus)
+        else uncertainConfirm(flow)
+        refresh()
+    }
+
+    private fun applyConfirmOutcome(flow: ReviewFlow, status: String) {
+        when (status) {
+            "failed" -> failConfirm(flow, "Whumpo couldn't finish this change. Check Activity before trying again.", retryAllowed = false)
             "completed" -> {
                 setStep(flow.requestId, ReviewStep.Done, receiptFor(flow.review.kind))
                 announce(receiptFor(flow.review.kind), HapticKind.Confirm)
             }
-            else -> {
-                setStep(flow.requestId, ReviewStep.Done, "Confirmed. Whumpo is finishing this.")
-                announce("Confirmed. Whumpo is finishing this.", HapticKind.Confirm)
+            "pending" -> {
+                setStep(flow.requestId, ReviewStep.Pending, "Confirmed. Whumpo is finishing this.", retryAllowed = false)
+                mutable.update { it.copy(announcement = "Confirmed. Whumpo is finishing this.") }
             }
+            else -> uncertainConfirm(flow)
         }
-        refresh()
     }
 
-    private fun failConfirm(flow: ReviewFlow, message: String) {
-        setStep(flow.requestId, ReviewStep.Failed, message)
+    private fun uncertainConfirm(flow: ReviewFlow) {
+        val message = "The outcome is still unknown. Check again or check Activity before trying again."
+        setStep(flow.requestId, ReviewStep.Uncertain, message, retryAllowed = false)
+        mutable.update { it.copy(announcement = message) }
+    }
+
+    private fun failConfirm(flow: ReviewFlow, message: String, retryAllowed: Boolean = true) {
+        setStep(flow.requestId, ReviewStep.Failed, message, retryAllowed)
         announce(message, HapticKind.Reject)
     }
 
-    private fun setStep(requestId: String, step: ReviewStep, message: String?) {
+    private fun reviewStillCurrent(flow: ReviewFlow): Boolean {
+        val turn = mutable.value.turns.firstOrNull { it.id == flow.turnId } ?: return true // It may be outside this page.
+        val review = turn.review ?: return false
+        return review.present(clientInfo).enabled && review.control == flow.review.control
+    }
+
+    private fun setStep(requestId: String, step: ReviewStep, message: String?, retryAllowed: Boolean = true) {
+        confirmAttempts[requestId]?.let { attempt ->
+            confirmAttempts[requestId] = attempt.copy(step = step, message = message, retryAllowed = retryAllowed)
+        }
         mutable.update { s ->
             val flow = s.review
-            if (flow != null && flow.requestId == requestId) s.copy(review = flow.copy(step = step, message = message)) else s
+            if (flow != null && flow.requestId == requestId) s.copy(review = flow.copy(step = step, message = message, retryAllowed = retryAllowed)) else s
         }
     }
 
