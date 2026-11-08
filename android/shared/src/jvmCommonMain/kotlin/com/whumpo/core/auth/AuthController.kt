@@ -271,9 +271,15 @@ class AuthController(
                     val token = sessions.bearerToken() ?: return@launchStep
                     val path = current.path?.takeIf { current.token == token }
                     val url = path?.let(::browserUrl)
+                    // Without a path the browser is never tried, so a failed bootstrap keeps its own problem.
+                    val kept = current.problem?.takeIf { current.token == token }
                     step.value = Step.Setup(
                         SetupKind.Onboarding,
-                        problem = if (url != null && browser.open(url)) null else AuthProblem.NoBrowser,
+                        problem = when {
+                            url == null -> kept ?: AuthProblem.NoBrowser
+                            browser.open(url) -> null
+                            else -> AuthProblem.NoBrowser
+                        },
                         token = token,
                         path = path,
                     )

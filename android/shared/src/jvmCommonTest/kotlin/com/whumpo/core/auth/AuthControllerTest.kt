@@ -419,6 +419,31 @@ class AuthControllerTest {
     }
 
     @Test
+    fun openingSetupAfterAFailedBootstrapKeepsTheBootstrapProblem() = test {
+        auth.signInWithPasskey()
+        await(AuthState.Ready)
+        val failures = listOf(
+            (503 to err("unavailable")) to AuthProblem.ServiceUnavailable,
+            (429 to err("rate_limited", ""","retryAfterSeconds":60""")) to AuthProblem.RateLimited,
+            (200 to "not json") to AuthProblem.Generic,
+        )
+        for ((response, problem) in failures) {
+            val restarted = restarted()
+            restarted.overrides["/bootstrap"] = response
+            restarted.auth.start()
+            restarted.await(AuthState.FinishSetup(problem = problem, canCheck = true))
+            restarted.auth.openSetup()
+            restarted.settle()
+            assertEquals(AuthState.FinishSetup(problem = problem, canCheck = true), restarted.auth.state.value)
+            assertTrue(restarted.browser.opened.isEmpty())
+
+            restarted.overrides.remove("/bootstrap")
+            restarted.auth.checkSetupAgain()
+            restarted.await(AuthState.Ready)
+        }
+    }
+
+    @Test
     fun freshSignInBootstrapFailureAlsoRequiresAnExplicitRetry() = test {
         val observed = observe()
         overrides["/bootstrap"] = 503 to err("unavailable")
