@@ -115,6 +115,22 @@ class AuthScreensTest : RobolectricUiTest() {
     }
 
     @Test
+    fun aFailedSetupCheckOffersAnExplicitRetryAndSignOut() {
+        val actions = RecordingActions()
+        show(AuthState.FinishSetup(problem = AuthProblem.Network, canCheck = true), actions).use {
+            compose.onNodeWithTag("auth-problem").assert(polite).assertIsDisplayed()
+            compose.onNodeWithTag("auth-check-setup").assertIsEnabled().performClick()
+            compose.onNodeWithTag("auth-sign-out").assertIsEnabled().performClick()
+        }
+        assertEquals(listOf("check", "signOut"), actions.calls)
+        show(AuthState.FinishSetup(busy = true, canCheck = true)).use {
+            compose.onNodeWithTag("auth-open-setup").assertIsNotEnabled()
+            compose.onNodeWithTag("auth-check-setup").assertIsNotEnabled()
+            compose.onNodeWithTag("auth-sign-out").assertIsEnabled()
+        }
+    }
+
+    @Test
     fun finishSetupOffersCheckAndSignOutOnlyOnceSignedIn() {
         val actions = RecordingActions()
         show(AuthState.FinishSetup(canCheck = true), actions).use {
