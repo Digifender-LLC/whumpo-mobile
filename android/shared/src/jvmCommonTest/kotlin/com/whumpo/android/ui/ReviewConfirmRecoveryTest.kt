@@ -67,11 +67,11 @@ class ReviewConfirmRecoveryTest {
         }
     }
 
-    private class Fixture(scope: CoroutineScope) : AutoCloseable {
+    private class Fixture(scope: CoroutineScope, maxPolls: Int = 0, newId: () -> String = { REQUEST }) : AutoCloseable {
         val server = Server()
         private val info = ChatFixtures.client("current")
         private val client: MobileApiClient = testClient(info) { request -> server.handle(this, request) }
-        val session = ChatSession(scope, client, info, ReauthHook { true }, newId = { REQUEST }, maxPolls = 0)
+        val session = ChatSession(scope, client, info, ReauthHook { true }, newId = newId, pollDelayMs = 1, maxPolls = maxPolls)
 
         suspend fun loadAndOpen() {
             session.load()
@@ -101,10 +101,142 @@ class ReviewConfirmRecoveryTest {
             assertEquals(1, f.server.posts.size)
             assertEquals(ReviewStep.Done, f.session.state.value.review?.step)
             assertEquals("Published. Your site is live.", f.session.state.value.review?.message)
+            assertEquals(90, f.session.state.value.revision)
+            assertTrue(f.session.state.value.turns.isEmpty())
             f.session.refreshNow()
             f.session.awaitIdle()
             assertTrue(f.session.state.value.turns.isEmpty())
             f.session.confirmReview()
+            assertEquals(1, f.server.posts.size)
+        }
+    }
+
+    @Test
+    fun aStaleRevisionRejectionCanBeReviewedAgainWithAFreshImmutableRequest() = runTest {
+        val ids = ArrayDeque(listOf(REQUEST, NEXT_REQUEST))
+        Fixture(backgroundScope, newId = { ids.removeFirst() }).use { f ->
+            f.loadAndOpen()
+            f.server.chatBody = page(revision = 20)
+            f.server.confirmReply = { reply(ChatFixtures.error("stale_revision")) }
+            f.confirm()
+            assertEquals(ReviewStep.NoLongerCurrent, f.session.state.value.review?.step)
+            assertEquals(1, f.server.posts.size)
+            val rejected = f.server.posts.single()
+            f.session.confirmReview()
+            assertEquals(1, f.server.posts.size)
+
+            f.session.dismissReview()
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            assertEquals(ReviewStep.Ready, f.session.state.value.review?.step)
+            assertEquals(NEXT_REQUEST, f.session.state.value.review?.requestId)
+            assertEquals(20, f.session.state.value.review?.revision)
+            assertEquals(1, f.server.posts.size)
+            f.server.confirmReply = { reply(200, acknowledgment("completed", id = NEXT_REQUEST)) }
+            f.confirm()
+            assertEquals(ReviewStep.Done, f.session.state.value.review?.step)
+            assertEquals(2, f.server.posts.size)
+            assertEquals(REQUEST, rejected["requestId"]!!.jsonPrimitive.content)
+            assertEquals(4, rejected["expectedRevision"]!!.jsonPrimitive.int)
+            assertEquals(NEXT_REQUEST, f.server.posts.last()["requestId"]!!.jsonPrimitive.content)
+            assertEquals(20, f.server.posts.last()["expectedRevision"]!!.jsonPrimitive.int)
+            assertEquals(rejected["control"], f.server.posts.last()["control"])
+        }
+    }
+
+    @Test
+    fun aStaleRejectionNeedsASuccessfulNewerAuthorizedPageBeforeANewAttempt() = runTest {
+        val ids = ArrayDeque(listOf(REQUEST, NEXT_REQUEST))
+        Fixture(backgroundScope, newId = { ids.removeFirst() }).use { f ->
+            f.loadAndOpen()
+            // A page fetched before the rejection must not authorize a replacement attempt.
+            f.server.chatBody = page(revision = 20)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            f.server.chatError = ChatFixtures.error("unavailable")
+            f.server.confirmReply = { reply(ChatFixtures.error("stale_revision")) }
+            f.confirm()
+            f.session.dismissReview()
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            assertEquals(ReviewStep.NoLongerCurrent, f.session.state.value.review?.step)
+            assertEquals(REQUEST, f.session.state.value.review?.requestId)
+            f.session.confirmReview()
+            assertEquals(1, f.server.posts.size)
+
+            f.server.chatError = null
+            f.server.chatBody = page(revision = 30, applied = true)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            f.session.dismissReview()
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            assertFalse(f.session.state.value.review?.canConfirm == true)
+            assertEquals(REQUEST, f.session.state.value.review?.requestId)
+            f.session.confirmReview()
+            assertEquals(1, f.server.posts.size)
+
+            f.server.chatBody = page(revision = 40)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            f.session.dismissReview()
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            assertEquals(ReviewStep.Ready, f.session.state.value.review?.step)
+            assertEquals(NEXT_REQUEST, f.session.state.value.review?.requestId)
+            assertEquals(40, f.session.state.value.review?.revision)
+            assertEquals(1, f.server.posts.size)
+        }
+    }
+
+    @Test
+    fun pendingRepliesPollTheSpecificRequestOutsideTheNewestPage() = runTest {
+        val replies: List<RecoveryReply> = listOf(
+            { throw IOException("Synthetic lost confirmation reply") },
+            { reply(200, "{}") },
+            { reply(200, acknowledgment("pending")) },
+        )
+        for (response in replies) {
+            Fixture(backgroundScope, maxPolls = 2).use { f ->
+                f.loadAndOpen()
+                f.server.chatBody = page(revision = 90, empty = true)
+                f.server.confirmReply = response
+                f.server.receiptReply = { reply(200, receipt(if (f.server.receiptIds.size == 1) "pending" else "completed")) }
+                f.confirm()
+                assertEquals(ReviewStep.Done, f.session.state.value.review?.step)
+                assertEquals(listOf(REQUEST, REQUEST), f.server.receiptIds)
+                assertEquals(90, f.session.state.value.revision)
+                assertTrue(f.session.state.value.turns.isEmpty())
+                assertEquals(1, f.server.posts.size)
+                f.session.confirmReview()
+                assertEquals(1, f.server.posts.size)
+            }
+        }
+    }
+
+    @Test
+    fun pendingReceiptPollingIsBoundedAndNeverPostsAgain() = runTest {
+        Fixture(backgroundScope, maxPolls = 2).use { f ->
+            f.loadAndOpen()
+            f.server.chatBody = page(revision = 90, empty = true)
+            f.server.receiptReply = { reply(200, receipt("pending")) }
+            f.confirm()
+            assertEquals(ReviewStep.Pending, f.session.state.value.review?.step)
+            assertFalse(f.session.state.value.review?.canConfirm == true)
+            assertEquals(listOf(REQUEST, REQUEST, REQUEST), f.server.receiptIds)
+            assertEquals(1, f.server.posts.size)
+        }
+    }
+
+    @Test
+    fun pendingReceiptsCanCompleteEvenWhileTheTranscriptIsUnavailable() = runTest {
+        Fixture(backgroundScope, maxPolls = 2).use { f ->
+            f.loadAndOpen()
+            f.server.chatBody = page(revision = 90, empty = true)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            f.server.chatError = ChatFixtures.error("unavailable")
+            f.server.receiptReply = { reply(200, receipt(if (f.server.receiptIds.size == 1) "pending" else "completed")) }
+            f.confirm()
+            assertEquals(ReviewStep.Done, f.session.state.value.review?.step)
+            assertTrue(f.session.state.value.phase is Phase.Failed)
+            assertEquals(listOf(REQUEST, REQUEST), f.server.receiptIds)
             assertEquals(1, f.server.posts.size)
         }
     }
@@ -311,11 +443,13 @@ class ReviewConfirmRecoveryTest {
         for ((status, step) in listOf("completed" to ReviewStep.Done, "pending" to ReviewStep.Pending, "failed" to ReviewStep.Failed)) {
             Fixture(backgroundScope).use { f ->
                 f.loadAndOpen()
+                f.server.chatBody = page(revision = 90, empty = true)
                 f.server.confirmReply = { reply(200, "{}") }
                 f.server.receiptReply = { reply(200, receipt(status)) }
                 f.confirm()
                 assertEquals(listOf(REQUEST), f.server.receiptIds)
                 assertEquals(step, f.session.state.value.review?.step)
+                assertEquals(90, f.session.state.value.revision)
                 assertFalse(f.session.state.value.review?.canConfirm == true)
                 f.session.confirmReview()
                 assertEquals(1, f.server.posts.size)
@@ -440,6 +574,7 @@ class ReviewConfirmRecoveryTest {
 
     companion object {
         private const val REQUEST = "66666666-6666-4666-8666-000000000001"
+        private const val NEXT_REQUEST = "66666666-6666-4666-8666-000000000002"
 
         private fun receipt(status: String, id: String = REQUEST): String {
             val envelope = Json.parseToJsonElement(ChatFixtures.body("chat.turn")).jsonObject

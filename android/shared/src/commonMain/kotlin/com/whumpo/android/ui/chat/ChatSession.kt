@@ -127,6 +127,9 @@ class ChatSession(
     // Submitted payloads and outcomes outlive their sheet; reopening cannot replace them with a new revision/control.
     private val confirmAttempts = mutableMapOf<String, ReviewFlow>()
     private val checkingOutcomes = mutableSetOf<String>()
+    // Only a definitive stale-revision rejection can be replaced, after a newer page has been read.
+    private val staleConfirmGenerations = mutableMapOf<String, Int>()
+    private var pageGeneration = 0
 
     private fun newWork() = CoroutineScope(scope.coroutineContext + SupervisorJob(parent))
 
@@ -138,6 +141,8 @@ class ChatSession(
         confirmIds.clear()
         confirmAttempts.clear()
         checkingOutcomes.clear()
+        staleConfirmGenerations.clear()
+        pageGeneration = 0
         mutable.value = ChatState()
     }
 
@@ -174,19 +179,25 @@ class ChatSession(
     // ---- Reading ---------------------------------------------------------------------------------------------------
 
     private suspend fun refresh() {
+        refreshTranscript()
+        // A receipt can be older than the newest page, or readable even when that page cannot be refreshed.
+        confirmAttempts.values.filter { it.step == ReviewStep.Pending || it.step == ReviewStep.Uncertain }
+            .toList().forEach { checkOutcome(it, refreshPage = false) }
+    }
+
+    private suspend fun refreshTranscript() {
         try {
             val page = client.getChat(limit = PAGE_LIMIT)
             currentCoroutineContext().ensureActive()
             applyPage(page)
         } catch (e: MobileApiException) {
+            currentCoroutineContext().ensureActive()
             refreshFailed(e)
         }
-        // A receipt can be older than the newest page, or readable even when that page cannot be refreshed.
-        confirmAttempts.values.filter { it.step == ReviewStep.Pending || it.step == ReviewStep.Uncertain }
-            .toList().forEach { checkOutcome(it) }
     }
 
     private fun applyPage(page: ChatPage) {
+        pageGeneration += 1
         mutable.update { s ->
             val known = s.turns.associateBy { it.id }
             val reply = page.items.lastOrNull { it.status == "completed" && it.assistantText != null && known[it.id]?.assistantText == null }
@@ -225,7 +236,8 @@ class ChatSession(
                     polls += 1
                     refresh()
                     val s = mutable.value
-                    if (s.phase !is Phase.Ready || !s.replyPending) break
+                    val confirmationPending = confirmAttempts.values.any { it.step == ReviewStep.Pending }
+                    if (!confirmationPending && (s.phase !is Phase.Ready || !s.replyPending)) break
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -332,10 +344,20 @@ class ChatSession(
             !known || presentation.reason == "client_update_required" -> ReviewStep.UpdateRequired to "Update Whumpo to review this change."
             else -> ReviewStep.NoLongerCurrent to "This review is no longer current."
         }
-        val id = confirmIds.getOrPut(review.reviewId) { newId() }
+        var id = confirmIds.getOrPut(review.reviewId) { newId() }
         // The confirm is a new turn, so the server wants the CURRENT workspace revision (stale_revision otherwise). The turn's own
         // revision is old as soon as anything is said after the review; the control still binds the exact reviewed change.
-        val previous = confirmAttempts[id]
+        var previous = confirmAttempts[id]
+        val rejectedAt = staleConfirmGenerations[id]
+        if (previous?.step == ReviewStep.NoLongerCurrent && rejectedAt != null && pageGeneration > rejectedAt &&
+            mutable.value.revision > previous.revision && step == ReviewStep.Ready
+        ) {
+            // This is an explicit new review after a known rejection, never a retry of an unknown outcome.
+            // Keep the rejected attempt's payload immutable and bind a new ID to the refreshed revision/control.
+            id = newId()
+            confirmIds[review.reviewId] = id
+            previous = null
+        }
         val flow = when {
             previous == null -> ReviewFlow(turn.id, mutable.value.revision, review, id, step, message)
             previous.canConfirm && (step != ReviewStep.Ready || previous.review.control != review.control) ->
@@ -405,7 +427,8 @@ class ChatSession(
     private suspend fun confirmError(flow: ReviewFlow, e: MobileApiException) {
         when {
             e is MobileApiException.StaleRevision || e is MobileApiException.ReviewUnavailable -> {
-                setStep(flow.requestId, ReviewStep.NoLongerCurrent, "This review is no longer current. Nothing was changed.")
+                if (e is MobileApiException.StaleRevision) staleConfirmGenerations[flow.requestId] = pageGeneration
+                setStep(flow.requestId, ReviewStep.NoLongerCurrent, "This review is no longer current. Nothing was changed.", retryAllowed = false)
                 announce("This review is no longer current.", HapticKind.Reject)
                 refresh()
             }
@@ -419,11 +442,12 @@ class ChatSession(
     }
 
     /** Resolves this request, independently of the newest chat page. Recovery only reads; it never confirms. */
-    private suspend fun checkOutcome(flow: ReviewFlow) {
+    private suspend fun checkOutcome(flow: ReviewFlow, refreshPage: Boolean = true) {
         if (!confirmAttempts.containsKey(flow.requestId) || !checkingOutcomes.add(flow.requestId)) return
         try {
             val turn = client.resolveSend(flow.requestId)
             currentCoroutineContext().ensureActive()
+            if (refreshPage) refreshTranscript()
             when {
                 turn == null -> {
                     if (!reviewStillCurrent(flow)) {
@@ -435,6 +459,7 @@ class ChatSession(
                 turn.id != flow.requestId -> uncertainConfirm(flow)
                 else -> applyConfirmOutcome(flow, turn.status)
             }
+            if (confirmAttempts[flow.requestId]?.step == ReviewStep.Pending) startPolling()
         } catch (e: CancellationException) {
             throw e
         } catch (e: MobileApiException) {
