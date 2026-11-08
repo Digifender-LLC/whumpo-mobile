@@ -244,12 +244,23 @@ class ShareIntentTest {
         scenario!!.onActivity { it.handleShare(sharedPhoto().also { i -> i.setPackage(null) }) }
         waitFor { Fixtures.container.shares.preview.value is com.whumpo.android.ui.share.PreviewState.Ready }
         Fixtures.signIn(Fixtures.LABEL_B, "0".repeat(63) + "2")
-        waitFor { Fixtures.container.shares.pending.value == null }
-        assertEquals(com.whumpo.android.ui.share.PreviewState.Idle, Fixtures.container.shares.preview.value)
+        waitForShareCleared()
+        assertShareCleared()
 
         scenario!!.onActivity { it.handleShare(sharedText("another")) }
         Fixtures.container.accountState.signOut()
-        waitFor { Fixtures.container.shares.pending.value == null }
+        waitForShareCleared()
+        assertShareCleared()
+    }
+
+    private fun waitForShareCleared() = waitFor {
+        Fixtures.container.shares.pending.value == null &&
+            Fixtures.container.shares.preview.value == com.whumpo.android.ui.share.PreviewState.Idle
+    }
+
+    private fun assertShareCleared() {
+        compose.waitForIdle()
+        assertEquals(null, Fixtures.container.shares.pending.value)
         assertEquals(com.whumpo.android.ui.share.PreviewState.Idle, Fixtures.container.shares.preview.value)
     }
 
