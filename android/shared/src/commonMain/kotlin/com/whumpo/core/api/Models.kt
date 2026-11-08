@@ -189,7 +189,7 @@ data class Review(
                     else -> false
                 },
             ) { "control does not match review kind" }
-            require(requiresFreshPasskey == (kind == "specification")) { "freshness requirement does not match review kind" }
+            require(requiresFreshPasskey == (kind == "specification" || kind == "app-restore")) { "freshness requirement does not match review kind" }
         } else {
             require(control == null) { "control on a review that cannot be approved" }
         }
