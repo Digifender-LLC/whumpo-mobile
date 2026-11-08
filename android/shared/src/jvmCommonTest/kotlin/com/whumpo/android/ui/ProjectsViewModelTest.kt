@@ -1,5 +1,6 @@
 package com.whumpo.android.ui
 
+import androidx.lifecycle.viewModelScope
 import com.whumpo.android.ui.ApiFixtures.Companion.PROJECT
 import com.whumpo.android.ui.ApiFixtures.Companion.reply
 import com.whumpo.android.ui.photos.PendingUpload
@@ -20,6 +21,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -183,14 +185,17 @@ class ProjectsViewModelTest {
 
     @Test
     fun aLostReplyThatDidCommitIsNotUploadedAgain() = runTest {
+        val store = MemoryStore()
         api.override = { if (it.method == HttpMethod.Put) throw IOException("reply lost") else null }
-        val vm = viewModel()
+        val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
         vm.select(PROJECT)
         vm.addPhoto("content://media/picker/1")
 
         // The status read finds the committed upload (fixture reply), so the row clears without a second PUT.
         vm.photos.first { it.uploads.isEmpty() && api.requests.any { r -> r.method == HttpMethod.Put } }
+        store.removed.await()
         assertEquals(1, putCount())
+        assertTrue(store.saved.isEmpty()) // ready with safety pending is a finished upload, not yet usable media
     }
 
     @Test
@@ -235,6 +240,17 @@ class ProjectsViewModelTest {
         }
     }
 
+    private fun photoReply(status: String, safetyStatus: String = "pending") =
+        """{"version":1,"photo":{"id":"22222222-2222-4222-8222-222222222222","name":"van.jpg","width":1600,"height":1200,"size":2048,"status":"$status","safetyStatus":"$safetyStatus"}}"""
+
+    private fun pendingReadback(): suspend io.ktor.client.engine.mock.MockRequestHandleScope.(io.ktor.client.request.HttpRequestData) -> io.ktor.client.request.HttpResponseData? = { req ->
+        when {
+            req.method == HttpMethod.Put -> throw IOException("reply lost")
+            req.method == HttpMethod.Get && req.url.encodedPath.contains("/photos/") -> reply(200, photoReply("pending"))
+            else -> null
+        }
+    }
+
     private val OTHER = "11111111-2222-4333-8444-555555555555"
 
     // The mock engine answers on another thread: read its request log under its own lock.
@@ -244,6 +260,7 @@ class ProjectsViewModelTest {
 
     private class MemoryStore : UploadStore {
         val saved = linkedMapOf<String, PendingUpload>()
+        val removed = CompletableDeferred<String>()
         override val account = MutableStateFlow<Any?>("a")
         var failSave = false
         override suspend fun save(upload: PendingUpload, owner: Any?): Boolean {
@@ -252,7 +269,7 @@ class ProjectsViewModelTest {
             return true
         }
         override suspend fun load() = saved.values.toList()
-        override suspend fun remove(id: String) { saved.remove(id) }
+        override suspend fun remove(id: String) { saved.remove(id); removed.complete(id) }
     }
 
     @Test
@@ -274,9 +291,237 @@ class ProjectsViewModelTest {
     }
 
     @Test
+    fun aPendingReadbackKeepsTheOriginalRequestUntilAnExplicitRetryCompletesIt() = runTest {
+        val store = MemoryStore()
+        api.override = pendingReadback()
+        val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
+        vm.select(PROJECT)
+        vm.addPhoto("content://media/picker/1")
+
+        val settled = vm.photos.first { it.uploads.all { u -> u.phase == UploadPhase.Failed } }
+        assertEquals("Pending readback must keep its retry", 1, settled.uploads.size)
+        val row = settled.uploads.single()
+        assertTrue(row.canRetry)
+        assertTrue(row.message!!.contains("pending"))
+        val saved = store.saved.values.single()
+        assertEquals(row.id, saved.id)
+        assertEquals(PROJECT, saved.projectId)
+        assertEquals("van.jpg", saved.name)
+        assertArrayEquals(photoBytes, saved.jpeg)
+        assertEquals(1, putCount())
+        assertEquals(1, api.requests.count { it.method == HttpMethod.Get && it.url.encodedPath.endsWith("/photos/${row.id}") })
+
+        vm.refreshPhotos()
+        vm.photos.first { it.photos is UiState.Content }
+        assertEquals("Refreshing never resends", 1, putCount())
+        assertEquals(setOf(row.id), store.saved.keys)
+
+        api.override = { null }
+        vm.retryUpload(row.id)
+        vm.photos.first { it.uploads.isEmpty() }
+        val puts = api.requests.indices.filter { api.requests[it].method == HttpMethod.Put }
+        assertEquals(2, puts.size)
+        assertEquals(api.requests[puts[0]].url, api.requests[puts[1]].url)
+        assertEquals(api.requests[puts[0]].headers["X-Photo-Name"], api.requests[puts[1]].headers["X-Photo-Name"])
+        assertArrayEquals(api.bodies[puts[0]], api.bodies[puts[1]])
+        assertEquals(1, preparer.calls)
+        assertEquals(row.id, store.removed.await())
+        assertTrue(store.saved.isEmpty())
+        vm.retryUpload(row.id)
+        assertEquals("Completed upload has no retry", 2, putCount())
+    }
+
+    @Test
+    fun aPendingPutReplyAlsoKeepsItsBytesAndId() = runTest {
+        val store = MemoryStore()
+        api.override = { if (it.method == HttpMethod.Put) reply(200, photoReply("pending")) else null }
+        val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
+        vm.select(PROJECT)
+        vm.addPhoto("content://media/picker/1")
+
+        val row = vm.photos.first { it.uploads.any { u -> u.phase == UploadPhase.Failed } }.uploads.single()
+        assertTrue(row.canRetry)
+        assertEquals(setOf(row.id), store.saved.keys)
+        assertArrayEquals(photoBytes, store.saved[row.id]!!.jpeg)
+        assertEquals(1, putCount())
+        assertTrue(api.requests.none { it.method == HttpMethod.Get && it.url.encodedPath.contains("/photos/") })
+    }
+
+    @Test
+    fun anUnknownReadbackStatusKeepsItsOriginalRequest() = runTest {
+        val store = MemoryStore()
+        api.override = {
+            when {
+                it.method == HttpMethod.Put -> throw IOException("reply lost")
+                it.method == HttpMethod.Get && it.url.encodedPath.contains("/photos/") -> reply(200, photoReply("uncertain"))
+                else -> null
+            }
+        }
+        val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
+        vm.select(PROJECT)
+        vm.addPhoto("content://media/picker/1")
+
+        val row = vm.photos.first { it.uploads.any { u -> u.phase == UploadPhase.Failed } }.uploads.single()
+        assertTrue(row.canRetry)
+        assertTrue(row.message!!.contains("couldn't confirm"))
+        assertEquals(setOf(row.id), store.saved.keys)
+        assertArrayEquals(photoBytes, store.saved[row.id]!!.jpeg)
+        assertEquals(1, putCount())
+    }
+
+    @Test
+    fun aFailedReadbackKeepsItsBytesAndOffersAnExplicitRetry() = runTest {
+        val store = MemoryStore()
+        api.override = {
+            if (it.method == HttpMethod.Put || it.url.encodedPath.contains("/photos/")) throw IOException("offline") else null
+        }
+        val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
+        vm.select(PROJECT)
+        vm.addPhoto("content://media/picker/1")
+
+        val row = vm.photos.first { it.uploads.any { u -> u.phase == UploadPhase.Failed } }.uploads.single()
+        assertTrue(row.canRetry)
+        assertEquals(setOf(row.id), store.saved.keys)
+        assertEquals("van.jpg", store.saved[row.id]!!.name)
+        assertArrayEquals(photoBytes, store.saved[row.id]!!.jpeg)
+        assertEquals(1, putCount())
+    }
+
+    @Test
+    fun aMalformedPutReplyIsReadBackWithoutDiscardingTheOriginalRequest() = runTest {
+        val store = MemoryStore()
+        api.override = {
+            when {
+                it.method == HttpMethod.Put -> reply(200, """{"version":1}""")
+                it.method == HttpMethod.Get && it.url.encodedPath.contains("/photos/") -> reply(200, photoReply("pending"))
+                else -> null
+            }
+        }
+        val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
+        vm.select(PROJECT)
+        vm.addPhoto("content://media/picker/1")
+
+        val row = vm.photos.first { it.uploads.any { u -> u.phase == UploadPhase.Failed } }.uploads.single()
+        assertTrue(row.canRetry)
+        assertTrue(row.message!!.contains("pending"))
+        assertEquals(setOf(row.id), store.saved.keys)
+        assertArrayEquals(photoBytes, store.saved[row.id]!!.jpeg)
+        assertEquals(1, putCount())
+        assertTrue(api.requests.any { it.method == HttpMethod.Get && it.url.encodedPath.endsWith("/photos/${row.id}") })
+    }
+
+    @Test
+    fun aReadyReadbackReleasesTheRetryEvenWhenSafetyBlocked() = runTest {
+        val store = MemoryStore()
+        api.override = {
+            when {
+                it.method == HttpMethod.Put -> throw IOException("reply lost")
+                it.method == HttpMethod.Get && it.url.encodedPath.contains("/photos/") -> reply(200, photoReply("ready", "blocked"))
+                else -> null
+            }
+        }
+        val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
+        vm.select(PROJECT)
+        vm.addPhoto("content://media/picker/1")
+        vm.photos.first { it.uploads.isEmpty() && api.requests.any { r -> r.method == HttpMethod.Put } }
+
+        store.removed.await()
+        assertTrue(store.saved.isEmpty())
+        assertEquals(1, putCount())
+    }
+
+    @Test
+    fun aLostPutReplyAfterAnAccountChangeDoesNotReadBackUnderTheNewAccount() = runTest {
+        val store = MemoryStore()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        api.override = {
+            if (it.method == HttpMethod.Put) {
+                entered.complete(Unit)
+                release.await()
+                throw IOException("reply lost")
+            } else null
+        }
+        val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
+        vm.select(PROJECT)
+        val before = vm.viewModelScope.coroutineContext.job.children.toSet()
+        vm.addPhoto("content://media/picker/1")
+        try {
+            entered.await()
+            val upload = vm.viewModelScope.coroutineContext.job.children.single { it !in before }
+            val id = vm.photos.value.uploads.single().id
+            store.saved.clear()
+            store.account.value = "b"
+            vm.select(PROJECT)
+
+            release.complete(Unit)
+            upload.join()
+            assertTrue(api.requests.none { it.method == HttpMethod.Get && it.url.encodedPath.contains("/photos/") })
+            assertTrue(vm.photos.value.uploads.isEmpty())
+            assertTrue(store.saved.isEmpty())
+            vm.retryUpload(id)
+            assertEquals(1, putCount())
+        } finally {
+            release.complete(Unit)
+        }
+    }
+
+    @Test
+    fun aPendingReadbackFromAnOldAccountCannotReplaceTheNewAccountsRetry() = runTest {
+        assertLateReadbackIsIsolated("pending")
+    }
+
+    @Test
+    fun aReadyReadbackFromAnOldAccountCannotDeleteTheNewAccountsRetry() = runTest {
+        assertLateReadbackIsIsolated("ready")
+    }
+
+    private suspend fun assertLateReadbackIsIsolated(status: String) {
+        val store = MemoryStore()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        api.override = {
+            when {
+                it.method == HttpMethod.Put -> throw IOException("reply lost")
+                it.method == HttpMethod.Get && it.url.encodedPath.contains("/photos/") -> {
+                    entered.complete(Unit)
+                    release.await()
+                    reply(200, photoReply(status))
+                }
+                else -> null
+            }
+        }
+        val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
+        vm.select(PROJECT)
+        val before = vm.viewModelScope.coroutineContext.job.children.toSet()
+        vm.addPhoto("content://media/picker/1")
+        try {
+            entered.await()
+            val upload = vm.viewModelScope.coroutineContext.job.children.single { it !in before }
+            val id = vm.photos.value.uploads.single().id
+            val otherBytes = byteArrayOf(9, 8, 7)
+            store.saved.clear()
+            store.saved[id] = PendingUpload(id, PROJECT, "other.jpg", otherBytes)
+            store.account.value = "b"
+            vm.select(PROJECT)
+            val restored = vm.photos.first { it.uploads.any { u -> u.phase == UploadPhase.Failed } }.uploads.single()
+
+            release.complete(Unit)
+            upload.join()
+            assertEquals(restored, vm.photos.value.uploads.single())
+            assertEquals("other.jpg", store.saved[id]!!.name)
+            assertArrayEquals(otherBytes, store.saved[id]!!.jpeg)
+            assertFalse(store.removed.isCompleted)
+            assertEquals(1, putCount())
+        } finally {
+            release.complete(Unit)
+        }
+    }
+
+    @Test
     fun anInterruptedUploadIsRetriedByANewProcessWithTheSameIdBytesAndName() = runTest {
         val store = MemoryStore()
-        api.override = lostPut()
+        api.override = pendingReadback()
         val first = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
         first.select(PROJECT)
         first.addPhoto("content://media/picker/1")
@@ -292,6 +537,7 @@ class ProjectsViewModelTest {
         assertEquals(id, restored.id)
         assertTrue(restored.canRetry)
         assertEquals(UploadPhase.Failed, restored.phase)
+        assertEquals("Restart does not resend automatically", 1, putCount())
 
         second.retryUpload(id)
         second.photos.first { it.uploads.isEmpty() }
@@ -300,6 +546,7 @@ class ProjectsViewModelTest {
         assertEquals("van.jpg", api.requests[last].headers["X-Photo-Name"])
         assertArrayEquals(firstBody, api.bodies[last])
         assertEquals(calls, preparer.calls)
+        assertEquals(id, store.removed.await())
         assertTrue(store.saved.isEmpty())
     }
 
@@ -317,7 +564,7 @@ class ProjectsViewModelTest {
     @Test
     fun accountChangeOrSignOutDropsHeldBytesAndNeverRetriesThem() = runTest {
         val store = MemoryStore()
-        api.override = lostPut()
+        api.override = pendingReadback()
         val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
         vm.select(PROJECT)
         vm.addPhoto("content://media/picker/1")
@@ -393,7 +640,7 @@ class ProjectsViewModelTest {
     @Test
     fun theBytesHeldForOneAccountAreGoneForTheNextEvenWhenTheStoreStillListsThem() = runTest {
         val store = MemoryStore()
-        api.override = lostPut()
+        api.override = pendingReadback()
         val vm = ProjectsViewModel(api.client, preparer, store) { ApiFixtures.NOW }
         vm.select(PROJECT)
         vm.addPhoto("content://media/picker/1")

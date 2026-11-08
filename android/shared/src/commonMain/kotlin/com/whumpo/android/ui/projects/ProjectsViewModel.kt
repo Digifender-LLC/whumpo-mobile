@@ -265,14 +265,16 @@ class ProjectsViewModel(
         val photo = e0.photo ?: return
         val projectId = e0.projectId
         val gen = e0.gen
+        if (gen != generation) return
         setUpload(uploadId, Entry(projectId, photo, UploadRow(uploadId, UploadPhase.Uploading), gen))
         try {
-            api.uploadPhoto(projectId, uploadId, photo.name, photo.jpeg)
-            uploaded(uploadId, projectId, gen)
+            val result = api.uploadPhoto(projectId, uploadId, photo.name, photo.jpeg).photo
+            resolveUpload(uploadId, projectId, photo, result, gen)
         } catch (e: CancellationException) {
             throw e
         } catch (e: MobileApiException) {
-            if (e is MobileApiException.Transport && e.outcomeUnknown) {
+            if (gen != generation) return
+            if ((e is MobileApiException.Transport && e.outcomeUnknown) || e is MobileApiException.InvalidResponse) {
                 resolveLostReply(uploadId, projectId, photo, gen)
             } else {
                 val retry = e is MobileApiException.RateLimited || e is MobileApiException.Unavailable
@@ -286,9 +288,10 @@ class ProjectsViewModel(
 
     /** The reply was lost: read the upload instead of guessing. Not found means nothing committed. */
     private suspend fun resolveLostReply(uploadId: String, projectId: String, photo: PreparedPhoto, gen: Int) {
+        if (gen != generation) return
         try {
-            api.getPhotoUpload(projectId, uploadId)
-            uploaded(uploadId, projectId, gen)
+            val result = api.getPhotoUpload(projectId, uploadId).photo
+            resolveUpload(uploadId, projectId, photo, result, gen)
         } catch (e: CancellationException) {
             throw e
         } catch (_: MobileApiException.NotFound) {
@@ -298,12 +301,26 @@ class ProjectsViewModel(
         }
     }
 
+    /** Upload completion is separate from safety approval. Pending (or an unknown status) still needs the original request. */
+    private suspend fun resolveUpload(uploadId: String, projectId: String, photo: PreparedPhoto, result: Photo, gen: Int) {
+        if (result.status == "ready") {
+            uploaded(uploadId, projectId, gen)
+        } else {
+            val message = if (result.status == "pending") {
+                "The upload is still pending. Try again to finish it; it won't be added twice."
+            } else {
+                "We couldn't confirm the upload. Try again; it won't be added twice."
+            }
+            setUpload(uploadId, Entry(projectId, photo, UploadRow(uploadId, UploadPhase.Failed, message, canRetry = true), gen))
+        }
+    }
+
     private suspend fun uploaded(uploadId: String, projectId: String, gen: Int) {
         if (gen != generation) return
         entries.remove(uploadId)
         publishUploads()
         store.remove(uploadId)
-        if (_selected.value == projectId) loadPhotos(projectId)
+        if (gen == generation && _selected.value == projectId) loadPhotos(projectId)
     }
 
     private fun uploadMessage(e: MobileApiException): String = when (e) {
