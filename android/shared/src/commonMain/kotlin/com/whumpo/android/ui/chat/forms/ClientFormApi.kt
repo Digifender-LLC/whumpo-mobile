@@ -7,7 +7,7 @@ import com.whumpo.core.api.MobileApiClient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
-/** [FormApi] over the adopted `interactions/*` routes (docs/mobile-api-v1.md). */
+/** [FormApi] over the adopted `interaction.*` operations (docs/mobile-api-v1.md). */
 class ClientFormApi(private val client: MobileApiClient) : FormPagesApi {
     override fun freeze(request: InteractionMutateRequest): FrozenMutation = client.freezeMutation(request)
     override suspend fun mutate(mutation: FrozenMutation): InteractionReceipt = client.interactionMutate(mutation)
