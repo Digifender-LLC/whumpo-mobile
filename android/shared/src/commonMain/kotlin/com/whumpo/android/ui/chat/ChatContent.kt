@@ -81,6 +81,7 @@ interface ChatActions {
     fun onDiscardUnsent() {}
     fun onOpenReview(turnId: String) {}
     fun onConfirmReview() {}
+    fun onCheckReview(requestId: String) {}
     fun onDismissReview() {}
 }
 
@@ -140,7 +141,7 @@ fun ChatPane(
                 phase is Phase.Loading -> Skeleton("Loading your conversation", Modifier.padding(horizontal = 20.dp), animated = animated)
                 phase is Phase.Failed -> ErrorCard(phase.what, phase.safe, actions::onRetry, Modifier.padding(horizontal = 20.dp))
                 phase is Phase.UpdateRequired -> UpdateRequiredScreen(onUpdate = onUpdateApp, onHelp = onHelp)
-                chat.turns.isEmpty() && chat.outbound == null -> EmptyConversation(actions)
+                chat.turns.isEmpty() && chat.outbound == null && chat.reviewChecks.isEmpty() -> EmptyConversation(actions)
                 else -> Transcript(chat, screen.now, actions, animated, onOpenPreview)
             }
         }
@@ -215,7 +216,8 @@ private fun EmptyConversation(actions: ChatActions) {
 @Composable
 private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, animated: Boolean, onOpenPreview: (PreviewRef) -> Unit) {
     val listState = rememberLazyListState()
-    val extras = (if (chat.outbound != null) 1 else 0) + (if (chat.typing) 1 else 0)
+    val missingChecks = chat.reviewChecks.filter { check -> chat.turns.none { it.id == check.turnId } }
+    val extras = missingChecks.size + (if (chat.outbound != null) 1 else 0) + (if (chat.typing) 1 else 0)
     val count = chat.turns.size + extras
     LaunchedEffect(count) { if (count > 0) listState.scrollToItem(count - 1) }
     LazyColumn(
@@ -224,14 +226,17 @@ private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, anim
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        items(chat.turns, key = { it.id }) { turn -> TurnItem(turn, now, actions, onOpenPreview) }
+        items(chat.turns, key = { it.id }) { turn ->
+            TurnItem(turn, now, actions, onOpenPreview, chat.reviewChecks.lastOrNull { it.turnId == turn.id })
+        }
+        items(missingChecks, key = { "review-check-${it.requestId}" }) { check -> ReviewCheckCard(check, actions, onOpenPreview) }
         chat.outbound?.let { out -> item(key = "outbound") { OutboundItem(out, actions) } }
         if (chat.typing) item(key = "typing") { TypingIndicator(animated) }
     }
 }
 
 @Composable
-private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit) {
+private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit, reviewCheck: ReviewFlow?) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Bubble(turn.userText, mine = true)
         // Relative like Projects and Activity; TalkBack reads the absolute UTC time too.
@@ -250,7 +255,7 @@ private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenP
                 WhumpoQuietButton(actions::onRetry, Modifier.heightIn(min = 48.dp)) { Text("Check again") }
             }
         }
-        turn.review?.let { ReviewCard(turn, actions, onOpenPreview) }
+        if (turn.review != null || reviewCheck != null) ReviewCard(turn, actions, onOpenPreview, retained = reviewCheck)
         turn.interaction?.let { InteractionCard(it.state) }
     }
 }

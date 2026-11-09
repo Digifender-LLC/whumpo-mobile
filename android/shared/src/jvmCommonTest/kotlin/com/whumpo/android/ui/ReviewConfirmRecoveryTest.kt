@@ -91,6 +91,149 @@ class ReviewConfirmRecoveryTest {
     }
 
     @Test
+    fun aDismissedUncertainRequestCanReopenAfterItsTurnLeavesThePage() = runTest {
+        Fixture(backgroundScope).use { f ->
+            f.loadAndOpen()
+            f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+            f.confirm()
+            assertEquals(ReviewStep.Uncertain, f.session.state.value.review?.step)
+            f.session.dismissReview()
+            f.server.chatBody = page(revision = 90, empty = true)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            f.server.receiptReply = { reply(200, receipt("completed")) }
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.awaitIdle()
+            assertEquals(ReviewStep.Done, f.session.state.value.review?.step)
+            assertEquals(REQUEST, f.session.state.value.review?.requestId)
+            assertEquals(listOf(REQUEST, REQUEST, REQUEST), f.server.receiptIds)
+            assertEquals(1, f.server.posts.size)
+        }
+    }
+
+    @Test
+    fun anExplicitReadOnlyCheckSettlesTheRetainedRequestAfterTheReviewIsApplied() = runTest {
+        Fixture(backgroundScope).use { f ->
+            f.loadAndOpen()
+            val original = f.session.state.value.review!!
+            f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+            f.confirm()
+            assertEquals(REQUEST, f.session.state.value.reviewChecks.single().requestId)
+            assertTrue(f.session.state.value.review?.canCheckOutcome == true)
+            assertFalse(f.session.state.value.review?.canConfirm == true)
+            f.server.chatBody = page(revision = 20, applied = true)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            f.session.dismissReview()
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.awaitIdle()
+            val reopened = f.session.state.value.review!!
+            assertEquals(original.requestId, reopened.requestId)
+            assertEquals(original.revision, reopened.revision)
+            assertEquals(original.review.control, reopened.review.control)
+            assertEquals(ReviewStep.Uncertain, reopened.step)
+            f.session.confirmReview()
+            assertEquals(1, f.server.posts.size)
+
+            f.server.receiptReply = { reply(200, receipt("completed")) }
+            f.session.checkReview(REQUEST)
+            f.session.awaitIdle()
+            assertEquals(ReviewStep.Done, f.session.state.value.review?.step)
+            assertTrue(f.session.state.value.reviewChecks.isEmpty())
+            assertTrue(f.server.receiptIds.all { it == original.requestId })
+            assertEquals(1, f.server.posts.size)
+            val reads = f.server.receiptIds.size
+            f.session.checkReview(REQUEST)
+            f.session.awaitIdle()
+            assertEquals(reads, f.server.receiptIds.size)
+        }
+    }
+
+    @Test
+    fun failedExplicitChecksRetainTheSameReadOnlyActionWithoutAnotherPost() = runTest {
+        Fixture(backgroundScope).use { f ->
+            f.loadAndOpen()
+            f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+            f.confirm()
+            val replies: List<RecoveryReply> = listOf(
+                { reply(ChatFixtures.error("unavailable")) },
+                { reply(200, "{}") },
+                { reply(200, receipt("uncertain")) },
+                { reply(200, receipt("pending")) },
+            )
+            for (response in replies) {
+                f.server.receiptReply = response
+                f.session.checkReview(REQUEST)
+                f.session.awaitIdle()
+                assertTrue(f.session.state.value.review?.canCheckOutcome == true)
+                assertFalse(f.session.state.value.review?.canConfirm == true)
+                assertEquals(REQUEST, f.session.state.value.reviewChecks.single().requestId)
+                f.session.confirmReview()
+                assertEquals(1, f.server.posts.size)
+            }
+            assertEquals(List(5) { REQUEST }, f.server.receiptIds)
+        }
+    }
+
+    @Test
+    fun retainedChecksCanReopenWhenTheCurrentTurnNoLongerHasReviewMetadata() = runTest {
+        Fixture(backgroundScope).use { f ->
+            f.loadAndOpen()
+            f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+            f.confirm()
+            f.session.dismissReview()
+            f.server.chatBody = page(revision = 20, missingReview = true)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            assertNull(f.session.state.value.turns.first { it.id == ChatFixtures.SITE_TURN }.review)
+            assertEquals(REQUEST, f.session.state.value.reviewChecks.single().requestId)
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.awaitIdle()
+            assertEquals(ReviewStep.Uncertain, f.session.state.value.review?.step)
+            assertEquals(REQUEST, f.session.state.value.review?.requestId)
+            assertFalse(f.session.state.value.review?.canConfirm == true)
+            f.server.receiptReply = { reply(200, receipt("completed")) }
+            f.session.checkReview(REQUEST)
+            f.session.awaitIdle()
+            assertEquals(ReviewStep.Done, f.session.state.value.review?.step)
+            assertEquals(1, f.server.posts.size)
+        }
+    }
+
+    @Test
+    fun resetDropsRetainedChecksAndRejectsAnOldReadOnlyCallbackAndLateResponse() = runTest {
+        Fixture(backgroundScope).use { f ->
+            f.loadAndOpen()
+            f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+            f.confirm()
+            f.session.checkReview(NEXT_REQUEST)
+            f.session.awaitIdle()
+            assertEquals(listOf(REQUEST), f.server.receiptIds)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            f.server.receiptReply = {
+                entered.complete(Unit)
+                withContext(NonCancellable) { release.await(); reply(200, receipt("completed")) }
+            }
+            f.session.checkReview(REQUEST)
+            entered.await()
+            val previousWork = backgroundScope.coroutineContext[Job]!!.children.single()
+            f.session.reset()
+            release.complete(Unit)
+            previousWork.join()
+            f.session.checkReview(REQUEST)
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.awaitIdle()
+            assertEquals(Phase.Loading, f.session.state.value.phase)
+            assertTrue(f.session.state.value.reviewChecks.isEmpty())
+            assertNull(f.session.state.value.review)
+            assertEquals("", f.session.state.value.announcement)
+            assertEquals(listOf(REQUEST, REQUEST), f.server.receiptIds)
+            assertEquals(1, f.server.posts.size)
+        }
+    }
+
+    @Test
     fun completedRequestOutsideTheNewestPageIsRecoveredWithoutAnotherPost() = runTest {
         Fixture(backgroundScope).use { f ->
             f.loadAndOpen()
@@ -533,6 +676,7 @@ class ReviewConfirmRecoveryTest {
             entered.await()
             f.session.dismissReview()
             f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.checkReview(REQUEST)
             f.session.confirmReview()
             runCurrent()
             assertEquals(listOf(REQUEST, REQUEST), f.server.receiptIds)
@@ -567,6 +711,7 @@ class ReviewConfirmRecoveryTest {
             previousWork.join()
             assertEquals(Phase.Loading, f.session.state.value.phase)
             assertNull(f.session.state.value.review)
+            assertTrue(f.session.state.value.reviewChecks.isEmpty())
             assertEquals("", f.session.state.value.announcement)
             assertEquals(1, f.server.posts.size)
         }
@@ -587,11 +732,13 @@ class ReviewConfirmRecoveryTest {
             return JsonObject(ack + mapOf("requestId" to JsonPrimitive(id), "turnStatus" to JsonPrimitive(status), "accepted" to JsonPrimitive(accepted))).toString()
         }
 
-        private fun page(revision: Int, empty: Boolean = false, applied: Boolean = false): String {
+        private fun page(revision: Int, empty: Boolean = false, applied: Boolean = false, missingReview: Boolean = false): String {
             val page = Json.parseToJsonElement(ChatFixtures.body("chat.read")).jsonObject
             val items = if (empty) emptyList() else page["items"]!!.jsonArray.map { item ->
                 val turn = item.jsonObject
-                if (applied && turn["id"]!!.jsonPrimitive.content == ChatFixtures.SITE_TURN) {
+                if (missingReview && turn["id"]!!.jsonPrimitive.content == ChatFixtures.SITE_TURN) {
+                    JsonObject(turn + ("review" to JsonNull))
+                } else if (applied && turn["id"]!!.jsonPrimitive.content == ChatFixtures.SITE_TURN) {
                     val review = turn["review"]!!.jsonObject
                     JsonObject(turn + ("review" to JsonObject(review + mapOf(
                         "state" to JsonPrimitive("applied"), "canApprove" to JsonPrimitive(false), "control" to JsonNull,

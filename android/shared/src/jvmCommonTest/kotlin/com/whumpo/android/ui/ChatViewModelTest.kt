@@ -3,8 +3,11 @@ package com.whumpo.android.ui
 import com.whumpo.android.ui.chat.ChatViewModel
 import com.whumpo.android.ui.chat.Phase
 import com.whumpo.android.ui.chat.ReauthHook
+import com.whumpo.android.ui.chat.ReviewStep
 import com.whumpo.core.account.AccountScope
 import io.ktor.http.HttpMethod
+import java.io.IOException
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -15,6 +18,10 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -174,6 +181,87 @@ class ChatViewModelTest {
         assertEquals("About my project \"Cafe\".\n\nSecond.", vm.state.value.draft)
         advanceTimeBy(ChatViewModel.SAVE_DEBOUNCE_MS + 1)
         assertEquals(vm.state.value.draft, drafts.stored[ownerA])
+    }
+
+    @Test
+    fun aReviewCheckActionReadsTheOriginalRequestAndSettlesWithoutAnotherMutation() = runTest(main) {
+        val server = ReviewCheckServer()
+        server.client().use { client ->
+            val (vm, _, _) = viewModelWith(client, "")
+            settle(vm)
+            vm.onOpenReview(ChatFixtures.SITE_TURN)
+            settle(vm)
+            val requestId = vm.screen.value.chat.review!!.requestId
+            vm.onConfirmReview()
+            settle(vm)
+            assertEquals(ReviewStep.Uncertain, vm.screen.value.chat.review?.step)
+            assertEquals(requestId, vm.screen.value.chat.reviewChecks.single().requestId)
+            server.complete = true
+            vm.onCheckReview(requestId)
+            settle(vm)
+            assertEquals(ReviewStep.Done, vm.screen.value.chat.review?.step)
+            assertTrue(vm.screen.value.chat.reviewChecks.isEmpty())
+            assertEquals(listOf(requestId, requestId), server.reads)
+            assertEquals(1, server.posts.size)
+        }
+    }
+
+    @Test
+    fun accountChangeAndSignOutInvalidateRetainedReviewCheckCallbacks() = runTest(main) {
+        val server = ReviewCheckServer()
+        server.client().use { client ->
+            val (vm, _, account) = viewModelWith(client, "")
+            settle(vm)
+            vm.onOpenReview(ChatFixtures.SITE_TURN)
+            settle(vm)
+            val requestId = vm.screen.value.chat.review!!.requestId
+            vm.onConfirmReview()
+            settle(vm)
+            assertEquals(requestId, vm.screen.value.chat.reviewChecks.single().requestId)
+            account.activeAccount.value = ownerB
+            vm.onCheckReview(requestId)
+            vm.onOpenReview(ChatFixtures.SITE_TURN)
+            settle(vm)
+            vm.onCheckReview(requestId)
+            settle(vm)
+            assertTrue(vm.screen.value.chat.reviewChecks.isEmpty())
+            assertNull(vm.screen.value.chat.review)
+            assertEquals(listOf(requestId), server.reads)
+            account.signOut()
+            settle(vm)
+            vm.onCheckReview(requestId)
+            settle(vm)
+            assertFalse(vm.screen.value.signedIn)
+            assertTrue(vm.screen.value.chat.reviewChecks.isEmpty())
+            assertEquals(listOf(requestId), server.reads)
+            assertEquals(1, server.posts.size)
+        }
+    }
+
+    private class ReviewCheckServer {
+        val reads = CopyOnWriteArrayList<String>()
+        val posts = CopyOnWriteArrayList<String>()
+        var complete = false
+
+        fun client() = testClient(ChatFixtures.client("current")) { request ->
+            val path = request.url.encodedPath
+            when {
+                request.method == HttpMethod.Get && path.endsWith("/chat") -> reply(200, ChatFixtures.body("chat.read"))
+                request.method == HttpMethod.Post && path.endsWith("/reviews/confirm") -> {
+                    posts += path
+                    throw IOException("Synthetic lost confirmation reply")
+                }
+                request.method == HttpMethod.Get && path.contains("/chat/turns/") -> {
+                    val id = path.substringAfterLast('/')
+                    reads += id
+                    if (!complete) throw IOException("Synthetic receipt outage")
+                    val envelope = Json.parseToJsonElement(ChatFixtures.body("chat.turn")).jsonObject
+                    val turn = envelope["turn"]!!.jsonObject
+                    reply(200, JsonObject(envelope + ("turn" to JsonObject(turn + mapOf("id" to JsonPrimitive(id), "status" to JsonPrimitive("completed"))))).toString())
+                }
+                else -> error("Unexpected synthetic request")
+            }
+        }
     }
 
     @Test

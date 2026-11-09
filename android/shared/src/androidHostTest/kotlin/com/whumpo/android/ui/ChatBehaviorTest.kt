@@ -41,6 +41,7 @@ class ChatBehaviorTest : RobolectricUiTest() {
         var dismisses = 0
         var opened: String? = null
         var checks = 0
+        val reviewChecks = mutableListOf<String>()
         var resends = 0
 
         override fun onDraftChanged(text: String) {
@@ -65,6 +66,10 @@ class ChatBehaviorTest : RobolectricUiTest() {
 
         override fun onCheckSend() {
             checks += 1
+        }
+
+        override fun onCheckReview(requestId: String) {
+            reviewChecks += requestId
         }
 
         override fun onSendAgain() {
@@ -184,6 +189,55 @@ class ChatBehaviorTest : RobolectricUiTest() {
         }.use {
             compose.onNodeWithTag("review-confirm").assertIsNotEnabled()
             compose.onNodeWithTag("review-outcome").assert(polite())
+        }
+    }
+
+    @Test
+    fun pendingAndUncertainSheetsExposeAnAccessibleReadOnlyCheckInsteadOfConfirm() {
+        for (step in listOf(ReviewStep.Pending, ReviewStep.Uncertain)) {
+            val actions = Recorder()
+            val flow = ChatScenes.flow(step, "The outcome is still unknown.").copy(retryAllowed = false)
+            launch(Screen.Compact) {
+                ReviewSheetContent(flow, actions, {})
+            }.use {
+                compose.onNodeWithTag("review-check").assertIsEnabled().assertHeightIsAtLeast(48.dp).assert(hasText("Check again")).performClick()
+                compose.onNodeWithTag("review-confirm").assertDoesNotExist()
+                compose.onNodeWithTag("review-outcome").assert(polite())
+            }
+            assertEquals(listOf(flow.requestId), actions.reviewChecks)
+            assertEquals(0, actions.confirms)
+        }
+    }
+
+    @Test
+    fun anAppliedReviewWithARetainedRequestStillOffersItsReadOnlyReopenAction() {
+        val actions = Recorder()
+        val flow = ChatScenes.flow(ReviewStep.Uncertain).copy(retryAllowed = false)
+        val turn = ChatScenes.siteTurn
+        val applied = turn.copy(review = turn.review!!.copy(state = "applied", canApprove = false, control = null))
+        launch(Screen.Compact) {
+            ChatLayout(ChatScenes.screen(ChatScenes.ready.copy(turns = listOf(applied), reviewChecks = listOf(flow))), WidthClass.Compact, actions, animated = false)
+        }.use {
+            compose.onNodeWithTag("review-check-open").assertIsEnabled().assertHeightIsAtLeast(48.dp).assert(hasText("Check again")).performClick()
+            compose.onNodeWithTag("review-open").assertDoesNotExist()
+        }
+        assertEquals(turn.id, actions.opened)
+        assertEquals(0, actions.confirms)
+    }
+
+    @Test
+    fun aRetainedCheckRemainsReachableWithoutCurrentReviewMetadataOrAVisibleTurn() {
+        for (turns in listOf(listOf(ChatScenes.siteTurn.copy(review = null)), emptyList())) {
+            val actions = Recorder()
+            val flow = ChatScenes.flow(ReviewStep.Uncertain).copy(retryAllowed = false)
+            launch(Screen.Compact) {
+                ChatLayout(ChatScenes.screen(ChatScenes.ready.copy(turns = turns, reviewChecks = listOf(flow))), WidthClass.Compact, actions, animated = false)
+            }.use {
+                compose.onNodeWithTag("review-check-open").assertIsEnabled().assertHeightIsAtLeast(48.dp).assert(hasText("Check again")).performClick()
+                compose.onNodeWithTag("review-open").assertDoesNotExist()
+            }
+            assertEquals(flow.turnId, actions.opened)
+            assertEquals(0, actions.confirms)
         }
     }
 
