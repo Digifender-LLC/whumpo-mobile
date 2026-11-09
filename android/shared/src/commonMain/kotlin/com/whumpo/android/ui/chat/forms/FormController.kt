@@ -54,8 +54,8 @@ class FormController(
     private var seenReread: FormRead? = null
     private val kept = mutableMapOf<String, Kept>()
 
-    /** Unsent answers, reused only while the form is still open at the same digest and answer revision. */
-    private class KeptAnswers(val answers: Map<String, Answer>, val digest: String, val revision: Int)
+    /** Unsent answers and the read they were made against, reconciled with the next read on reopen. */
+    private class KeptAnswers(val answers: Map<String, Answer>, val read: FormRead.Form, val review: FormReview?)
 
     /** What a closed form keeps until [reset]: its unresolved send and its unsent answers. */
     private class Kept(val submitter: FormSubmitter?, val answers: KeptAnswers?)
@@ -93,7 +93,8 @@ class FormController(
                 _pane.value = FormPane.Shown(interactionId, FormScreenState(FormRead.UpdateRequired))
                 return@launch
             }
-            show(interactionId, read, (read as? FormRead.Form)?.let(::startingAnswers).orEmpty())
+            val (answers, review) = (read as? FormRead.Form)?.let(::starting) ?: (emptyMap<String, Answer>() to null)
+            show(interactionId, read, answers, review)
             if (read is FormRead.Form) loadFirstPages(read)
         }
     }
@@ -129,26 +130,60 @@ class FormController(
             screen == null -> keptAnswers
             send.attempt?.outcome == SendOutcome.Committed -> null
             form == null || form.state != FormState.Open || form.submission != null -> null
-            else -> KeptAnswers(screen.answers, form.definitionDigest, form.answerRevision)
+            else -> KeptAnswers(screen.answers, form, screen.review)
         }
         if (!send.unresolved) sub.reset()
         if (send.unresolved || answers != null) kept[interactionId] = Kept(sub.takeIf { send.unresolved }, answers)
     }
 
-    /** Kept unsent answers when they still fit this read; otherwise the saved draft, or the definition's defaults. */
-    private fun startingAnswers(form: FormRead.Form): Map<String, Answer> {
-        val fits = keptAnswers?.takeIf {
-            it.digest == form.definitionDigest && it.revision == form.answerRevision &&
-                form.state == FormState.Open && form.submission == null
-        }
+    /** Kept unsent answers reconciled with this read; otherwise the saved draft, or the definition's defaults. */
+    private fun starting(form: FormRead.Form): Pair<Map<String, Answer>, FormReview?> {
+        val k = keptAnswers
         keptAnswers = null
-        return fits?.answers ?: form.definition.initialAnswers(form.draft)
+        if (k == null || form.state != FormState.Open || form.submission != null) return form.definition.initialAnswers(form.draft) to null
+        if (k.read.definitionDigest == form.definitionDigest && k.read.answerRevision == form.answerRevision) return k.answers to k.review
+        return reconcile(k.read, k.answers, form)
+    }
+
+    /**
+     * A newer read never overwrites the owner's edits. Unedited answers follow [newer]. Otherwise answers whose field
+     * keeps its id and type stay (Send still validates them against the new constraints), answers for removed or
+     * retyped fields are taken out, and a differing newer draft waits in [FormReview] for the owner's choice.
+     */
+    private fun reconcile(old: FormRead.Form, local: Map<String, Answer>, newer: FormRead.Form): Pair<Map<String, Answer>, FormReview?> {
+        val fresh = newer.definition.initialAnswers(newer.draft)
+        if (local == old.definition.initialAnswers(old.draft)) return fresh to null
+        val now = newer.definition.fields.associateBy { it.id }
+        val before = old.definition.fields.associateBy { it.id }
+        val kept = local.filter { (id, _) ->
+            val o = before[id]
+            val n = now[id]
+            o != null && n != null && o.kind.shape() == n.kind.shape()
+        }
+        val dropped = old.definition.fields.filter { it.id in local && it.id !in kept }.map { it.label }
+        val server = newer.draft
+        val differs = if (server == null) {
+            emptySet()
+        } else {
+            val mine = newer.definition.sendableAnswers(kept)
+            val theirs = newer.definition.sendableAnswers(server)
+            (mine.keys + theirs.keys).filterTo(linkedSetOf()) { mine[it] != theirs[it] }
+        }
+        val review = if (differs.isEmpty() && dropped.isEmpty()) null else FormReview(server, differs, dropped)
+        return kept to review
+    }
+
+    private fun FieldKind.shape(): Any = when (this) {
+        is FieldKind.Text -> "text:$long"
+        is FieldKind.Resource -> "resource:$multiple"
+        else -> this::class
     }
 
     private fun shown(): FormPane.Shown? = _pane.value as? FormPane.Shown
 
-    private fun show(interactionId: String, read: FormRead, answers: Map<String, Answer>) {
-        _pane.value = FormPane.Shown(interactionId, decorate(FormScreenState(read, answers, send = submitter?.state?.value ?: FormSendState())))
+    private fun show(interactionId: String, read: FormRead, answers: Map<String, Answer>, review: FormReview?) {
+        val send = submitter?.state?.value ?: FormSendState()
+        _pane.value = FormPane.Shown(interactionId, decorate(FormScreenState(read, answers, send = send, review = review)))
     }
 
     private fun decorate(screen: FormScreenState) = screen.copy(
@@ -171,7 +206,13 @@ class FormController(
                         pages = emptyMap()
                         newDigest = reread
                     }
-                    screen = screen.copy(read = reread, answers = reread.draft ?: screen.answers, errors = emptyMap())
+                    val open = reread.state == FormState.Open && reread.submission == null
+                    val (answers, review) = if (form != null && open) {
+                        reconcile(form, screen.answers, reread)
+                    } else {
+                        (reread.draft ?: screen.answers) to null
+                    }
+                    screen = screen.copy(read = reread, answers = answers, errors = emptyMap(), review = review)
                 }
             }
         }
@@ -201,6 +242,18 @@ class FormController(
         _pane.value = current.copy(screen = current.screen.copy(answers = answers, errors = current.screen.errors - fieldId))
     }
 
+    override fun onUseNewerAnswers() {
+        val (current, form) = editable() ?: return
+        val server = current.screen.review?.server ?: return
+        val answers = form.definition.initialAnswers(server)
+        _pane.value = current.copy(screen = current.screen.copy(answers = answers, review = null, errors = emptyMap()))
+    }
+
+    override fun onKeepMyAnswers() {
+        val (current, _) = editable() ?: return
+        _pane.value = current.copy(screen = current.screen.copy(review = null))
+    }
+
     override fun onSubmit() = mutate("submit", draft = false)
 
     override fun onSaveDraft() = mutate("save-draft", draft = true)
@@ -208,6 +261,7 @@ class FormController(
     private fun mutate(operation: String, draft: Boolean) {
         val (current, form) = editable() ?: return
         val screen = current.screen
+        if (screen.review != null) return
         val errors = form.definition.validate(screen.answers, draft)
         if (errors.isNotEmpty()) {
             _pane.value = current.copy(screen = screen.copy(errors = errors, focusFirstError = screen.focusFirstError + 1))

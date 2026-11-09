@@ -79,6 +79,8 @@ class FormDeviceTest {
         override fun onSendAgain() { calls += "send-again" }
         override fun onReload() { calls += "reload" }
         override fun onLoadMoreResources(fieldId: String) { calls += "more:$fieldId" }
+        override fun onUseNewerAnswers() { calls += "use-newer" }
+        override fun onKeepMyAnswers() { calls += "keep-mine" }
         override fun onClose() { calls += "close" }
         override fun onUpdate() { calls += "update" }
     }

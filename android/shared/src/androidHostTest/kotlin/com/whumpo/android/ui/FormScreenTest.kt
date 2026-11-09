@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import com.whumpo.android.ui.chat.forms.Answer
 import com.whumpo.android.ui.chat.forms.FormActions
 import com.whumpo.android.ui.chat.forms.FormRead
+import com.whumpo.android.ui.chat.forms.FormReview
 import com.whumpo.android.ui.chat.forms.FormScreen
 import com.whumpo.android.ui.chat.forms.FormScreenState
 import com.whumpo.android.ui.chat.forms.FormSendState
@@ -62,6 +63,8 @@ class FormScreenTest : RobolectricUiTest() {
         override fun onSendAgain() { calls += "send-again" }
         override fun onReload() { calls += "reload" }
         override fun onLoadMoreResources(fieldId: String) { calls += "more:$fieldId" }
+        override fun onUseNewerAnswers() { calls += "use-newer" }
+        override fun onKeepMyAnswers() { calls += "keep-mine" }
         override fun onClose() { calls += "close" }
         override fun onUpdate() { calls += "update" }
     }
@@ -181,6 +184,22 @@ class FormScreenTest : RobolectricUiTest() {
         }
     }
 
+    @Test
+    fun aNewerDraftReviewOffersBothChoicesAndHoldsSending() {
+        val actions = Recorder()
+        val review = FormReview(mapOf("short-text" to Answer.Text("Synthetic server")), setOf("short-text"), listOf("Number example"))
+        launch(Screen.Compact) { FormScreen(openState().copy(review = review), JavaZoneTime, actions) }.use {
+            compose.onNodeWithTag("form-review").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Newer answers were saved for: Text example. Yours are shown.").assertExists()
+            compose.onNodeWithText("No longer in this form, so they won't be sent: Number example.").assertExists()
+            compose.onNodeWithTag("form-send").assertIsNotEnabled()
+            compose.onNodeWithTag("form-save").assertIsNotEnabled()
+            compose.onNodeWithTag("form-review-newer").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+            compose.onNodeWithTag("form-review-mine").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+        }
+        assertEquals(listOf("use-newer", "keep-mine"), actions.calls)
+    }
+
     /** Owns the answers like the real caller: every edit is fed back into the screen state. */
     private class Owner(initial: FormScreenState) : FormActions {
         var state by mutableStateOf(initial)
@@ -193,6 +212,8 @@ class FormScreenTest : RobolectricUiTest() {
         override fun onSendAgain() {}
         override fun onReload() {}
         override fun onLoadMoreResources(fieldId: String) {}
+        override fun onUseNewerAnswers() {}
+        override fun onKeepMyAnswers() {}
         override fun onClose() {}
         override fun onUpdate() {}
     }

@@ -62,6 +62,10 @@ interface FormActions {
     fun onSendAgain()
     fun onReload()
     fun onLoadMoreResources(fieldId: String)
+    /** Review choice: replace the owner's answers with the newer saved ones. Sends nothing. */
+    fun onUseNewerAnswers()
+    /** Review choice: keep the owner's answers. Sends nothing. */
+    fun onKeepMyAnswers()
     fun onClose()
     fun onUpdate()
 }
@@ -78,6 +82,19 @@ data class FormScreenState(
     /** Resource fields with another page to load. */
     val moreResources: Set<String> = emptySet(),
     val send: FormSendState = FormSendState(),
+    /** Newer saved answers held back for the owner's choice; Send and Save draft wait for it. */
+    val review: FormReview? = null,
+)
+
+/**
+ * What a reread changed under the owner's edits. [server] is the newer saved draft, if any; [differs] lists fields
+ * where it differs from the owner's answers; [dropped] labels answers whose field was removed or changed type, which
+ * were taken out so they are never sent.
+ */
+data class FormReview(
+    val server: Map<String, Answer>?,
+    val differs: Set<String>,
+    val dropped: List<String>,
 )
 
 /**
@@ -172,6 +189,7 @@ private fun EditableFields(read: FormRead.Form, state: FormScreenState, zones: Z
     LaunchedEffect(state.focusFirstError) {
         if (state.focusFirstError > 0) state.errors.keys.firstOrNull()?.let { requesters[it]?.requestFocus() }
     }
+    state.review?.let { ReviewCard(definition, it, enabled, actions) }
     if (state.errors.isNotEmpty()) {
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
@@ -199,6 +217,38 @@ private fun EditableFields(read: FormRead.Form, state: FormScreenState, zones: Z
             focus = requesters.getValue(field.id),
             actions = actions,
         )
+    }
+}
+
+@Composable
+private fun ReviewCard(definition: FormDefinition, review: FormReview, enabled: Boolean, actions: FormActions) {
+    val changed = definition.fields.filter { it.id in review.differs }.map { it.label }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        modifier = Modifier.fillMaxWidth().testTag("form-review"),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val color = MaterialTheme.colorScheme.onSecondaryContainer
+            Text(
+                "Review before sending",
+                style = MaterialTheme.typography.titleMedium,
+                color = color,
+                modifier = Modifier.semantics { heading() },
+            )
+            if (changed.isNotEmpty()) {
+                Text("Newer answers were saved for: ${changed.joinToString()}. Yours are shown.", style = MaterialTheme.typography.bodyLarge, color = color)
+            }
+            if (review.dropped.isNotEmpty()) {
+                Text("No longer in this form, so they won't be sent: ${review.dropped.joinToString()}.", style = MaterialTheme.typography.bodyLarge, color = color)
+            }
+            val buttons = Modifier.fillMaxWidth().heightIn(min = MinTarget)
+            if (review.server != null && changed.isNotEmpty()) {
+                WhumpoSecondaryButton(actions::onUseNewerAnswers, buttons.testTag("form-review-newer"), enabled = enabled) { Text("Use newer answers") }
+            }
+            WhumpoSecondaryButton(actions::onKeepMyAnswers, buttons.testTag("form-review-mine"), enabled = enabled) {
+                Text(if (changed.isNotEmpty()) "Keep my answers" else "OK")
+            }
+        }
     }
 }
 
@@ -517,10 +567,11 @@ private fun ActionBar(read: FormRead.Form, state: FormScreenState, actions: Form
                     WhumpoQuietButton(actions::onReload, buttons.testTag("form-reload"), enabled = !send.reading) { Text("Try loading again") }
                 }
                 open -> {
-                    WhumpoPrimaryButton(actions::onSubmit, buttons.testTag("form-send"), enabled = send.canStart) {
+                    val ready = send.canStart && state.review == null
+                    WhumpoPrimaryButton(actions::onSubmit, buttons.testTag("form-send"), enabled = ready) {
                         Text(if (attempt?.outcome == SendOutcome.Sending) "Sending…" else "Send")
                     }
-                    WhumpoSecondaryButton(actions::onSaveDraft, buttons.testTag("form-save"), enabled = send.canStart) { Text("Save draft") }
+                    WhumpoSecondaryButton(actions::onSaveDraft, buttons.testTag("form-save"), enabled = ready) { Text("Save draft") }
                     val savedDraft = attempt != null && attempt.outcome == SendOutcome.Committed && attempt.request.operation == "save-draft"
                     val stale = attempt?.outcome == SendOutcome.Rejected
                     if (savedDraft || stale) {

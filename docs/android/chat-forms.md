@@ -85,7 +85,11 @@ Uses the existing `interactions/mutate`, `receipt`, `continue`, `stop` and
   and answers; otherwise `Check again` stays available.
 - **Stale definition or answer revision:** re-read the interaction, keep typed
   values for fields whose id and type are unchanged, mark the rest as changed
-  and ask the owner to review before sending.
+  and ask the owner to review before sending. Implemented: a newer saved draft
+  is held in a review card ("Use newer answers" or "Keep my answers"), answers
+  for removed or retyped fields are taken out and listed, and Send and Save
+  draft wait for the choice. Choosing sends nothing; unedited answers simply
+  follow the newer read.
 - **Continuation `unknown`:** resolved with `reconcile`, never by a new
   `continue`.
 - **Save draft** uses `save-draft` with the same guarantees. **Cancel form** is
@@ -130,7 +134,9 @@ Whumpo to answer this form." with the update action. No field is rendered.
   once and ignores the old page; a read for another interaction is never
   shown; closing while sending or unknown keeps the frozen request, receipt
   gate and unsent answers for reopen, also across another form, and an
-  account change drops them.
+  account change drops them; a newer saved draft is staged for review rather
+  than overwriting edits, both choices send nothing, and removed or retyped
+  fields are taken out while changed constraints still validate.
 - API (`MobileApiClientTest`): 422 field problems only on interaction routes;
   retries send the frozen request bytes unchanged.
 - Device (`androidTest/.../FormDeviceTest.kt`, API 28 and 36 emulators in CI):

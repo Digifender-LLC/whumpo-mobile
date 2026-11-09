@@ -159,6 +159,10 @@ internal fun isUtcInstant(s: String): Boolean {
 }
 
 /** The `answers` object for a mutation: shown, non-empty answers only. Call after [validate] reports nothing. */
+/** The answers [encodeAnswers] would send: visible and not empty. */
+fun FormDefinition.sendableAnswers(answers: Map<String, Answer>): Map<String, Answer> =
+    visibleFields(answers).mapNotNull { f -> answers[f.id]?.takeUnless { it.isEmpty() }?.let { f.id to it } }.toMap()
+
 fun FormDefinition.encodeAnswers(answers: Map<String, Answer>): JsonObject = JsonObject(
     visibleFields(answers).mapNotNull { f ->
         val a = answers[f.id]?.takeUnless { it.isEmpty() } ?: return@mapNotNull null

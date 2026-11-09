@@ -26,6 +26,9 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -390,6 +393,92 @@ class FormControllerTest {
         assertNull(c.screen().send.attempt)
         assertEquals(draft.definition.initialAnswers(draft.draft), c.screen().answers)
         assertEquals(1, api.sent.size)
+    }
+
+    private fun newerDraftRead() = read("draft").edit("draft.short-text", JsonPrimitive("Synthetic server")).edit("answerRevision", JsonPrimitive(2))
+
+    @Test
+    fun aNewerSavedDraftIsStagedForReviewNotAppliedOverEdits() = test { api ->
+        val newer = wire.decode(newerDraftRead()) as FormRead.Form
+        for (choice in listOf("newer", "mine")) {
+            api.onRead = { read("draft") }
+            val c = controller(api)
+            c.open(DRAFT_ID)
+            c.onAnswer("short-text", Answer.Text("Synthetic local"))
+            val local = c.screen().answers
+            api.onRead = { newerDraftRead() }
+            c.onReload()
+            assertEquals(local, c.screen().answers, "edits are not replaced")
+            assertEquals(newer, c.screen().read)
+            assertEquals(FormReview(newer.draft, setOf("short-text"), emptyList()), c.screen().review)
+            c.onSubmit()
+            c.onSaveDraft()
+            assertTrue(api.sent.isEmpty(), "nothing is sent while the review waits")
+            if (choice == "newer") {
+                c.onUseNewerAnswers()
+                assertEquals(newer.draft, c.screen().answers)
+                assertNull(c.screen().review)
+                assertTrue(api.sent.isEmpty())
+            } else {
+                c.onKeepMyAnswers()
+                assertEquals(local, c.screen().answers)
+                assertNull(c.screen().review)
+                assertTrue(api.sent.isEmpty())
+                c.onSaveDraft()
+                assertEquals(2, api.sent.single().request.expectedAnswerRevision)
+                assertTrue("Synthetic local" in api.sent.single().bytes().decodeToString())
+            }
+            c.reset()
+            api.sent.clear()
+        }
+    }
+
+    @Test
+    fun unchangedAnswersFollowANewerSavedDraft() = test { api ->
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        api.onRead = { newerDraftRead() }
+        c.onReload()
+        assertEquals((wire.decode(newerDraftRead()) as FormRead.Form).draft, c.screen().answers)
+        assertNull(c.screen().review)
+    }
+
+    @Test
+    fun removedAndRetypedFieldsAreTakenOutAndChangedConstraintsStillValidate() = test { api ->
+        val base = read("draft")
+        val fields = base.getValue("envelope").jsonObject.getValue("definition").jsonObject.getValue("fields").jsonArray
+        val changed = JsonArray(
+            fields.mapNotNull { f ->
+                val o = f.jsonObject
+                when (o.getValue("id").jsonPrimitive.content) {
+                    "long-text" -> null
+                    "quantity" -> JsonObject(o + ("type" to JsonPrimitive("text")) + ("constraints" to buildJsonObject { put("maxLength", 80) }))
+                    "short-text" -> JsonObject(o - "default" + ("constraints" to buildJsonObject { put("maxLength", 5) }))
+                    else -> o
+                }
+            },
+        )
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("long-text", Answer.Text("Synthetic long"))
+        c.onAnswer("quantity", Answer.Number("5"))
+        c.onAnswer("short-text", Answer.Text("Synthetic local"))
+        api.onRead = {
+            base.edit("envelope.definition.fields", changed).edit("envelope.definitionDigest", JsonPrimitive("c".repeat(64)))
+                .edit("draft", JsonNull).edit("answerRevision", JsonPrimitive(2))
+        }
+        c.onReload()
+        assertEquals(setOf("short-text", "include-details", "details"), c.screen().answers.keys)
+        assertEquals(FormReview(null, emptySet(), listOf("Long text example", "Number example")), c.screen().review)
+        c.onSubmit()
+        assertTrue(api.sent.isEmpty())
+        c.onUseNewerAnswers()
+        assertEquals(Answer.Text("Synthetic local"), c.screen().answers["short-text"], "no newer draft to use")
+        c.onKeepMyAnswers()
+        assertNull(c.screen().review)
+        c.onSaveDraft()
+        assertTrue("short-text" in c.screen().errors, "the new 5-character limit still applies")
+        assertTrue(api.sent.isEmpty())
     }
 
     @Test
