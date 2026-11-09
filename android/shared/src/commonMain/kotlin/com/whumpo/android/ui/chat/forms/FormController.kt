@@ -29,9 +29,11 @@ sealed interface FormPane {
 }
 
 /**
- * One open form for the signed-in account (docs/android/chat-forms.md). Answers, loaded project names and submitted
- * answers live only in memory and are dropped by [close] and [reset]. Every reply is checked against the visit
- * that asked for it, so a late reply for another account, form, digest or field is ignored.
+ * One open form for the signed-in account (docs/android/chat-forms.md). Everything lives only in memory. [close]
+ * only dismisses the form: an unresolved send and the owner's unsent answers are kept for that interaction and
+ * come back on reopen, while loaded project names and submitted answers are dropped. [reset] (sign-out or account
+ * change) drops everything. Every reply is checked against the visit that asked for it, so a late reply for another
+ * account, form, digest or field is ignored.
  */
 class FormController(
     private val api: FormPagesApi,
@@ -47,13 +49,28 @@ class FormController(
     private var watch: Job? = null
     private var pages = mapOf<String, ResourceField>()
     private var appliedProblem: String? = null
+    private var visitId: String? = null
+    private var keptAnswers: KeptAnswers? = null
+    private var seenReread: FormRead? = null
+    private val kept = mutableMapOf<String, Kept>()
+
+    /** Unsent answers, reused only while the form is still open at the same digest and answer revision. */
+    private class KeptAnswers(val answers: Map<String, Answer>, val digest: String, val revision: Int)
+
+    /** What a closed form keeps until [reset]: its unresolved send and its unsent answers. */
+    private class Kept(val submitter: FormSubmitter?, val answers: KeptAnswers?)
 
     /** Opens [interactionId] for a new visit and reads it once. */
     fun open(interactionId: String) {
         close()
         val g = generation
-        val sub = FormSubmitter(api, wire, scope, newId)
+        val retained = kept.remove(interactionId)
+        val sub = retained?.submitter ?: FormSubmitter(api, wire, scope, newId)
         submitter = sub
+        visitId = interactionId
+        keptAnswers = retained?.answers
+        // A reread from before the form was closed is not applied again.
+        seenReread = sub.state.value.reread
         _pane.value = FormPane.Loading(interactionId)
         watch = scope.launch { sub.state.collect { if (g == generation) onSend(it) } }
         scope.launch {
@@ -76,25 +93,57 @@ class FormController(
                 _pane.value = FormPane.Shown(interactionId, FormScreenState(FormRead.UpdateRequired))
                 return@launch
             }
-            show(interactionId, read, (read as? FormRead.Form)?.draft.orEmpty())
+            show(interactionId, read, (read as? FormRead.Form)?.let(::startingAnswers).orEmpty())
             if (read is FormRead.Form) loadFirstPages(read)
         }
     }
 
-    /** Closes the form and forgets its answers, names and send state. */
+    /** Dismisses the form, keeping an unresolved send and unsent answers for a reopen. */
     fun close() {
         generation += 1
         watch?.cancel()
         watch = null
-        submitter?.reset()
+        val id = visitId
+        val sub = submitter
+        if (id != null && sub != null) keep(id, sub)
+        visitId = null
+        keptAnswers = null
         submitter = null
         pages = emptyMap()
         appliedProblem = null
         _pane.value = null
     }
 
-    /** Sign-out or account change. */
-    fun reset() = close()
+    /** Sign-out or account change: drops every kept send and answer and ignores replies still in flight. */
+    fun reset() {
+        close()
+        kept.values.forEach { it.submitter?.reset() }
+        kept.clear()
+    }
+
+    private fun keep(interactionId: String, sub: FormSubmitter) {
+        val send = sub.state.value
+        val screen = shown()?.screen
+        val form = screen?.read as? FormRead.Form
+        val answers = when {
+            screen == null -> keptAnswers
+            send.attempt?.outcome == SendOutcome.Committed -> null
+            form == null || form.state != FormState.Open || form.submission != null -> null
+            else -> KeptAnswers(screen.answers, form.definitionDigest, form.answerRevision)
+        }
+        if (!send.unresolved) sub.reset()
+        if (send.unresolved || answers != null) kept[interactionId] = Kept(sub.takeIf { send.unresolved }, answers)
+    }
+
+    /** Kept unsent answers when they still fit this read; otherwise the saved draft, or the definition's defaults. */
+    private fun startingAnswers(form: FormRead.Form): Map<String, Answer> {
+        val fits = keptAnswers?.takeIf {
+            it.digest == form.definitionDigest && it.revision == form.answerRevision &&
+                form.state == FormState.Open && form.submission == null
+        }
+        keptAnswers = null
+        return fits?.answers ?: form.definition.initialAnswers(form.draft)
+    }
 
     private fun shown(): FormPane.Shown? = _pane.value as? FormPane.Shown
 
@@ -112,11 +161,16 @@ class FormController(
         var screen = current.screen.copy(send = send)
         val reread = send.reread
         val form = screen.read as? FormRead.Form
-        if (reread != null && !send.unresolved && reread != screen.read) {
+        var newDigest: FormRead.Form? = null
+        if (reread != null && reread !== seenReread && !send.unresolved && reread != screen.read) {
+            seenReread = reread
             when {
                 reread is FormRead.UpdateRequired -> screen = FormScreenState(FormRead.UpdateRequired, send = send)
                 reread is FormRead.Form && reread.interactionId == current.interactionId -> {
-                    if (form != null && reread.definitionDigest != form.definitionDigest) pages = emptyMap()
+                    if (form != null && reread.definitionDigest != form.definitionDigest) {
+                        pages = emptyMap()
+                        newDigest = reread
+                    }
                     screen = screen.copy(read = reread, answers = reread.draft ?: screen.answers, errors = emptyMap())
                 }
             }
@@ -131,6 +185,7 @@ class FormController(
             }
         }
         _pane.value = current.copy(screen = decorate(screen))
+        newDigest?.let(::loadFirstPages)
     }
 
     private fun editable(): Pair<FormPane.Shown, FormRead.Form>? {

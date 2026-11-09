@@ -124,7 +124,13 @@ Whumpo to answer this form." with the update action. No field is rendered.
   reads after close or account change are ignored, and a queued read never
   starts; a failed read offers only Try loading again; an unknown form fails
   closed with nothing sent; a 422 `fieldId` shows at a known field and at form
-  level otherwise; an unresolved send blocks edits and new writes.
+  level otherwise; an unresolved send blocks edits and new writes; no saved
+  draft prefills the definition's defaults, an empty saved draft stays empty
+  and a saved draft wins; a reread with a new digest loads fresh first pages
+  once and ignores the old page; a read for another interaction is never
+  shown; closing while sending or unknown keeps the frozen request, receipt
+  gate and unsent answers for reopen, also across another form, and an
+  account change drops them.
 - API (`MobileApiClientTest`): 422 field problems only on interaction routes;
   retries send the frozen request bytes unchanged.
 - Device (`androidTest/.../FormDeviceTest.kt`, API 28 and 36 emulators in CI):
@@ -141,6 +147,9 @@ Whumpo to answer this form." with the update action. No field is rendered.
   (`MobileApiClient`) and resets it with the chat on sign-out or account change.
 - The chat card's Open form button reads the form; it opens in the detail pane
   on wide screens and full height on compact ones, where Back closes it.
+- Close and Back only dismiss the form. An unresolved send and unsent answers
+  stay in memory for that interaction until a conclusive outcome or an account
+  change; reopening reads the form again and never sends.
 - `FormSubmitter` sends frozen request bytes (`MobileApiClient.freezeMutation`);
   an unmapped interaction 409 stays receipt-gated and triggers one reread to
   explain replacement, a closed form or newer answers.

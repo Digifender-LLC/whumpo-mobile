@@ -242,7 +242,7 @@ class FormSubmitter(
         val g = generation
         scope.launch {
             if (g != generation) return@launch
-            val read = try {
+            val decoded = try {
                 wire.decode(api.read(interactionId))
             } catch (e: CancellationException) {
                 throw e
@@ -250,6 +250,8 @@ class FormSubmitter(
                 null
             }
             if (g != generation) return@launch
+            // A read for another interaction is a failed read: never stored, shown or used to settle anything.
+            val read = decoded.takeUnless { it is FormRead.Form && it.interactionId != interactionId }
             val ok = read != null && (!nextStep || read is FormRead.UpdateRequired || (read as? FormRead.Form)?.submission != null)
             val text = when {
                 conflict != null -> conflictText(read, conflict)

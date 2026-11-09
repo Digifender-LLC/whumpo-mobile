@@ -10,6 +10,7 @@ import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -33,7 +34,11 @@ class FormControllerTest {
         val sent = mutableListOf<FrozenMutation>()
         val reads = mutableListOf<String>()
         val pages = mutableListOf<Pair<String, JsonElement?>>()
+        val receipts = mutableListOf<String>()
+        val digests = mutableListOf<String>()
         var readGate: CompletableDeferred<Unit>? = null
+        var mutateGate: CompletableDeferred<Unit>? = null
+        var onPageAt: ((String, String, JsonElement?) -> JsonObject)? = null
         var pageGate: CompletableDeferred<Unit>? = null
         var onRead: (String) -> JsonObject = { ProposedFormsFixture.read("draft") }
         var onPage: (String, JsonElement?) -> JsonObject = { field, _ -> page(field, listOf(PROJECT_ONE), JsonNull) }
@@ -46,10 +51,14 @@ class FormControllerTest {
 
         override suspend fun mutate(mutation: FrozenMutation): InteractionReceipt {
             sent += mutation
+            mutateGate?.await()
             return onMutate(mutation.request)
         }
 
-        override suspend fun receipt(requestId: String): InteractionReceipt = throw MobileApiException.NotFound("Not found.")
+        override suspend fun receipt(requestId: String): InteractionReceipt {
+            receipts += requestId
+            throw MobileApiException.NotFound("Not found.")
+        }
 
         override suspend fun read(interactionId: String): JsonObject {
             reads += interactionId
@@ -59,8 +68,9 @@ class FormControllerTest {
 
         override suspend fun resources(interactionId: String, definitionDigest: String, fieldId: String, before: JsonElement?): JsonObject {
             pages += fieldId to before
+            digests += definitionDigest
             pageGate?.await()
-            return onPage(fieldId, before)
+            return onPageAt?.invoke(definitionDigest, fieldId, before) ?: onPage(fieldId, before)
         }
     }
 
@@ -237,6 +247,149 @@ class FormControllerTest {
         assertEquals(before, c.screen().answers)
         c.onSendAgain()
         assertEquals(1, api.sent.size, "send again waits for a conclusive receipt check")
+    }
+
+    @Test
+    fun noSavedDraftPrefillsDefaultsAnEmptyDraftStaysEmptyAndASavedDraftWins() = test { api ->
+        val openId = ProposedFormsFixture.form("open").interactionId
+        val suggestion = buildJsonObject { put("value", "Synthetic suggestion"); put("provenance", "suggested") }
+        val saved = buildJsonObject { put("short-text", "Synthetic saved") }
+        for ((draftValue, expected) in listOf<Pair<JsonElement, Map<String, Answer>>>(
+            JsonNull to mapOf("short-text" to Answer.Text("Synthetic suggestion")),
+            JsonObject(emptyMap()) to emptyMap(),
+            saved to mapOf("short-text" to Answer.Text("Synthetic saved")),
+        )) {
+            api.onRead = { read("open").edit("envelope.definition.fields.0.default", suggestion).edit("draft", draftValue) }
+            val c = controller(api)
+            c.open(openId)
+            assertEquals(expected, c.screen().answers, "draft $draftValue")
+            assertTrue((c.screen().read as FormRead.Form).definition.fields.first().suggested)
+            c.reset()
+        }
+        assertTrue(api.sent.isEmpty())
+    }
+
+    @Test
+    fun aRereadWithANewDigestLoadsFreshFirstPagesOnceAndIgnoresTheOldPage() = test { api ->
+        val newDigest = "c".repeat(64)
+        val cursor = JsonPrimitive("synthetic-opaque")
+        api.onPageAt = { digest, field, before ->
+            if (digest == draft.definitionDigest) page(field, listOf(PROJECT_ONE), JsonNull)
+            else page(field, listOf(PROJECT_TWO), if (before == null) cursor else JsonNull, digest = newDigest)
+        }
+        val oldPage = CompletableDeferred<Unit>()
+        api.pageGate = oldPage
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        api.pageGate = null
+        api.onRead = { read("draft").edit("envelope.definitionDigest", JsonPrimitive(newDigest)) }
+        c.onReload()
+        assertEquals(newDigest, (c.screen().read as FormRead.Form).definitionDigest)
+        assertEquals(listOf(draft.definitionDigest, draft.definitionDigest, newDigest, newDigest), api.digests)
+        assertEquals("Synthetic $PROJECT_TWO", resourceName(PROJECT_TWO, c.screen().resourceNames))
+        c.onReload()
+        assertEquals(4, api.pages.size, "the same reread does not load the first pages again")
+        c.onLoadMoreResources("project")
+        assertEquals("project" to cursor, api.pages.last())
+        assertEquals(newDigest, api.digests.last())
+        oldPage.complete(Unit)
+        assertEquals(NAME_NOT_LOADED, resourceName(PROJECT_ONE, c.screen().resourceNames))
+        api.onRead = { JsonObject(read("draft") + ("state" to JsonPrimitive("archived"))) }
+        c.onReload()
+        assertEquals(FormRead.UpdateRequired, c.screen().read)
+        c.onSubmit()
+        assertEquals(5, api.pages.size)
+        assertTrue(api.sent.isEmpty())
+    }
+
+    @Test
+    fun aRereadForAnotherInteractionIsNotShown() = test { api ->
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        api.onRead = { read("submitted").edit("envelope.id", JsonPrimitive("66666666-6666-4666-8666-0000000000f1")) }
+        c.onReload()
+        assertEquals(draft, c.screen().read)
+        assertNull(c.screen().send.reread)
+        assertTrue(api.sent.isEmpty())
+    }
+
+    @Test
+    fun closingWhileSendingKeepsTheRequestAndAnswersForReopen() = test { api ->
+        val gate = CompletableDeferred<Unit>()
+        api.mutateGate = gate
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("short-text", Answer.Text("Synthetic unsent"))
+        c.onSaveDraft()
+        val attempt = c.screen().send.attempt!!
+        assertEquals(SendOutcome.Sending, attempt.outcome)
+        val answers = c.screen().answers
+        c.onClose()
+        assertNull(c.pane.value)
+        c.open(DRAFT_ID)
+        assertEquals(2, api.reads.size, "reopening only reads")
+        assertSame(attempt.mutation, c.screen().send.attempt?.mutation)
+        assertEquals(SendOutcome.Sending, c.screen().send.attempt?.outcome)
+        assertEquals(answers, c.screen().answers)
+        c.onSubmit()
+        c.onSaveDraft()
+        assertEquals(1, api.sent.size)
+        gate.complete(Unit)
+        assertEquals(SendOutcome.Committed, c.screen().send.attempt?.outcome)
+        assertEquals(1, api.sent.size)
+        c.onClose()
+        c.open(DRAFT_ID)
+        assertNull(c.screen().send.attempt, "a conclusive outcome is not kept")
+    }
+
+    @Test
+    fun closingWhileUnknownKeepsTheReceiptGateAcrossAnotherForm() = test { api ->
+        val openId = ProposedFormsFixture.form("open").interactionId
+        api.onRead = { id -> if (id == DRAFT_ID) read("draft") else read("open") }
+        api.onMutate = { throw lost }
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("short-text", Answer.Text("Synthetic unsent"))
+        c.onSaveDraft()
+        val first = api.sent.single()
+        val answers = c.screen().answers
+        assertEquals(SendOutcome.Unknown, c.screen().send.attempt?.outcome)
+        c.onClose()
+        c.open(openId)
+        assertNull(c.screen().send.attempt)
+        c.open(DRAFT_ID)
+        assertSame(first, c.screen().send.attempt?.mutation)
+        assertEquals(SendOutcome.Unknown, c.screen().send.attempt?.outcome)
+        assertEquals(answers, c.screen().answers)
+        c.onSubmit()
+        c.onSendAgain()
+        assertEquals(1, api.sent.size, "nothing new or resent while unknown")
+        c.onCheckAgain()
+        assertEquals(listOf(first.request.requestId), api.receipts)
+        assertEquals(SendOutcome.NotReceived, c.screen().send.attempt?.outcome)
+        api.onMutate = { InteractionReceipt(1, it.requestId, it.interactionId, it.operation, it.expectedAnswerRevision + 1) }
+        c.onSendAgain()
+        assertEquals(2, api.sent.size)
+        assertEquals(first.request.requestId, api.sent[1].request.requestId)
+        assertTrue(first.bytes().contentEquals(api.sent[1].bytes()))
+        assertEquals(SendOutcome.Committed, c.screen().send.attempt?.outcome)
+    }
+
+    @Test
+    fun accountChangeDropsKeptSendsAnswersAndLateReplies() = test { api ->
+        val gate = CompletableDeferred<Unit>()
+        api.mutateGate = gate
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("short-text", Answer.Text("Synthetic unsent"))
+        c.onSaveDraft()
+        c.onClose()
+        c.reset()
+        gate.complete(Unit)
+        c.open(DRAFT_ID)
+        assertNull(c.screen().send.attempt)
+        assertEquals(draft.definition.initialAnswers(draft.draft), c.screen().answers)
+        assertEquals(1, api.sent.size)
     }
 
     @Test

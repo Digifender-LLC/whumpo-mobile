@@ -26,6 +26,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+/** The submitted read for the same interaction as the open form these tests send. */
+private fun submittedRead(): JsonObject = read("submitted").edit("envelope.id", JsonPrimitive(form("open").interactionId))
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class FormSubmitterTest {
     private class FakeApi : FormApi {
@@ -37,7 +40,7 @@ class FormSubmitterTest {
         var receiptGate: CompletableDeferred<Unit>? = null
         var onMutate: (InteractionMutateRequest) -> InteractionReceipt = { receiptFor(it) }
         var onReceipt: (String) -> InteractionReceipt = { throw MobileApiException.NotFound("Not found.") }
-        var onRead: () -> JsonObject = { ProposedFormsFixture.read("submitted") }
+        var onRead: () -> JsonObject = { submittedRead() }
 
         override fun freeze(request: InteractionMutateRequest) =
             FrozenMutation(request, Json.encodeToString(InteractionMutateRequest.serializer(), request).encodeToByteArray())
@@ -213,11 +216,32 @@ class FormSubmitterTest {
         val second = s.state.value.feedback
         assertEquals("Couldn't load the next step", second?.text)
         assertNotEquals(first?.id, second?.id)
-        api.onRead = { ProposedFormsFixture.read("submitted") }
+        api.onRead = { submittedRead() }
         s.reload(open.interactionId)
         assertEquals("Next step loaded", s.state.value.feedback?.text)
         assertFalse(s.state.value.followUpFailed)
         assertEquals(listOf(4, 1), listOf(api.reads, api.mutations.size))
+    }
+
+    @Test
+    fun aReadForAnotherInteractionIsNeverStoredOrShown() = test { api ->
+        val s = submitter(api)
+        api.onRead = { read("submitted").edit("envelope.id", JsonPrimitive("66666666-6666-4666-8666-0000000000f1")) }
+        s.start(open, "submit", answers)
+        assertEquals(SendOutcome.Committed, s.state.value.attempt?.outcome)
+        assertNull(s.state.value.reread)
+        assertTrue(s.state.value.followUpFailed)
+        s.reload(open.interactionId)
+        assertNull(s.state.value.reread)
+        assertEquals("Couldn't load the next step", s.state.value.feedback?.text)
+        assertEquals(SendOutcome.Committed, s.state.value.attempt?.outcome)
+        assertFalse(s.state.value.canStart)
+        assertEquals(1, api.mutations.size)
+        api.onRead = { submittedRead() }
+        s.reload(open.interactionId)
+        assertEquals(wire.decode(submittedRead()), s.state.value.reread)
+        assertFalse(s.state.value.followUpFailed)
+        assertEquals(1, api.mutations.size)
     }
 
     @Test
