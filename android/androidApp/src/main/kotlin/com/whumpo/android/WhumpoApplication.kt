@@ -9,7 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import java.io.File
 
-class WhumpoApplication : Application() {
+open class WhumpoApplication : Application() {
     lateinit var container: AppContainer
         private set
 
@@ -18,15 +18,20 @@ class WhumpoApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        container = createContainer()
+        container.auth.start()
+    }
+
+    /** The instrumented test application supplies a synthetic transport before any session is restored. */
+    protected open fun createContainer(): AppContainer {
         val store = AccountStateStore(accountStateDirectory(this), KeystoreSecretBox(ACCOUNT_STATE_KEY_ALIAS))
-        container = AppContainer(
+        return AppContainer(
             environment = WhumpoEnvironment.from(BuildConfig.WHUMPO_ENVIRONMENT, BuildConfig.WHUMPO_ORIGIN),
             accountState = store,
             io = Dispatchers.IO,
             app = this,
             scope = appScope,
         )
-        container.auth.start()
     }
 
     companion object {

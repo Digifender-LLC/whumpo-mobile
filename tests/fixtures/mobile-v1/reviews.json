@@ -130,8 +130,161 @@
    "client": "current",
    "enabled": false,
    "reason": "expired"
+  },
+  {
+   "name": "app restore, current client",
+   "review": {
+    "kind": "app-restore",
+    "reviewId": "33333333-3333-4333-8333-000000000009",
+    "project": {
+     "id": "11111111-1111-4111-8111-000000000001",
+     "name": "Example Detailing"
+    },
+    "state": "pending",
+    "expiresAt": "2026-10-04T12:30:00.000Z",
+    "canApprove": true,
+    "control": {
+     "type": "appRestore",
+     "projectId": "11111111-1111-4111-8111-000000000001",
+     "reviewId": "33333333-3333-4333-8333-000000000009",
+     "confirmation": "RESTORE"
+    },
+    "requiresFreshPasskey": true,
+    "disclosure": {
+     "title": "Restore this app's data",
+     "lines": [
+      "Replaces the current data in the Example Detailing app with the reviewed backup."
+     ]
+    },
+    "preview": null,
+    "unavailableReason": null
+   },
+   "client": "current",
+   "enabled": true
+  },
+  {
+   "name": "app restore, client without app.restore",
+   "review": {
+    "kind": "app-restore",
+    "reviewId": "33333333-3333-4333-8333-000000000009",
+    "project": {
+     "id": "11111111-1111-4111-8111-000000000001",
+     "name": "Example Detailing"
+    },
+    "state": "pending",
+    "expiresAt": "2026-10-04T12:30:00.000Z",
+    "canApprove": true,
+    "control": {
+     "type": "appRestore",
+     "projectId": "11111111-1111-4111-8111-000000000001",
+     "reviewId": "33333333-3333-4333-8333-000000000009",
+     "confirmation": "RESTORE"
+    },
+    "requiresFreshPasskey": true,
+    "disclosure": {
+     "title": "Restore this app's data",
+     "lines": [
+      "Replaces the current data in the Example Detailing app with the reviewed backup."
+     ]
+    },
+    "preview": null,
+    "unavailableReason": null
+   },
+   "client": "withoutSiteControls",
+   "enabled": false,
+   "reason": "client_update_required"
   }
  ],
+ "invalid": {
+  "note": "Approvable reviews whose fresh-passkey requirement does not match the kind. The client refuses to decode them.",
+  "cases": [
+   {
+    "name": "app restore without a fresh passkey",
+    "review": {
+     "kind": "app-restore",
+     "reviewId": "33333333-3333-4333-8333-000000000009",
+     "project": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "name": "Example Detailing"
+     },
+     "state": "pending",
+     "expiresAt": "2026-10-04T12:30:00.000Z",
+     "canApprove": true,
+     "control": {
+      "type": "appRestore",
+      "projectId": "11111111-1111-4111-8111-000000000001",
+      "reviewId": "33333333-3333-4333-8333-000000000009",
+      "confirmation": "RESTORE"
+     },
+     "requiresFreshPasskey": false,
+     "disclosure": {
+      "title": "Restore this app's data",
+      "lines": [
+       "Replaces the current data in the Example Detailing app with the reviewed backup."
+      ]
+     },
+     "preview": null,
+     "unavailableReason": null
+    }
+   },
+   {
+    "name": "site publication requiring a fresh passkey",
+    "review": {
+     "kind": "site",
+     "reviewId": "33333333-3333-4333-8333-000000000009",
+     "project": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "name": "Example Detailing"
+     },
+     "state": "pending",
+     "expiresAt": "2026-10-04T12:30:00.000Z",
+     "canApprove": true,
+     "control": {
+      "type": "confirm",
+      "kind": "site",
+      "reviewId": "33333333-3333-4333-8333-000000000009"
+     },
+     "requiresFreshPasskey": true,
+     "disclosure": {
+      "title": "Restore this app's data",
+      "lines": [
+       "Replaces the current data in the Example Detailing app with the reviewed backup."
+      ]
+     },
+     "preview": null,
+     "unavailableReason": null
+    }
+   },
+   {
+    "name": "application change requiring a fresh passkey",
+    "review": {
+     "kind": "application",
+     "reviewId": "33333333-3333-4333-8333-000000000009",
+     "project": {
+      "id": "11111111-1111-4111-8111-000000000001",
+      "name": "Example Detailing"
+     },
+     "state": "pending",
+     "expiresAt": "2026-10-04T12:30:00.000Z",
+     "canApprove": true,
+     "control": {
+      "type": "confirm",
+      "kind": "application",
+      "reviewId": "33333333-3333-4333-8333-000000000009"
+     },
+     "requiresFreshPasskey": true,
+     "disclosure": {
+      "title": "Restore this app's data",
+      "lines": [
+       "Replaces the current data in the Example Detailing app with the reviewed backup."
+      ]
+     },
+     "preview": null,
+     "unavailableReason": null
+    }
+   }
+  ]
+ },
  "clients": {
   "current": {
    "contract": 1,

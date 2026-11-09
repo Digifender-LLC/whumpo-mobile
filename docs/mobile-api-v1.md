@@ -135,7 +135,7 @@ Four controls are admitted. Each is the **exact** `ChatControl` shape from [`src
 | `specification.apply` | `{type:"specificationApply",reviewId,proposalDigest,expectedRevision}` | required | Save the exact private website version prepared from a content brief |
 | `site.confirm` | `{type:"confirm",kind:"site",reviewId}` | no | Publish the reviewed website version |
 | `application.confirm` | `{type:"confirm",kind:"application",reviewId}` | no | Activate the reviewed bounded application change |
-| `app.restore` | `{type:"appRestore",projectId,reviewId,confirmation:"RESTORE"}` | no | Restore reviewed application data |
+| `app.restore` | `{type:"appRestore",projectId,reviewId,confirmation:"RESTORE"}` | required | Restore reviewed application data |
 
 A review sent to the app is `{kind,reviewId,project,state,expiresAt,canApprove,control,requiresFreshPasskey,disclosure{title,lines},preview,unavailableReason}`. Invariants (checked offline): `canApprove` implies `state:"pending"`, a `control` whose type matches `kind` and `reviewId`, and no `unavailableReason`; otherwise `control` is `null`. A review whose capability the build did not declare arrives with `canApprove:false` and `unavailableReason:"client_update_required"`; an unknown `kind` makes the client show update-required with no enabled control. Expired, stale, foreign or withdrawn reviews expose no control. The [disclosure](../tests/fixtures/mobile-v1/reviews.json) lines are server-written exact-effect text; the app shows them before confirmation and does not synthesize them.
 

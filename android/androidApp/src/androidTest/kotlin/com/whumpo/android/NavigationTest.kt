@@ -32,11 +32,11 @@ class NavigationTest {
         "settings" to "Settings",
     )
 
-    // The shell only shows for a signed-in account (WP5 sign-in gate), so the tests sign a fixture account in.
+    // The shell requires a stored session and completed onboarding, verified through the synthetic API.
     @Before
     fun signedIn() {
         Fixtures.reset()
-        Fixtures.container.accountState.activate(Fixtures.ownerA)
+        Fixtures.signIn()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("nav-chat").fetchSemanticsNodes().isNotEmpty() }
     }
 

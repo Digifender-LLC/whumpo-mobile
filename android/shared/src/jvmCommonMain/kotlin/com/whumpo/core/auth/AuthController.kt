@@ -12,6 +12,8 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -60,8 +62,16 @@ class AuthController(
         data object Busy : Step
         data class Problem(val problem: AuthProblem) : Step
         data class Waiting(val exchanging: Boolean = false) : Step
-        data class Setup(val kind: SetupKind, val busy: Boolean = false, val problem: AuthProblem? = null) : Step
-        data object Update : Step
+        // Session-bearing steps are not data classes: their token must not appear in toString().
+        class Setup(
+            val kind: SetupKind,
+            val busy: Boolean = false,
+            val problem: AuthProblem? = null,
+            val token: String? = null,
+            val path: String? = null,
+        ) : Step
+        class Ready(val token: String) : Step
+        class Update(val token: String? = null) : Step
     }
 
     private class Handoff(val id: String, val state: String, val verifier: String, val url: String)
@@ -69,33 +79,46 @@ class AuthController(
     private val step = MutableStateFlow<Step>(Step.Idle)
     private var job: Job? = null
     private var handoff: Handoff? = null
-    private var onboardingPath: String? = null
+    private var signingOut = false
 
     // Unconfined: the gate follows the account store on the thread that changed it, so it never lags a sign-out.
     val state: StateFlow<AuthState> = combine(sessions.state, step) { session, current ->
+        val token = if (session is SessionManager.State.SignedIn) sessions.bearerToken() else null
+        val signedOut = AuthState.SignedOut(
+            if ((session as? SessionManager.State.SignedOut)?.ended == true) AuthProblem.SessionEnded else null,
+        )
         when {
-            current is Step.Update -> AuthState.UpdateRequired
+            current is Step.Update && (current.token == null || current.token == token) -> AuthState.UpdateRequired
             session is SessionManager.State.Restoring -> AuthState.Restoring
-            session is SessionManager.State.SignedIn ->
-                if (current is Step.Setup && current.kind == SetupKind.Onboarding) {
-                    AuthState.FinishSetup(current.busy, current.problem, canCheck = true)
-                } else {
-                    AuthState.Ready
-                }
+            session is SessionManager.State.SignedIn -> when {
+                current is Step.Ready && current.token == token -> AuthState.Ready
+                current is Step.Setup && current.kind == SetupKind.Onboarding && current.token == token ->
+                    AuthState.FinishSetup(current.busy, current.problem, canCheck = true, canOpen = current.path != null)
+                else -> AuthState.FinishSetup(
+                    busy = current is Step.Setup && current.token == null && current.busy,
+                    canCheck = true,
+                    canOpen = current is Step.Setup && current.kind == SetupKind.Account,
+                )
+            }
             else -> when (current) {
-                is Step.Idle -> AuthState.SignedOut(if ((session as SessionManager.State.SignedOut).ended) AuthProblem.SessionEnded else null)
+                is Step.Idle, is Step.Ready, is Step.Update -> signedOut
                 is Step.Busy -> AuthState.SignedOut(busy = true)
                 is Step.Problem -> AuthState.SignedOut(current.problem)
                 is Step.Waiting -> AuthState.WaitingForBrowser(current.exchanging)
-                is Step.Setup -> AuthState.FinishSetup(current.busy, current.problem, current.kind == SetupKind.Onboarding)
-                is Step.Update -> AuthState.UpdateRequired
+                is Step.Setup -> if (current.kind == SetupKind.Account) {
+                    AuthState.FinishSetup(current.busy, current.problem, canOpen = true)
+                } else {
+                    signedOut
+                }
             }
         }
     }.stateIn(scope + Dispatchers.Unconfined, SharingStarted.Eagerly, AuthState.Restoring)
 
-    /** Loads the stored session. Call once from `Application.onCreate`. */
-    fun start() {
-        scope.launch { sessions.restore() }
+    /** Loads the stored session and checks its welcome gate before allowing the shell. Call once at start-up. */
+    fun start() = launchStep {
+        step.value = Step.Setup(SetupKind.Onboarding, busy = true)
+        sessions.restore()
+        checkOnboarding()
     }
 
     // ---- Passkey sign-in -----------------------------------------------------------------------------------------
@@ -103,6 +126,7 @@ class AuthController(
     override fun signInWithPasskey() = launchStep {
         step.value = Step.Busy
         val options = api.loginOptions()
+        currentCoroutineContext().ensureActive()
         when (val result = passkeys.getAssertion(options.options.toString())) {
             PasskeyResult.Cancelled -> step.value = Step.Idle
             PasskeyResult.NoCredential -> step.value = Step.Problem(AuthProblem.NoPasskey)
@@ -116,31 +140,53 @@ class AuthController(
         }
     }
 
-    /** Begins a session: stores it, then checks the welcome gate. Failure leaves nothing stored. */
+    /** Stores a verified session, then holds the shell closed until its welcome state is known. */
     private suspend fun finishSignIn(info: SessionTokenInfo) {
+        currentCoroutineContext().ensureActive()
         sessions.begin(info.token)
         try {
             val label = api.getSession().account.label
+            currentCoroutineContext().ensureActive()
+            if (sessions.bearerToken() != info.token) return
             // Hold the gate shut while the account is stored and the welcome state is read.
-            step.value = Step.Setup(SetupKind.Onboarding, busy = true)
-            sessions.establish(label, info.expiresAt, info.freshUntil)
+            step.value = Step.Setup(SetupKind.Onboarding, busy = true, token = info.token)
+            sessions.establish(label, info.expiresAt, info.freshUntil, expectedToken = info.token)
         } catch (e: Throwable) {
-            sessions.discardPending()
+            if (sessions.bearerToken() == info.token) sessions.discardPending()
             throw e
         }
-        step.value = try {
-            val onboarding = api.bootstrap().onboarding
-            val path = onboarding.browserPath?.takeIf(::isSafePath)
-            if (onboarding.complete || path == null) {
-                Step.Idle
-            } else {
-                onboardingPath = path
-                Step.Setup(SetupKind.Onboarding)
-            }
-        } catch (e: MobileApiException) {
-            // shortcut: if the welcome state cannot be read, enter the shell; its own routes answer onboarding_required.
-            if (e is MobileApiException.ClientUpdateRequired) Step.Update else Step.Idle
+        checkOnboarding()
+    }
+
+    /** Fail closed, with an explicit retry. A result belongs only to the session that requested it. */
+    private suspend fun checkOnboarding() {
+        currentCoroutineContext().ensureActive()
+        val token = sessions.bearerToken()
+        if (token == null) {
+            step.value = Step.Idle
+            return
         }
+        step.value = Step.Setup(SetupKind.Onboarding, busy = true, token = token)
+        val next = try {
+            val onboarding = api.bootstrap().onboarding
+            if (onboarding.complete) {
+                Step.Ready(token)
+            } else {
+                Step.Setup(SetupKind.Onboarding, token = token, path = onboarding.browserPath?.takeIf(::isSafePath))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MobileApiException) {
+            if (e is MobileApiException.ClientUpdateRequired) {
+                Step.Update(token)
+            } else {
+                Step.Setup(SetupKind.Onboarding, problem = problemOf(e), token = token)
+            }
+        } catch (_: Exception) {
+            Step.Setup(SetupKind.Onboarding, problem = AuthProblem.Generic, token = token)
+        }
+        currentCoroutineContext().ensureActive()
+        if (sessions.bearerToken() == token) step.value = next
     }
 
     // ---- Browser hand-off ----------------------------------------------------------------------------------------
@@ -159,6 +205,7 @@ class AuthController(
         val verifier = Pkce.newVerifier()
         val state = Pkce.newState()
         val response = api.handoffStart(HandoffStartRequest(purpose, state, Pkce.challenge(verifier), RETURN_URI))
+        currentCoroutineContext().ensureActive()
         val url = browserUrl(response.browserPath)
         if (url == null) {
             step.value = Step.Problem(AuthProblem.HandoffFailed)
@@ -202,8 +249,9 @@ class AuthController(
             try {
                 finishSignIn(api.handoffExchange(HandoffExchangeRequest(pending.id, code, pending.state, pending.verifier)).session)
             } catch (e: MobileApiException) {
+                currentCoroutineContext().ensureActive()
                 // The code is spent whatever went wrong, so the only way forward is a new hand-off.
-                step.value = if (e is MobileApiException.ClientUpdateRequired) Step.Update else Step.Problem(AuthProblem.HandoffFailed)
+                step.value = if (e is MobileApiException.ClientUpdateRequired) Step.Update() else Step.Problem(AuthProblem.HandoffFailed)
             }
         }
     }
@@ -220,19 +268,31 @@ class AuthController(
                     startHandoff("signin")
                 }
             } else {
-                val url = onboardingPath?.let(::browserUrl)
-                step.value = Step.Setup(SetupKind.Onboarding, problem = if (url != null && browser.open(url)) null else AuthProblem.NoBrowser)
+                launchStep {
+                    val token = sessions.bearerToken() ?: return@launchStep
+                    val path = current.path?.takeIf { current.token == token }
+                    val url = path?.let(::browserUrl)
+                    // Without a path the browser is never tried, so a failed bootstrap keeps its own problem.
+                    val kept = current.problem?.takeIf { current.token == token }
+                    step.value = Step.Setup(
+                        SetupKind.Onboarding,
+                        problem = when {
+                            url == null -> kept ?: AuthProblem.NoBrowser
+                            browser.open(url) -> null
+                            else -> AuthProblem.NoBrowser
+                        },
+                        token = token,
+                        path = path,
+                    )
+                }
             }
             else -> Unit
         }
     }
 
     override fun checkSetupAgain() {
-        if ((step.value as? Step.Setup)?.kind != SetupKind.Onboarding) return openSetup()
-        launchStep {
-            step.value = Step.Setup(SetupKind.Onboarding, busy = true)
-            step.value = if (api.bootstrap().onboarding.complete) Step.Idle else Step.Setup(SetupKind.Onboarding)
-        }
+        if ((step.value as? Step.Setup)?.kind == SetupKind.Account) return openSetup()
+        launchStep { checkOnboarding() }
     }
 
     // ---- Reauthentication and sign-out -----------------------------------------------------------------------------
@@ -269,19 +329,26 @@ class AuthController(
 
     /** Tells the server (best effort, even if it answers 401) and always erases local state. */
     suspend fun signOutNow() {
+        if (signingOut) return
+        signingOut = true
         job?.cancel()
         handoff = null
-        withTimeoutOrNull(LOGOUT_TIMEOUT_MS) {
-            try {
-                api.logout()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                // The app clears local state even when the server cannot be reached (contract).
+        try {
+            step.value = Step.Setup(SetupKind.Onboarding, busy = true, token = sessions.bearerToken())
+            withTimeoutOrNull(LOGOUT_TIMEOUT_MS) {
+                try {
+                    api.logout()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // The app clears local state even when the server cannot be reached (contract).
+                }
             }
+            sessions.clear(ended = false)
+            step.value = Step.Idle
+        } finally {
+            signingOut = false
         }
-        step.value = Step.Idle
-        sessions.clear(ended = false)
     }
 
     override fun openHelp() {
@@ -296,19 +363,21 @@ class AuthController(
 
     /** One sign-in step at a time: a second tap while one runs is ignored. */
     private fun launchStep(block: suspend () -> Unit) {
-        if (job?.isActive == true) return
+        if (signingOut || job?.isActive == true) return
         job = scope.launch {
             try {
                 block()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: MobileApiException) {
+                currentCoroutineContext().ensureActive()
                 step.value = when (e) {
-                    is MobileApiException.ClientUpdateRequired -> Step.Update
+                    is MobileApiException.ClientUpdateRequired -> Step.Update()
                     is MobileApiException.IdentityIncomplete -> Step.Setup(SetupKind.Account)
                     else -> Step.Problem(problemOf(e))
                 }
             } catch (_: Exception) {
+                currentCoroutineContext().ensureActive()
                 step.value = Step.Problem(AuthProblem.Generic)
             }
         }

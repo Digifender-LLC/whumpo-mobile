@@ -47,7 +47,7 @@ class PlatformAccessibilityTreeTest {
         info.flags = info.flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         automation.serviceInfo = info
         Fixtures.reset()
-        Fixtures.container.accountState.activate(Fixtures.ownerA)
+        Fixtures.signIn()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("nav-chat").fetchSemanticsNodes().isNotEmpty() }
         compose.runOnIdle {
             accessibilityRoots = compose.activity.window.decorView.allViews.filterIsInstance<RootForTest>().toList()

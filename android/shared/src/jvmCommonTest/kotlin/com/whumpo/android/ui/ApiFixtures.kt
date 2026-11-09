@@ -99,7 +99,7 @@ class FakeSessions(var token: String?) : SessionProvider {
 
     override suspend fun bearerToken() = token
 
-    override suspend fun onSessionRejected() {
-        rejected++
+    override suspend fun onSessionRejected(rejectedToken: String) {
+        if (token == rejectedToken) rejected++
     }
 }

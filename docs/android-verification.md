@@ -61,7 +61,12 @@ bash android/scripts/ci-instrumented.sh 36
 
 Each run invokes only `connectedLocalDebugAndroidTest` and
 `connectedDeployedDebugAndroidTest`, with `WorkerJourneyTest` excluded. The
-script captures bounded, allowlisted device/tree/ANR diagnostics without hiding
+test APK installs a fixture application before session restoration. Shell tests
+establish sealed synthetic sessions and pass the production onboarding gate with
+synthetic bootstrap responses. The local flavor uses device-loopback HTTP; the
+deployed flavor uses an in-process test engine and never contacts its configured
+website origin. Neither transport replaces the onboarding gate in production.
+The script captures bounded, allowlisted device/tree/ANR diagnostics without hiding
 the Gradle exit status. The shell regression exercises both API values, invalid
 API and physical serial rejection, and diagnostic-command failures. Do not run
 the private `android/scripts/test-worker-journey.sh` from this public repository.

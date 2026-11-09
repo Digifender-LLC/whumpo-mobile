@@ -285,6 +285,7 @@ class ProjectsViewModelTest {
         vm.addPhoto("content://media/picker/1")
         vm.photos.first { it.uploads.isEmpty() && api.requests.any { r -> r.method == HttpMethod.Put } }
 
+        assertEquals(seenBeforePut!!.id, store.removed.await())
         assertArrayEquals(photoBytes, seenBeforePut!!.jpeg)
         assertEquals("van.jpg", seenBeforePut!!.name)
         assertTrue(store.saved.isEmpty())
@@ -558,7 +559,10 @@ class ProjectsViewModelTest {
         vm.select(PROJECT)
         assertTrue(vm.photos.value.uploads.isEmpty())
         vm.select(OTHER)
-        assertEquals("u1", vm.photos.value.uploads.single().id)
+        // The restore checks the project through the API engine off the test thread, so wait for its row.
+        assertEquals("u1", vm.photos.first { it.uploads.isNotEmpty() }.uploads.single().id)
+        vm.select(PROJECT)
+        assertTrue(vm.photos.value.uploads.isEmpty())
     }
 
     @Test
