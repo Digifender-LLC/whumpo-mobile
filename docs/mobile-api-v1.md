@@ -103,6 +103,8 @@ The interaction operations are thin authenticated aliases for the frozen [WH-105
 - **Bindings:** `answer.value@1`, `interaction.answers@1`, `owned.projects@1`, `site.content@1`, `agent.task-continue@1`, `site.content-prepare@1`. Photo, display, view, connection, comparison and preview bindings are excluded.
 - A definition needing anything else returns `426 client_update_required`. There is no simplified form, text projection or browser downgrade. `canApprove` is always false for generic forms.
 
+**Forms read and resources (adopted shapes).** `interaction.read` returns `{version,envelope:{version,id,expiresAt,definition,definitionDigest},state,answerRevision,draft,replacementInteractionId,submission}` and `interaction.resources` returns `{version,interactionId,definitionDigest,fieldId,collection:"projects",items:[{id,name,photo:null}],nextBefore}`, as in the fixtures. `nextBefore` is opaque and echoed unchanged as the next `before`. Fixture values are synthetic: `template:"example@1"` and the placeholder digests are not server-valid. The client rules and synthetic case catalog are in [the forms snapshot](mobile-api-forms-proposal.md). Typed client parsing, form UI and `422` handling are not implemented yet. Photos stay deferred; submitted answers are read-only to their authorized owner.
+
 ### Photos (WH-085)
 
 | Operation | Auth | Request / response | Reuses | Idempotency |
@@ -166,6 +168,7 @@ Every error is `{version:1,error:{code,message,...}}` with the fixed status belo
 | `request_conflict`, `stale_revision`, `chat_busy`, `review_unavailable` | 409 | Replay with changed payload, stale conversation, a pending reply, or a stale/expired review. |
 | `payload_too_large` | 413 | Over the route bound. |
 | `unsupported_media_type` | 415 | Not a prepared JPEG. |
+| WH-105 field codes (open set) | 422 | Interaction-route field validation, passed through from the WH-105 vocabulary; it is outside the closed mobile codes, so `errors.json` has no case for it. The error adds `fieldId` when one field is at fault. Show it at that field, or at form level when `fieldId` is absent or unknown; never branch on the code. The synthetic example is `errors.field422` in the [forms catalog](../tests/fixtures/proposed/forms.json). Not yet handled by the client. |
 | `rate_limited` | 429 | Wait `retryAfterSeconds`. |
 | `unavailable` | 503 | Platform or provider unavailable; authentication and help stay reachable. |
 
