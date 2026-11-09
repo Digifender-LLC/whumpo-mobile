@@ -84,7 +84,7 @@ data class ChatState(
     val turns: List<ChatTurn> = emptyList(),
     val revision: Int = 0,
     val outbound: Outbound? = null,
-    /** A short inline error about the last send or refresh. */
+    /** A short inline error about an action, independent of transcript reads. */
     val notice: String? = null,
     val offline: Boolean = false,
     val review: ReviewFlow? = null,
@@ -93,6 +93,8 @@ data class ChatState(
     val haptic: HapticCue? = null,
     /** Retained checks and permitted retries remain reachable when a review leaves the newest page. */
     val reviewChecks: List<ReviewFlow> = emptyList(),
+    /** Reading the transcript can fail while an independent send result still needs explaining. */
+    val transcriptFailure: Phase.Failed? = null,
 ) {
     val replyPending: Boolean get() = turns.any { it.status == "pending" }
 
@@ -206,7 +208,7 @@ class ChatSession(
             val known = s.turns.associateBy { it.id }
             val reply = page.items.lastOrNull { it.status == "completed" && it.assistantText != null && known[it.id]?.assistantText == null }
             val announce = if (s.phase is Phase.Ready && reply != null) "Whumpo replied: ${reply.assistantText.orEmpty().take(ANNOUNCE_CHARS)}" else s.announcement
-            s.copy(phase = Phase.Ready, turns = page.items, revision = page.revision, offline = false, announcement = announce)
+            s.copy(phase = Phase.Ready, turns = page.items, revision = page.revision, offline = false, announcement = announce, transcriptFailure = null)
         }
         confirmAttempts.values.filter { it.canConfirm && !reviewStillCurrent(it) }.toList().forEach {
             setStep(it.requestId, ReviewStep.NoLongerCurrent, "This review is no longer current.", retryAllowed = false)
@@ -218,14 +220,18 @@ class ChatSession(
         val confirmationUnresolved = confirmAttempts.values.any {
             it.step == ReviewStep.Confirming || it.step == ReviewStep.Pending || it.step == ReviewStep.Uncertain
         }
+        val failure = Phase.Failed(
+            e.headline(),
+            if (confirmationUnresolved) "Check the confirmation result before trying again." else "Your unsent message is kept on this device.",
+        )
         mutable.update { s ->
             when {
-                e is MobileApiException.ClientUpdateRequired -> s.copy(phase = Phase.UpdateRequired)
+                e is MobileApiException.ClientUpdateRequired -> s.copy(phase = Phase.UpdateRequired, transcriptFailure = null)
                 s.turns.isNotEmpty() -> s.copy(
                     offline = e is MobileApiException.Transport,
-                    notice = if (e is MobileApiException.Transport) s.notice else if (confirmationUnresolved) e.headline() else e.userMessage(),
+                    transcriptFailure = failure,
                 )
-                else -> s.copy(phase = Phase.Failed(e.headline(), if (confirmationUnresolved) "Check the confirmation result before trying again." else e.safeLine()))
+                else -> s.copy(phase = failure, transcriptFailure = failure)
             }
         }
     }

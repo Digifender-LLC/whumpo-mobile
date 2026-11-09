@@ -43,11 +43,13 @@ private typealias RecoveryReply = suspend MockRequestHandleScope.() -> HttpRespo
 class ReviewConfirmRecoveryTest {
     private class Server {
         val posts = CopyOnWriteArrayList<JsonObject>()
+        val messagePosts = CopyOnWriteArrayList<JsonObject>()
         val receiptIds = CopyOnWriteArrayList<String>()
         var chatBody = ChatFixtures.body("chat.read")
         var chatError: Pair<Int, String>? = null
         var confirmReply: RecoveryReply = { throw IOException("Synthetic lost confirmation reply") }
         var receiptReply: RecoveryReply = { reply(ChatFixtures.error("not_found")) }
+        var messageReply: RecoveryReply = { reply(200, acknowledgment("completed", accepted = false, id = NEXT_REQUEST)) }
 
         suspend fun handle(scope: MockRequestHandleScope, request: HttpRequestData): HttpResponseData = with(scope) {
             val path = request.url.encodedPath.removePrefix("/api/mobile/v1")
@@ -61,6 +63,10 @@ class ReviewConfirmRecoveryTest {
                 request.method == HttpMethod.Post && path == "/reviews/confirm" -> {
                     posts += Json.parseToJsonElement(request.body.toByteArray().decodeToString()).jsonObject
                     confirmReply(scope)
+                }
+                request.method == HttpMethod.Post && path == "/chat/messages" -> {
+                    messagePosts += Json.parseToJsonElement(request.body.toByteArray().decodeToString()).jsonObject
+                    messageReply(scope)
                 }
                 else -> error("Unexpected synthetic request: ${request.method.value} $path")
             }
@@ -87,6 +93,98 @@ class ReviewConfirmRecoveryTest {
         override fun close() {
             session.reset()
             client.close()
+        }
+    }
+
+    @Test
+    fun rejectedSendAndTranscriptFailureRecoverIndependentlyWithRetainedConfirmations() = runTest {
+        for (empty in listOf(false, true)) {
+            for (step in listOf(ReviewStep.Pending, ReviewStep.Uncertain, ReviewStep.Failed)) {
+                val ids = ArrayDeque(listOf(REQUEST, NEXT_REQUEST))
+                Fixture(backgroundScope, newId = { ids.removeFirst() }).use { f ->
+                    f.loadAndOpen()
+                    if (step == ReviewStep.Pending) f.server.confirmReply = { reply(200, acknowledgment("pending")) }
+                    if (step == ReviewStep.Pending) f.server.receiptReply = { reply(200, receipt("pending")) }
+                    if (step == ReviewStep.Uncertain) f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+                    f.confirm()
+                    f.session.dismissReview()
+                    f.server.chatBody = page(revision = 90, empty = empty)
+                    f.session.refreshNow()
+                    f.session.awaitIdle()
+                    f.session.send("Hello")
+                    f.session.awaitIdle()
+                    val sendNotice = f.session.state.value.notice
+                    assertTrue(sendNotice.orEmpty().contains("Nothing was sent"))
+                    val original = f.session.state.value.reviewChecks.single()
+                    assertEquals(step, original.step)
+
+                    f.server.chatError = ChatFixtures.error("unavailable")
+                    f.session.refreshNow()
+                    f.session.awaitIdle()
+                    val failed = f.session.state.value
+                    assertEquals(sendNotice, failed.notice)
+                    assertTrue(failed.transcriptFailure != null)
+                    assertEquals(empty, failed.phase is Phase.Failed)
+                    assertEquals(original, failed.reviewChecks.single())
+                    if (step != ReviewStep.Failed) {
+                        assertFalse(failed.transcriptFailure.safe.contains("Nothing was changed"))
+                        f.session.openReview(original.turnId)
+                        f.session.awaitIdle()
+                        f.session.confirmReview()
+                        f.session.awaitIdle()
+                    }
+
+                    f.server.chatError = null
+                    f.session.load()
+                    f.session.awaitIdle()
+                    assertEquals(Phase.Ready, f.session.state.value.phase)
+                    assertNull(f.session.state.value.transcriptFailure)
+                    assertEquals(sendNotice, f.session.state.value.notice)
+                    assertEquals(original, f.session.state.value.reviewChecks.single())
+                    assertEquals(1, f.server.posts.size)
+                    assertEquals(1, f.server.messagePosts.size)
+                    assertEquals(NEXT_REQUEST, f.server.messagePosts.single()["requestId"]!!.jsonPrimitive.content)
+                    assertTrue(f.server.receiptIds.all { it == REQUEST })
+                    f.session.reset()
+                    assertNull(f.session.state.value.notice)
+                    assertNull(f.session.state.value.transcriptFailure)
+                    assertTrue(f.session.state.value.reviewChecks.isEmpty())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun aNewSendClearsItsOwnNoticeWithoutClearingAnUnrecoveredTranscriptFailure() = runTest {
+        val ids = ArrayDeque(listOf(REQUEST, NEXT_REQUEST))
+        Fixture(backgroundScope, newId = { ids.removeFirst() }).use { f ->
+            f.session.load()
+            f.session.awaitIdle()
+            f.session.send("First message")
+            f.session.awaitIdle()
+            assertTrue(f.session.state.value.notice.orEmpty().contains("Nothing was sent"))
+            f.server.chatError = ChatFixtures.error("unavailable")
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            val failure = f.session.state.value.transcriptFailure
+            assertTrue(failure != null)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            f.server.messageReply = {
+                entered.complete(Unit)
+                release.await()
+                reply(200, acknowledgment("completed", id = NEXT_REQUEST))
+            }
+            f.session.send("Second message")
+            entered.await()
+            assertNull(f.session.state.value.notice)
+            assertEquals(failure, f.session.state.value.transcriptFailure)
+            release.complete(Unit)
+            f.session.awaitIdle()
+            assertNull(f.session.state.value.notice)
+            assertEquals(failure, f.session.state.value.transcriptFailure)
+            assertNull(f.session.state.value.outbound)
+            assertEquals(2, f.server.messagePosts.size)
         }
     }
 

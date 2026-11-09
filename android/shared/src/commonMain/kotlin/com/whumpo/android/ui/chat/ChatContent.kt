@@ -145,7 +145,7 @@ fun ChatPane(
                 else -> Transcript(chat, screen.now, actions, animated, onOpenPreview)
             }
         }
-        chat.notice?.takeUnless { chat.phase is Phase.Failed && chat.reviewChecks.isNotEmpty() }?.let {
+        chat.notice?.let {
             Text(
                 it,
                 style = MaterialTheme.typography.bodyMedium,
@@ -217,10 +217,12 @@ private fun EmptyConversation(actions: ChatActions) {
 private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, animated: Boolean, onOpenPreview: (PreviewRef) -> Unit) {
     val listState = rememberLazyListState()
     val missingChecks = chat.reviewChecks.filter { check -> chat.turns.none { it.id == check.turnId } }
-    val failure = chat.phase as? Phase.Failed
+    val failure = chat.transcriptFailure ?: (chat.phase as? Phase.Failed)
     val extras = missingChecks.size + (if (failure != null) 1 else 0) + (if (chat.outbound != null) 1 else 0) + (if (chat.typing) 1 else 0)
     val count = chat.turns.size + extras
-    LaunchedEffect(count) { if (count > 0) listState.scrollToItem(count - 1) }
+    LaunchedEffect(count, failure) { if (failure == null && count > 0) listState.scrollToItem(count - 1) }
+    // A new read failure must expose its retry. Later list changes must not pull the owner away from a retained check.
+    LaunchedEffect(failure) { if (failure != null) listState.scrollToItem(0) }
     LazyColumn(
         Modifier.fillMaxSize().testTag("chat-transcript"),
         state = listState,
