@@ -257,7 +257,7 @@ The proposed `POST /interactions/read` response is `{version:1,envelope:{version
 
 `submission` is `null` or `{id,answers,continuation}`. Its `continuation` is `null` or uses the existing public `Continuation` shape `{id,state,resultTurnId,reason}`. Submitted answers are included in the read response.
 
-The `definition` shape is `{version:1,kind,template,title,summary,presentation,fields,cards,submitBinding,continuationBinding,purpose?}`. A native form requires `kind:"form"` and `cards:[]`; any other kind or a non-empty cards array requires an update. `template` and optional `purpose` are opaque labels. `presentation` is `inline`, `panel`, or `dialog`. The title is at most 100 UTF-16 code units, the summary is at most 400 UTF-16 code units, and a definition contains 1–12 fields in display order.
+The `definition` shape is `{version:1,kind,template,title,summary,presentation,fields,cards,submitBinding,continuationBinding,purpose?}`. A native form requires `kind:"form"` and `cards:[]`; any other kind or a non-empty cards array requires an update. `template` and optional `purpose` are opaque labels. `presentation` is `inline`, `panel`, or `dialog`; any other `presentation` requires an update, and the client must fail closed: it does not render the form and performs no form mutation. The title is at most 100 UTF-16 code units, the summary is at most 400 UTF-16 code units, and a definition contains 1–12 fields in display order.
 
 Every field has shape `{id,type,label,help,required,binding:"answer.value@1",constraints,default?,when?,group?,source?,questionId?}`. The field ID matches `^[a-z][a-z0-9-]{0,39}$`; the label is 1–80 UTF-16 code units, help is 0–240 UTF-16 code units and may be empty, and labels and help are plain text. `source` and `questionId` are opaque.
 
@@ -299,7 +299,7 @@ The public mobile API snapshot documents these build-level interaction bindings:
 
 ## C. Client UX recommendations (non-normative)
 
-Fail closed to an update-required screen with no fields or mutations for any unsupported field type or definition kind, any unknown member in a definition or field, state, or binding, and whenever `cards` is non-empty. A malformed definition or read also fails closed.
+Fail closed to an update-required screen with no fields or mutations for any unsupported field type or definition kind, any unknown member in a definition or field, state, binding, or `presentation`, and whenever `cards` is non-empty. A malformed definition or read also fails closed.
 
 Show submitted answers read-only to their authorized owner and keep them in memory only for that screen. When a 422 `fieldId` names a field in the current definition, show the problem on that field; otherwise show it at form level. Label a resource ID whose name is not present in a loaded page as “Name not loaded.”
 
