@@ -70,8 +70,8 @@ class MobileApiClientTest {
     private class FakeSessions(var token: String?) : SessionProvider {
         var rejected = 0
         override suspend fun bearerToken() = token
-        override suspend fun onSessionRejected() {
-            rejected++
+        override suspend fun onSessionRejected(rejectedToken: String) {
+            if (token == rejectedToken) rejected++
         }
     }
 
@@ -471,6 +471,44 @@ class MobileApiClientTest {
         assertEquals(MobileApiException.ProofRequired.Proof.FRESH_PASSKEY, e.proof)
         assertEquals(1, calls)
         assertEquals("completed", c.confirmReview(id, 5, control).turnStatus)
+    }
+
+    @Test
+    fun aLateRejectedRequestNamesItsOriginalTokenAndLeavesTheNewSessionAlone() = runTest {
+        for (errorName in listOf("proof_required_signin", "identity_changed")) {
+            val sessions = FakeSessions(token)
+            val nextToken = "b".repeat(64)
+            val c = client(sessions) { request ->
+                assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
+                sessions.token = nextToken
+                val error = errorCases.getValue(errorName).jsonObject
+                reply(error.num("status"), error["body"].toString())
+            }
+            assertFailsWith<MobileApiException> { c.bootstrap() }
+            assertEquals(nextToken, sessions.token)
+            assertEquals(0, sessions.rejected)
+        }
+    }
+
+    @Test
+    fun anIdentityChangedRequestIsNeverRetriedWithADifferentAccountsBearer() = runTest {
+        val sessions = FakeSessions(token)
+        var writes = 0
+        val c = client(sessions) { request ->
+            if (request.url.encodedPath.endsWith("/session/reauth/verify")) {
+                reply(200, reauthBody)
+            } else {
+                writes++
+                assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
+                sessions.token = "b".repeat(64)
+                reply(identityChanged.num("status"), identityChanged["body"].toString())
+            }
+        }
+        c.reauthVerify("cccccccc-cccc-4ccc-8ccc-000000000001", credential)
+        assertFailsWith<MobileApiException.IdentityChanged> { c.sendMessage(newRequestId(), 4, "old account text") }
+        assertEquals(1, writes)
+        assertEquals(0, sessions.rejected)
+        assertEquals("b".repeat(64), sessions.token)
     }
 
     // ---- identity_changed after the client's own reauth ---------------------------------------------------------------------

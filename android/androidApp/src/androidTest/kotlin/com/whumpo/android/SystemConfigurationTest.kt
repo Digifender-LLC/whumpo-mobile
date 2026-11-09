@@ -41,7 +41,7 @@ class SystemConfigurationTest {
         Fixtures.reset()
         previousFontScale = DeviceShell.run("settings get system font_scale").trim()
         automation.setRotation(UiAutomation.ROTATION_FREEZE_0)
-        store.activate(Fixtures.ownerA)
+        Fixtures.signIn()
     }
 
     @After

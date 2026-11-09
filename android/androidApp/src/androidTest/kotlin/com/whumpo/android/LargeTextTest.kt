@@ -27,7 +27,7 @@ class LargeTextTest {
     @Before
     fun setUp() {
         Fixtures.reset()
-        Fixtures.container.accountState.activate(Fixtures.ownerA)
+        Fixtures.signIn()
         compose.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(base.density, fontScale = 2f)) {

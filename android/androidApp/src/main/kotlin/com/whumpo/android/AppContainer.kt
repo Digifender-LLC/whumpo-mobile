@@ -33,6 +33,7 @@ import com.whumpo.core.environment.WhumpoEnvironment
 import com.whumpo.core.push.DeviceNotifications
 import com.whumpo.core.push.NoOpPushMessaging
 import com.whumpo.core.push.PushMessaging
+import io.ktor.client.engine.HttpClientEngine
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,11 +72,12 @@ class AppContainer(
     io: CoroutineDispatcher,
     app: Application,
     scope: CoroutineScope,
+    apiEngine: HttpClientEngine = okHttpEngine(),
 ) {
     // WP5: the native session, the v1 client and sign-in. WP7 reuses `mobileApi`.
     val sessions = SessionManager(accountState, io)
     val clientInfo: ClientInfo = ClientInfo.current(BuildConfig.VERSION_CODE)
-    val mobileApi = MobileApiClient(okHttpEngine(), environment.mobileApiBase, clientInfo, sessions)
+    val mobileApi = MobileApiClient(apiEngine, environment.mobileApiBase, clientInfo, sessions)
     val activities = ActivityTracker()
 
     /** Custom Tabs: the hand-off pages and previews. It opens the browser's own session and never carries the bearer. */
