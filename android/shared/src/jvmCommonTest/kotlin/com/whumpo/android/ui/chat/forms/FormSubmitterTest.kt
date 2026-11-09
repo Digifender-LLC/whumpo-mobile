@@ -3,6 +3,7 @@ package com.whumpo.android.ui.chat.forms
 import com.whumpo.android.ui.chat.forms.ProposedFormsFixture.form
 import com.whumpo.android.ui.chat.forms.ProposedFormsFixture.read
 import com.whumpo.android.ui.chat.forms.ProposedFormsFixture.wire
+import com.whumpo.core.api.FrozenMutation
 import com.whumpo.core.api.InteractionMutateRequest
 import com.whumpo.core.api.InteractionReceipt
 import com.whumpo.core.api.MobileApiException
@@ -21,13 +22,15 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class FormSubmitterTest {
     private class FakeApi : FormApi {
-        val mutations = mutableListOf<InteractionMutateRequest>()
+        val sent = mutableListOf<FrozenMutation>()
+        val mutations: List<InteractionMutateRequest> get() = sent.map { it.request }
         val receipts = mutableListOf<String>()
         var reads = 0
         var mutateGate: CompletableDeferred<Unit>? = null
@@ -36,10 +39,13 @@ class FormSubmitterTest {
         var onReceipt: (String) -> InteractionReceipt = { throw MobileApiException.NotFound("Not found.") }
         var onRead: () -> JsonObject = { ProposedFormsFixture.read("submitted") }
 
-        override suspend fun mutate(request: InteractionMutateRequest): InteractionReceipt {
-            mutations += request
+        override fun freeze(request: InteractionMutateRequest) =
+            FrozenMutation(request, Json.encodeToString(InteractionMutateRequest.serializer(), request).encodeToByteArray())
+
+        override suspend fun mutate(mutation: FrozenMutation): InteractionReceipt {
+            sent += mutation
             mutateGate?.await()
-            return onMutate(request)
+            return onMutate(mutation.request)
         }
 
         override suspend fun receipt(requestId: String): InteractionReceipt {
@@ -142,7 +148,8 @@ class FormSubmitterTest {
         api.onMutate = { receiptFor(it) }
         s.sendAgain()
         assertEquals(2, api.mutations.size)
-        assertSame(api.mutations[0], api.mutations[1])
+        assertSame(api.sent[0], api.sent[1])
+        assertTrue(api.sent[0].bytes().contentEquals(api.sent[1].bytes()))
         assertEquals(SendOutcome.Committed, s.state.value.attempt?.outcome)
         assertEquals(1, api.reads)
     }
@@ -287,7 +294,8 @@ class FormSubmitterTest {
         api.onMutate = { receiptFor(it) }
         s.sendAgain()
         assertEquals(2, api.mutations.size)
-        assertSame(api.mutations[0], api.mutations[1])
+        assertSame(api.sent[0], api.sent[1])
+        assertTrue(api.sent[0].bytes().contentEquals(api.sent[1].bytes()))
         assertEquals(SendOutcome.Committed, s.state.value.attempt?.outcome)
     }
 

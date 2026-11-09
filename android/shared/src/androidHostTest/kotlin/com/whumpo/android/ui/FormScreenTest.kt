@@ -38,6 +38,7 @@ import com.whumpo.android.ui.chat.forms.SendAttempt
 import com.whumpo.android.ui.chat.forms.SendOutcome
 import com.whumpo.android.ui.chat.forms.initialAnswers
 import com.whumpo.android.ui.chat.forms.mutation
+import com.whumpo.core.api.FrozenMutation
 import com.whumpo.core.api.InteractionReceipt
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
@@ -66,13 +67,13 @@ class FormScreenTest : RobolectricUiTest() {
     }
 
     private val open = ProposedFormsFixture.form()
-    private val request = open.mutation("77777777-7777-4777-8777-000000000002", "submit", JsonObject(emptyMap()))
+    private val request = FrozenMutation(open.mutation("77777777-7777-4777-8777-000000000002", "submit", JsonObject(emptyMap())), byteArrayOf())
 
     private fun openState(send: FormSendState = FormSendState(), errors: Map<String, String> = emptyMap(), focus: Int = 0) =
         FormScreenState(open, open.definition.initialAnswers(null), errors, focus, send = send)
 
     private fun committed(operation: String = "submit") = open.mutation("77777777-7777-4777-8777-000000000002", operation, JsonObject(emptyMap())).let {
-        SendAttempt(it, SendOutcome.Committed, InteractionReceipt(1, it.requestId, it.interactionId, it.operation, 1))
+        SendAttempt(FrozenMutation(it, byteArrayOf()), SendOutcome.Committed, InteractionReceipt(1, it.requestId, it.interactionId, it.operation, 1))
     }
 
     private val noClick = SemanticsMatcher.keyNotDefined(SemanticsActions.OnClick)

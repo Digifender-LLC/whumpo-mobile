@@ -1,5 +1,6 @@
 package com.whumpo.android.ui.chat.forms
 
+import com.whumpo.core.api.FrozenMutation
 import com.whumpo.core.api.InteractionMutateRequest
 import com.whumpo.core.api.InteractionReceipt
 import com.whumpo.core.api.MobileApiException
@@ -15,7 +16,9 @@ import kotlinx.serialization.json.JsonObject
 
 /** The interaction routes the form screen uses. */
 interface FormApi {
-    suspend fun mutate(request: InteractionMutateRequest): InteractionReceipt
+    /** Validates and encodes a mutation once; its bytes are sent unchanged by every retry. */
+    fun freeze(request: InteractionMutateRequest): FrozenMutation
+    suspend fun mutate(mutation: FrozenMutation): InteractionReceipt
     suspend fun receipt(requestId: String): InteractionReceipt
     suspend fun read(interactionId: String): JsonObject
 }
@@ -35,14 +38,18 @@ enum class SendOutcome {
     Rejected,
 }
 
-/** One mutation attempt. [request] is built once and every retry sends this same object. */
+/** One mutation attempt. [mutation] is encoded once and every retry sends its exact bytes. */
 data class SendAttempt(
-    val request: InteractionMutateRequest,
+    val mutation: FrozenMutation,
     val outcome: SendOutcome,
     val receipt: InteractionReceipt? = null,
     val problem: String? = null,
     val updateRequired: Boolean = false,
-)
+    /** A `422` field problem names this field; shown there when it is in the form, else at form level. */
+    val fieldId: String? = null,
+) {
+    val request: InteractionMutateRequest get() = mutation.request
+}
 
 /** Text for the one status live region; a new [id] means announce it, even when the text repeats. */
 data class Notice(val id: Int, val text: String)
@@ -99,9 +106,13 @@ class FormSubmitter(
         if (!s.canStart || form.state != FormState.Open) return false
         if (operation != "cancel" && answers == null) return false
         val revision = maxOf(form.answerRevision, s.attempt?.receipt?.answerRevision ?: 0)
-        val request = form.copy(answerRevision = revision).mutation(newId(), operation, answers)
-        _state.update { it.copy(attempt = SendAttempt(request, SendOutcome.Sending), feedback = null, followUpFailed = false) }
-        send(request)
+        val mutation = try {
+            api.freeze(form.copy(answerRevision = revision).mutation(newId(), operation, answers))
+        } catch (_: IllegalArgumentException) {
+            return false
+        }
+        _state.update { it.copy(attempt = SendAttempt(mutation, SendOutcome.Sending), feedback = null, followUpFailed = false) }
+        send(mutation)
         return true
     }
 
@@ -125,7 +136,7 @@ class FormSubmitter(
                 }
                 return@launch
             }
-            if (g == generation) settle(attempt.request, receipt)
+            if (g == generation) settle(attempt.mutation, receipt)
         }
     }
 
@@ -133,7 +144,7 @@ class FormSubmitter(
     fun sendAgain() {
         val attempt = _state.value.attempt?.takeIf { it.outcome == SendOutcome.NotReceived } ?: return
         _state.update { it.copy(attempt = attempt.copy(outcome = SendOutcome.Sending), feedback = null) }
-        send(attempt.request)
+        send(attempt.mutation)
     }
 
     /** Explicit tap: rereads the form. Ignored while another read runs. */
@@ -142,25 +153,26 @@ class FormSubmitter(
     /** The signed-in account changed: drop every attempt and ignore replies still in flight. */
     fun reset() {
         generation += 1
+        conflictRead = null
         announced.clear()
         followUps.clear()
         _state.value = FormSendState()
     }
 
-    private fun send(request: InteractionMutateRequest) {
+    private fun send(mutation: FrozenMutation) {
         val g = generation
         scope.launch {
             // A call queued before [reset] never reaches the API for the new account.
             if (g != generation) return@launch
             val receipt = try {
-                api.mutate(request)
+                api.mutate(mutation)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (g == generation) fail(request, e)
+                if (g == generation) fail(mutation, e)
                 return@launch
             }
-            if (g == generation) settle(request, receipt)
+            if (g == generation) settle(mutation, receipt)
         }
     }
 
@@ -169,32 +181,43 @@ class FormSubmitter(
      * ID. Everything else, including `unavailable`, `rate_limited`, a code at the wrong status, an unknown code or
      * a malformed reply, leaves the outcome unknown until a tapped receipt check settles it.
      */
-    private fun fail(request: InteractionMutateRequest, e: Exception) {
+    private fun fail(mutation: FrozenMutation, e: Exception) {
         val notSent = "Your answers weren't sent. Check them and try again."
         val attempt = when (e) {
             is MobileApiException.Transport ->
-                SendAttempt(request, if (e.outcomeUnknown) SendOutcome.Unknown else SendOutcome.NotReceived)
+                SendAttempt(mutation, if (e.outcomeUnknown) SendOutcome.Unknown else SendOutcome.NotReceived)
             is MobileApiException.ClientUpdateRequired ->
-                SendAttempt(request, SendOutcome.Rejected, problem = "Update Whumpo to answer this form.", updateRequired = true)
+                SendAttempt(mutation, SendOutcome.Rejected, problem = "Update Whumpo to answer this form.", updateRequired = true)
             is MobileApiException.StaleRevision ->
-                SendAttempt(request, SendOutcome.Rejected, problem = "This form changed. Reload it to see the latest version.")
+                SendAttempt(mutation, SendOutcome.Rejected, problem = "This form changed. Reload it to see the latest version.")
             is MobileApiException.NotFound ->
-                SendAttempt(request, SendOutcome.Rejected, problem = "This form is no longer available.")
+                SendAttempt(mutation, SendOutcome.Rejected, problem = "This form is no longer available.")
             is MobileApiException.ProofRequired, is MobileApiException.IdentityIncomplete ->
-                SendAttempt(request, SendOutcome.Rejected, problem = "Sign in again, then send your answers.")
+                SendAttempt(mutation, SendOutcome.Rejected, problem = "Sign in again, then send your answers.")
+            is MobileApiException.FieldProblem ->
+                SendAttempt(mutation, SendOutcome.Rejected, problem = e.message, fieldId = e.fieldId)
+            // An unmapped interaction 409: reread to explain it, but only a receipt check settles the write.
+            is MobileApiException.Unrecognized -> SendAttempt(mutation, SendOutcome.Unknown).also {
+                if (e.status == 409 && e.code != null) conflictRead = mutation.request.expectedAnswerRevision
+            }
             is MobileApiException.ValidationFailed, is MobileApiException.OnboardingRequired,
             is MobileApiException.PayloadTooLarge, is MobileApiException.UnsupportedMediaType ->
-                SendAttempt(request, SendOutcome.Rejected, problem = notSent)
-            else -> SendAttempt(request, SendOutcome.Unknown)
+                SendAttempt(mutation, SendOutcome.Rejected, problem = notSent)
+            else -> SendAttempt(mutation, SendOutcome.Unknown)
         }
         _state.update { it.copy(attempt = attempt) }
+        conflictRead?.let { expected ->
+            conflictRead = null
+            read(mutation.request.interactionId, automatic = true, conflict = expected)
+        }
     }
 
-    private fun settle(request: InteractionMutateRequest, receipt: InteractionReceipt) {
+    private fun settle(mutation: FrozenMutation, receipt: InteractionReceipt) {
+        val request = mutation.request
         val matches = receipt.requestId == request.requestId && receipt.interactionId == request.interactionId &&
             receipt.operation == request.operation
         if (!matches) {
-            _state.update { it.copy(attempt = SendAttempt(request, SendOutcome.Unknown)) }
+            _state.update { it.copy(attempt = SendAttempt(mutation, SendOutcome.Unknown)) }
             return
         }
         val key = "${request.operation}:${request.requestId}"
@@ -202,14 +225,16 @@ class FormSubmitter(
         val first = announced.add(key)
         _state.update {
             it.copy(
-                attempt = SendAttempt(request, SendOutcome.Committed, receipt),
+                attempt = SendAttempt(mutation, SendOutcome.Committed, receipt),
                 status = if (first) notice(text) else it.status,
             )
         }
         if (request.operation == "submit" && followUps.add(key)) read(request.interactionId, automatic = true)
     }
 
-    private fun read(interactionId: String, automatic: Boolean) {
+    private var conflictRead: Int? = null
+
+    private fun read(interactionId: String, automatic: Boolean, conflict: Int? = null) {
         if (_state.value.reading) return
         val a = _state.value.attempt
         val nextStep = a != null && a.outcome == SendOutcome.Committed && a.request.operation == "submit"
@@ -228,6 +253,7 @@ class FormSubmitter(
             if (g != generation) return@launch
             val ok = read != null && (!nextStep || read is FormRead.UpdateRequired || (read as? FormRead.Form)?.submission != null)
             val text = when {
+                conflict != null -> conflictText(read, conflict)
                 nextStep -> if (ok) "Next step loaded" else "Couldn't load the next step"
                 savedDraft -> if (ok) "Saved draft reloaded" else "Couldn't reload the saved draft"
                 else -> if (ok) "Form reloaded" else "Couldn't reload the form"
@@ -237,9 +263,21 @@ class FormSubmitter(
                     reading = false,
                     reread = read ?: s.reread,
                     followUpFailed = nextStep && !ok,
-                    feedback = if (automatic) s.feedback else notice(text),
+                    feedback = if (automatic && conflict == null) s.feedback else notice(text),
                 )
             }
+        }
+    }
+
+    /** Classifies a reread after an unmapped interaction `409` (docs/mobile-api-forms-proposal.md). */
+    private fun conflictText(read: FormRead?, expectedRevision: Int): String {
+        val form = read as? FormRead.Form
+        return when {
+            form == null -> "This form changed. Check whether your answers arrived."
+            form.replacementInteractionId != null -> "This form was replaced by a newer one."
+            form.state != FormState.Open -> "This form is no longer open."
+            form.answerRevision > expectedRevision -> "These answers changed on another device. Check whether yours arrived."
+            else -> "This form changed. Check whether your answers arrived."
         }
     }
 
