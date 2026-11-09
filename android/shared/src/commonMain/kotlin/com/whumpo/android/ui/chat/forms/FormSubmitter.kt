@@ -1,0 +1,237 @@
+package com.whumpo.android.ui.chat.forms
+
+import com.whumpo.core.api.InteractionMutateRequest
+import com.whumpo.core.api.InteractionReceipt
+import com.whumpo.core.api.MobileApiException
+import com.whumpo.core.api.newRequestId
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+
+/** The interaction routes the form screen uses. */
+interface FormApi {
+    suspend fun mutate(request: InteractionMutateRequest): InteractionReceipt
+    suspend fun receipt(requestId: String): InteractionReceipt
+    suspend fun read(interactionId: String): JsonObject
+}
+
+enum class SendOutcome {
+    Sending,
+
+    /** No usable reply: the write may have committed. Only a tapped receipt check resolves it. */
+    Unknown,
+    Checking,
+
+    /** The receipt check found nothing recorded. Only Send again, with the same request, is offered. */
+    NotReceived,
+    Committed,
+
+    /** A contract error: nothing was committed, so the owner may edit and send with a new request ID. */
+    Rejected,
+}
+
+/** One mutation attempt. [request] is built once and every retry sends this same object. */
+data class SendAttempt(
+    val request: InteractionMutateRequest,
+    val outcome: SendOutcome,
+    val receipt: InteractionReceipt? = null,
+    val problem: String? = null,
+    val updateRequired: Boolean = false,
+)
+
+/** Text for the one status live region; a new [id] means announce it, even when the text repeats. */
+data class Notice(val id: Int, val text: String)
+
+data class FormSendState(
+    val attempt: SendAttempt? = null,
+    val status: Notice? = null,
+    val feedback: Notice? = null,
+    val reading: Boolean = false,
+    /** The latest reread, or null before any. */
+    val reread: FormRead? = null,
+    /** The one automatic read after a confirmed send failed or showed no submission. */
+    val followUpFailed: Boolean = false,
+) {
+    val unresolved: Boolean
+        get() = attempt?.outcome.let { it == SendOutcome.Sending || it == SendOutcome.Unknown || it == SendOutcome.Checking || it == SendOutcome.NotReceived }
+
+    /** A new mutation (and a new request ID) is allowed only after a conclusive outcome and while nothing reads. */
+    val canStart: Boolean
+        get() {
+            val a = attempt
+            val closed = a != null && a.outcome == SendOutcome.Committed && a.request.operation != "save-draft"
+            return !unresolved && !reading && !closed
+        }
+
+    /** Latest of [status] and [feedback]: the single live region shows only this. */
+    val announcement: Notice? get() = listOfNotNull(status, feedback).maxByOrNull { it.id }
+}
+
+/**
+ * Sends one form's mutations with the chat-send recovery rules (docs/android/chat-forms.md): no automatic resend,
+ * no polling, no new request ID while an outcome is unresolved, and every check or retry is an explicit tap. The
+ * only automatic call is one follow-up read per confirmed submit for the lifetime of this object, which is the screen
+ * visit: keep it across recreation and pane changes, and call [reset] when the signed-in account changes.
+ * PENDING ADOPTION: driven by [ProposedFormWire] reads; not reached from the live chat until that contract is adopted.
+ */
+class FormSubmitter(
+    private val api: FormApi,
+    private val wire: ProposedFormWire,
+    private val scope: CoroutineScope,
+    private val newId: () -> String = ::newRequestId,
+) {
+    private val _state = MutableStateFlow(FormSendState())
+    val state: StateFlow<FormSendState> = _state.asStateFlow()
+
+    private var generation = 0
+    private var notices = 0
+    private val announced = mutableSetOf<String>()
+    private val followUps = mutableSetOf<String>()
+
+    /** Starts `submit`, `save-draft` or `cancel` on [form]. Returns false, sending nothing, when not allowed. */
+    fun start(form: FormRead.Form, operation: String, answers: JsonObject?): Boolean {
+        val s = _state.value
+        if (!s.canStart || form.state != FormState.Open) return false
+        if (operation != "cancel" && answers == null) return false
+        val revision = maxOf(form.answerRevision, s.attempt?.receipt?.answerRevision ?: 0)
+        val request = form.copy(answerRevision = revision).mutation(newId(), operation, answers)
+        _state.update { it.copy(attempt = SendAttempt(request, SendOutcome.Sending), feedback = null, followUpFailed = false) }
+        send(request)
+        return true
+    }
+
+    /** Explicit tap after [SendOutcome.Unknown]: reads the receipt for the original request ID. */
+    fun checkAgain() {
+        val attempt = _state.value.attempt?.takeIf { it.outcome == SendOutcome.Unknown } ?: return
+        _state.update { it.copy(attempt = attempt.copy(outcome = SendOutcome.Checking)) }
+        val g = generation
+        scope.launch {
+            val receipt = try {
+                api.receipt(attempt.request.requestId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (g != generation) return@launch
+                if (e is MobileApiException.NotFound) {
+                    _state.update { it.copy(attempt = attempt.copy(outcome = SendOutcome.NotReceived)) }
+                } else {
+                    _state.update { it.copy(attempt = attempt.copy(outcome = SendOutcome.Unknown), feedback = notice("Still couldn't check. Try again.")) }
+                }
+                return@launch
+            }
+            if (g == generation) settle(attempt.request, receipt)
+        }
+    }
+
+    /** Explicit tap after [SendOutcome.NotReceived]: sends the identical request again. */
+    fun sendAgain() {
+        val attempt = _state.value.attempt?.takeIf { it.outcome == SendOutcome.NotReceived } ?: return
+        _state.update { it.copy(attempt = attempt.copy(outcome = SendOutcome.Sending), feedback = null) }
+        send(attempt.request)
+    }
+
+    /** Explicit tap: rereads the form. Ignored while another read runs. */
+    fun reload(interactionId: String) = read(interactionId, automatic = false)
+
+    /** The signed-in account changed: drop every attempt and ignore replies still in flight. */
+    fun reset() {
+        generation += 1
+        announced.clear()
+        followUps.clear()
+        _state.value = FormSendState()
+    }
+
+    private fun send(request: InteractionMutateRequest) {
+        val g = generation
+        scope.launch {
+            val receipt = try {
+                api.mutate(request)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (g == generation) fail(request, e)
+                return@launch
+            }
+            if (g == generation) settle(request, receipt)
+        }
+    }
+
+    private fun fail(request: InteractionMutateRequest, e: Exception) {
+        val attempt = when (e) {
+            is MobileApiException.Transport ->
+                SendAttempt(request, if (e.outcomeUnknown) SendOutcome.Unknown else SendOutcome.NotReceived)
+            // No contract body, or the ID already holds a write: the outcome is not known.
+            is MobileApiException.Unrecognized, is MobileApiException.InvalidResponse, is MobileApiException.RequestConflict ->
+                SendAttempt(request, SendOutcome.Unknown)
+            is MobileApiException.ClientUpdateRequired ->
+                SendAttempt(request, SendOutcome.Rejected, problem = "Update Whumpo to answer this form.", updateRequired = true)
+            is MobileApiException.StaleRevision ->
+                SendAttempt(request, SendOutcome.Rejected, problem = "This form changed. Reload it to see the latest version.")
+            is MobileApiException -> SendAttempt(request, SendOutcome.Rejected, problem = "Your answers weren't sent. Check them and try again.")
+            else -> SendAttempt(request, SendOutcome.Unknown)
+        }
+        _state.update { it.copy(attempt = attempt) }
+    }
+
+    private fun settle(request: InteractionMutateRequest, receipt: InteractionReceipt) {
+        val matches = receipt.requestId == request.requestId && receipt.interactionId == request.interactionId &&
+            receipt.operation == request.operation
+        if (!matches) {
+            _state.update { it.copy(attempt = SendAttempt(request, SendOutcome.Unknown)) }
+            return
+        }
+        val key = "${request.operation}:${request.requestId}"
+        val text = when (request.operation) { "submit" -> "Sent"; "save-draft" -> "Saved"; else -> "Canceled" }
+        val first = announced.add(key)
+        _state.update {
+            it.copy(
+                attempt = SendAttempt(request, SendOutcome.Committed, receipt),
+                status = if (first) notice(text) else it.status,
+            )
+        }
+        if (request.operation == "submit" && followUps.add(key)) read(request.interactionId, automatic = true)
+    }
+
+    private fun read(interactionId: String, automatic: Boolean) {
+        if (_state.value.reading) return
+        val a = _state.value.attempt
+        val nextStep = a != null && a.outcome == SendOutcome.Committed && a.request.operation == "submit"
+        val savedDraft = a != null && a.outcome == SendOutcome.Committed && a.request.operation == "save-draft"
+        _state.update { it.copy(reading = true) }
+        val g = generation
+        scope.launch {
+            val read = try {
+                wire.decode(api.read(interactionId))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            if (g != generation) return@launch
+            val ok = read != null && (!nextStep || read is FormRead.UpdateRequired || (read as? FormRead.Form)?.submission != null)
+            val text = when {
+                nextStep -> if (ok) "Next step loaded" else "Couldn't load the next step"
+                savedDraft -> if (ok) "Saved draft reloaded" else "Couldn't reload the saved draft"
+                else -> if (ok) "Form reloaded" else "Couldn't reload the form"
+            }
+            _state.update { s ->
+                s.copy(
+                    reading = false,
+                    reread = read ?: s.reread,
+                    followUpFailed = nextStep && !ok,
+                    feedback = if (automatic) s.feedback else notice(text),
+                )
+            }
+        }
+    }
+
+    private fun notice(text: String): Notice {
+        notices += 1
+        return Notice(notices, text)
+    }
+}

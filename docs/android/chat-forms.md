@@ -1,8 +1,13 @@
 # Native chat forms (design)
 
-Status: design only. Wire parsing and UI code wait for a public, synthetic
-snapshot of the interaction definition contract (see Dependencies). Nothing here
-changes the client header, admitted field types or bindings.
+Status: client implementation pending contract adoption. The model, decoder,
+send recovery and Compose screen live in
+`android/shared/src/commonMain/kotlin/com/whumpo/android/ui/chat/forms/`, built
+against the synthetic proposal in `docs/mobile-api-forms-proposal.md` and
+`tests/fixtures/proposed/forms.json`. That proposal is not yet the adopted
+contract, so nothing here is reached from the live chat: the interaction card
+still shows its placeholder, and the client header, admitted field types and
+bindings are unchanged.
 
 ## Goal
 
@@ -94,27 +99,34 @@ A `426 client_update_required` read or a definition outside the admitted subset
 shows the existing update-required pattern inside the card and form: "Update
 Whumpo to answer this form." with the update action. No field is rendered.
 
-## Tests and evidence (planned)
+## Tests and evidence
 
-- JVM: form state, validation per field type, request-ID reuse, receipt
-  readback, stale re-read, reconcile, update-required, using synthetic fixtures.
-- Roborazzi goldens: card states and form states (empty, filled, errors,
-  sending, lost reply, sent, update-required) at compact and expanded widths,
-  light and dark, and 200% font. Baselines are recorded locally and verified
-  in CI.
-- Instrumented: a separate forms test for keyboard and TalkBack-relevant
-  semantics.
-- Not covered: the live Worker, physical devices, release builds and customer
-  acceptance.
+- JVM (`jvmCommonTest/.../chat/forms/`): every proposed read decodes with its
+  state; every update-required case and 39 malformed variants fail closed;
+  validation per field type; hidden and empty answers are never sent;
+  mutations match the fixture requests; the seven invalid mutations are
+  refused; daylight-saving gaps and repeats are never guessed; one request per
+  attempt, receipt check only on tap, Send again reuses the same request
+  object, one automatic read per confirmed submit, separate announcements for
+  separate saves, and an account change drops pending work and late replies.
+- Host UI (`androidHostTest/.../FormScreenTest.kt`): update required shows no
+  fields and no Get help; required labels; 48dp targets; first-problem focus;
+  Sent is status text; an unconfirmed send offers only Check again, and not
+  received only Send again; actions stay reachable at 200% text and on wide
+  screens; submitted answers are read-only with "Name not loaded".
+- Not yet covered: Roborazzi goldens for the form (none recorded), the
+  keyboard and TalkBack instrumented test, the resources picker paging, live
+  Worker, physical devices, release builds and customer acceptance.
 
 ## Dependencies
 
-- A public, synthetic snapshot of the interaction contract: the definition
-  object and digest placement, per-type field schema and constraints, answer
-  encoding, states and list items, field-level and stale errors, receipt to
-  submission linkage, and a definition exercising every admitted type plus a
-  426 case. It lands in `docs/mobile-api-v1.md` and `tests/fixtures/mobile-v1/`
-  and updates the website's compatibility pin.
-- Shared test helpers and the existing keyboard, large-text and accessibility
-  instrumented tests are changed by an open onboarding PR; forms code avoids them
-  until that PR lands.
+- Adoption of the native forms read, resources and 422 shapes into
+  `docs/mobile-api-v1.md` and `tests/fixtures/mobile-v1/`, with the paired
+  website fixture copy and compatibility pin. Until then the decoder stays
+  unreached and the chat card keeps its placeholder.
+- Then: route `interaction.read` through `ProposedFormWire`, implement
+  `FormApi` on `MobileApiClient`, open the form from the chat card, add 422
+  `fieldId` handling to `MobileApiException`, and keep `FormSubmitter` per
+  interaction for the screen visit, resetting it on account change.
+- The `Whumpo-Client` header already declares all nine field types; that must
+  match what the build renders when the screen is wired.

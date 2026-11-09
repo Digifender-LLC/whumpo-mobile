@@ -1,0 +1,169 @@
+package com.whumpo.android.ui.chat.forms
+
+import com.whumpo.android.ui.chat.forms.ProposedFormsFixture.form
+import com.whumpo.android.ui.chat.forms.ProposedFormsFixture.group
+import com.whumpo.android.ui.chat.forms.ProposedFormsFixture.read
+import com.whumpo.android.ui.chat.forms.ProposedFormsFixture.wire
+import com.whumpo.core.api.InteractionMutateRequest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+/** The pending-adoption decoder against tests/fixtures/proposed/forms.json. */
+class ProposedFormWireTest {
+    private val clientJson = Json { encodeDefaults = true; explicitNulls = true }
+
+    @Test
+    fun everyReadFixtureDecodesWithItsState() {
+        val reads = group("reads")
+        assertEquals(12, reads.size)
+        for ((name, r) in reads) {
+            val decoded = assertIs<FormRead.Form>(wire.decode(r.jsonObject), name)
+            assertEquals(r.jsonObject.getValue("state").jsonPrimitive.content, decoded.state.wire, name)
+        }
+    }
+
+    @Test
+    fun everyUpdateRequiredFixtureFailsClosed() {
+        val cases = group("updateRequired")
+        assertEquals(9, cases.size)
+        for ((name, r) in cases) assertEquals(FormRead.UpdateRequired, wire.decode(r.jsonObject), name)
+    }
+
+    @Test
+    fun openFormKeepsFieldOrderTypesAndConditions() {
+        val f = form()
+        assertEquals(
+            listOf("short-text", "long-text", "choice", "multi-choice", "include-details", "details", "quantity", "date", "datetime", "project", "projects"),
+            f.definition.fields.map { it.id },
+        )
+        val kinds = f.definition.fields.map { it.kind::class.simpleName }
+        assertEquals(listOf("Text", "Text", "Choice", "MultiChoice", "YesNo", "Text", "Number", "Date", "DateTime", "Resource", "Resource"), kinds)
+        val choice = f.definition.fields.single { it.id == "choice" }
+        assertEquals(Answer.One("option-a"), choice.default)
+        assertTrue(choice.suggested)
+        assertEquals(ShowWhen("include-details", Answer.Flag(true)), f.definition.fields.single { it.id == "details" }.showWhen)
+        assertEquals("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", f.definitionDigest)
+        assertNull(f.draft)
+        assertNull(f.submission)
+    }
+
+    @Test
+    fun extraReadAndEnvelopeMetadataIsIgnored() {
+        assertEquals(form("open").definition, form("openWithMetadata").definition)
+    }
+
+    @Test
+    fun draftsSubmissionsAndReplacementsDecode() {
+        assertEquals(
+            mapOf("short-text" to Answer.Text("Synthetic draft"), "include-details" to Answer.Flag(true), "details" to Answer.Text("Synthetic conditional answer")),
+            form("draft").draft,
+        )
+        assertEquals(emptyMap(), form("emptyDraft").draft)
+        val submitted = form("submitted").submission!!
+        assertEquals(Answer.Flag(false), submitted.answers["include-details"])
+        assertEquals(Answer.Number("25"), submitted.answers["quantity"])
+        assertEquals(Answer.Text("2030-03-04T15:30:00.000Z"), submitted.answers["datetime"])
+        assertNull(submitted.continuation)
+        assertIs<JsonObject>(form("submittedWithContinuation").submission!!.continuation)
+        assertEquals("66666666-6666-4666-8666-000000000030", form("replaced").replacementInteractionId)
+        assertNull(form("superseded").replacementInteractionId)
+    }
+
+    @Test
+    fun malformedOrUnsupportedReadsFailClosed() {
+        val open = read("open")
+        val f = "envelope.definition.fields"
+        val cases: List<Pair<String, JsonElement?>> = listOf(
+            "version" to JsonPrimitive(2),
+            "state" to null,
+            "draft" to null,
+            "answerRevision" to JsonPrimitive(-1),
+            "draft" to JsonPrimitive("text"),
+            "draft" to JsonObject(mapOf("details" to JsonPrimitive("hidden while include-details is unanswered"))),
+            "draft" to JsonObject(mapOf("unknown-field" to JsonPrimitive("x"))),
+            "draft" to JsonObject(mapOf("quantity" to JsonPrimitive(7))),
+            "state" to JsonPrimitive("submitted"),
+            "envelope.id" to JsonPrimitive("not-a-uuid"),
+            "envelope.definitionDigest" to JsonPrimitive(""),
+            "envelope.definition" to null,
+            "envelope.definition.title" to JsonPrimitive("x".repeat(101)),
+            "envelope.definition.continuationBinding" to JsonPrimitive("example.other@1"),
+            f to JsonArray(emptyList()),
+            "$f.0.constraints.maxLength" to JsonPrimitive("120"),
+            "$f.0.constraints.maxLength" to JsonPrimitive(201),
+            "$f.0.label" to JsonPrimitive("x".repeat(81)),
+            "$f.0.label" to JsonPrimitive(""),
+            "$f.0.required" to JsonPrimitive("true"),
+            "$f.0.binding" to null,
+            "$f.1.id" to JsonPrimitive("short-text"),
+            "$f.1.id" to JsonPrimitive("Long-Text"),
+            "$f.2.constraints.options.1.id" to JsonPrimitive("option-a"),
+            "$f.2.default.value" to JsonPrimitive("option-z"),
+            "$f.2.default.provenance" to JsonPrimitive("guessed"),
+            "$f.4.constraints.extra" to JsonPrimitive(true),
+            "$f.5.when.fieldId" to JsonPrimitive("quantity"),
+            "$f.5.when.fieldId" to JsonPrimitive("projects"),
+            "$f.5.when.equals" to JsonPrimitive("yes"),
+            "$f.6.constraints.min" to JsonPrimitive(200),
+            "$f.6.constraints.step" to JsonPrimitive(0),
+            "$f.6.constraints.max" to JsonPrimitive(2e9),
+            "$f.7.type" to JsonPrimitive("Date"),
+            "$f.8.constraints.zone" to JsonPrimitive("Example/Nowhere"),
+            "$f.9.constraints.maxItems" to JsonPrimitive(2),
+            "$f.9.constraints.collection" to JsonPrimitive("photos"),
+            "$f.10.constraints.maxItems" to JsonPrimitive(6),
+            "$f.10.group" to JsonPrimitive(3),
+        )
+        for ((path, value) in cases) {
+            assertEquals(FormRead.UpdateRequired, wire.decode(open.edit(path, value)), "$path = $value")
+        }
+    }
+
+    @Test
+    fun mutationsMatchTheFixtureRequests() {
+        val f = form()
+        for ((name, operation) in listOf("saveDraft" to "save-draft", "submit" to "submit", "cancel" to "cancel")) {
+            val expected = group("mutations").getValue(name).jsonObject
+            val request = f.mutation(
+                expected.getValue("requestId").jsonPrimitive.content,
+                operation,
+                expected["answers"]?.jsonObject,
+            )
+            assertEquals(expected, clientJson.encodeToJsonElement(InteractionMutateRequest.serializer(), request), name)
+        }
+        assertNull(f.mutation("77777777-7777-4777-8777-000000000009", "cancel", JsonObject(emptyMap())).answers)
+    }
+
+    @Test
+    fun fixtureAnswersFitAndInvalidOnesDoNot() {
+        val definition = form().definition
+        val mutations = group("mutations")
+        assertTrue(wire.answersFit(definition, mutations.getValue("saveDraft").jsonObject.getValue("answers").jsonObject, draft = true))
+        assertTrue(wire.answersFit(definition, mutations.getValue("submit").jsonObject.getValue("answers").jsonObject, draft = false))
+        val invalid = group("invalidMutations")
+        assertEquals(7, invalid.size)
+        for ((name, m) in invalid) {
+            val body = m.jsonObject
+            val draft = body.getValue("operation").jsonPrimitive.content == "save-draft"
+            assertFalse(wire.answersFit(definition, body.getValue("answers").jsonObject, draft), name)
+        }
+    }
+
+    @Test
+    fun submittedAnswersReencodeToTheirWireForm() {
+        val f = form("submitted")
+        val wireAnswers = read("submitted").getValue("submission").jsonObject.getValue("answers").jsonObject
+        assertEquals(wireAnswers, f.definition.encodeAnswers(f.submission!!.answers))
+    }
+}
