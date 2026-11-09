@@ -242,6 +242,29 @@ class ChatBehaviorTest : RobolectricUiTest() {
     }
 
     @Test
+    fun anOffPageRetryableFailureReopensWithoutSendingThenOffersExplicitTryAgain() {
+        val actions = Recorder()
+        val flow = ChatScenes.flow(ReviewStep.Failed, "The request was not found. You can try again with the same request.")
+        launch(Screen.Compact) {
+            ChatLayout(ChatScenes.screen(ChatScenes.ready.copy(turns = emptyList(), reviewChecks = listOf(flow))), WidthClass.Compact, actions, animated = false)
+        }.use {
+            compose.onNodeWithTag("review-open").assertIsEnabled().assertHeightIsAtLeast(48.dp).assert(hasText("Review change")).performClick()
+            compose.onNodeWithTag("review-check-open").assertDoesNotExist()
+        }
+        assertEquals(flow.turnId, actions.opened)
+        assertEquals(0, actions.confirms)
+        assertTrue(actions.reviewChecks.isEmpty())
+        launch(Screen.Compact) {
+            ReviewSheetContent(flow, actions, {})
+        }.use {
+            compose.onNodeWithTag("review-confirm").assertIsEnabled().assertHeightIsAtLeast(48.dp).assert(hasText("Try again")).performClick()
+            compose.onNodeWithTag("review-check").assertDoesNotExist()
+        }
+        assertEquals(1, actions.confirms)
+        assertTrue(actions.reviewChecks.isEmpty())
+    }
+
+    @Test
     fun aRunningConfirmIgnoresTaps() {
         launch(Screen.Compact) {
             ReviewSheetContent(ChatScenes.flow(ReviewStep.Confirming), Recorder(), {})

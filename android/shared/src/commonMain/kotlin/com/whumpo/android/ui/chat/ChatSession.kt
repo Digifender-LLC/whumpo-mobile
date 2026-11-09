@@ -71,6 +71,7 @@ data class ReviewFlow(
     val busy: Boolean get() = step == ReviewStep.Confirming || step == ReviewStep.Reauthenticating
     val canConfirm: Boolean get() = (step == ReviewStep.Ready || step == ReviewStep.Failed) && retryAllowed && review.control != null
     val canCheckOutcome: Boolean get() = step == ReviewStep.Pending || step == ReviewStep.Uncertain
+    val canReopen: Boolean get() = canCheckOutcome || (step == ReviewStep.Failed && canConfirm)
 }
 
 enum class HapticKind { Confirm, Reject }
@@ -90,7 +91,7 @@ data class ChatState(
     /** Text for the polite live region. */
     val announcement: String = "",
     val haptic: HapticCue? = null,
-    /** Retained request-specific checks remain reachable when a review is applied or leaves the newest page. */
+    /** Retained checks and permitted retries remain reachable when a review leaves the newest page. */
     val reviewChecks: List<ReviewFlow> = emptyList(),
 ) {
     val replyPending: Boolean get() = turns.any { it.status == "pending" }
@@ -337,9 +338,9 @@ class ChatSession(
     // ---- Review and confirm ----------------------------------------------------------------------------------------
 
     fun openReview(turnId: String) {
-        confirmAttempts.values.lastOrNull { it.turnId == turnId && it.canCheckOutcome }?.let { retained ->
+        confirmAttempts.values.lastOrNull { it.turnId == turnId && it.canReopen }?.let { retained ->
             mutable.update { it.copy(review = retained) }
-            checkReview(retained.requestId)
+            if (retained.canCheckOutcome) checkReview(retained.requestId)
             return
         }
         val turn = mutable.value.turns.firstOrNull { it.id == turnId } ?: return
@@ -534,7 +535,7 @@ class ChatSession(
             val flow = s.review
             s.copy(
                 review = if (flow != null && flow.requestId == requestId) flow.copy(step = step, message = message, retryAllowed = retryAllowed) else flow,
-                reviewChecks = confirmAttempts.values.filter { it.canCheckOutcome },
+                reviewChecks = confirmAttempts.values.filter { it.canReopen },
             )
         }
     }

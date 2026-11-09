@@ -91,6 +91,111 @@ class ReviewConfirmRecoveryTest {
     }
 
     @Test
+    fun aDismissedOffPageNotFoundAttemptRemainsReachableForAnExplicitIdenticalRetry() = runTest {
+        val ids = ArrayDeque(listOf(REQUEST, NEXT_REQUEST))
+        Fixture(backgroundScope, newId = { ids.removeFirst() }).use { f ->
+            f.loadAndOpen()
+            f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+            f.confirm()
+            assertEquals(ReviewStep.Uncertain, f.session.state.value.review?.step)
+            val original = f.server.posts.single()
+            f.session.dismissReview()
+            f.server.chatBody = page(revision = 90, empty = true)
+            f.server.receiptReply = { reply(ChatFixtures.error("not_found")) }
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            assertNull(f.session.state.value.review)
+            assertTrue(f.session.state.value.turns.isEmpty())
+            assertEquals(1, f.session.state.value.reviewChecks.size)
+            assertEquals(REQUEST, f.session.state.value.reviewChecks.single().requestId)
+            assertEquals(ReviewStep.Failed, f.session.state.value.reviewChecks.single().step)
+            assertTrue(f.session.state.value.reviewChecks.single().canConfirm)
+            assertFalse(f.session.state.value.reviewChecks.single().canCheckOutcome)
+            val reads = f.server.receiptIds.size
+
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.awaitIdle()
+            val reopened = f.session.state.value.review!!
+            assertEquals(REQUEST, reopened.requestId)
+            assertEquals(4, reopened.revision)
+            assertTrue(reopened.canConfirm)
+            assertEquals(reads, f.server.receiptIds.size)
+            assertEquals(1, f.server.posts.size)
+            f.session.dismissReview()
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.awaitIdle()
+            assertEquals(REQUEST, f.session.state.value.review?.requestId)
+            assertEquals(1, ids.size)
+            f.server.confirmReply = { reply(200, acknowledgment("completed")) }
+            f.confirm()
+            assertEquals(2, f.server.posts.size)
+            assertEquals(original, f.server.posts.last())
+            assertEquals(ReviewStep.Done, f.session.state.value.review?.step)
+            assertTrue(f.session.state.value.reviewChecks.isEmpty())
+        }
+    }
+
+    @Test
+    fun aRetainedOffPageRetryLosesPermissionWhenTheReviewReturnsWithdrawn() = runTest {
+        Fixture(backgroundScope).use { f ->
+            f.loadAndOpen()
+            f.server.chatBody = page(revision = 90, empty = true)
+            f.confirm()
+            assertTrue(f.session.state.value.reviewChecks.single().canConfirm)
+            f.session.dismissReview()
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.awaitIdle()
+            assertEquals(REQUEST, f.session.state.value.review?.requestId)
+            f.server.chatBody = page(revision = 100, applied = true)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            assertEquals(ReviewStep.NoLongerCurrent, f.session.state.value.review?.step)
+            assertFalse(f.session.state.value.review?.canConfirm == true)
+            assertTrue(f.session.state.value.reviewChecks.isEmpty())
+            f.session.confirmReview()
+            f.session.dismissReview()
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.confirmReview()
+            f.session.awaitIdle()
+            assertEquals(1, f.server.posts.size)
+            assertFalse(f.session.state.value.review?.canConfirm == true)
+        }
+    }
+
+    @Test
+    fun committedOutcomesAndResetDoNotLeaveAnOffPageRetryEntry() = runTest {
+        for (status in listOf("failed", "completed")) {
+            Fixture(backgroundScope).use { f ->
+                f.loadAndOpen()
+                f.server.chatBody = page(revision = 90, empty = true)
+                f.server.receiptReply = { reply(200, receipt(status)) }
+                f.confirm()
+                assertTrue(f.session.state.value.reviewChecks.isEmpty())
+                assertFalse(f.session.state.value.review?.canConfirm == true)
+                f.session.dismissReview()
+                f.session.openReview(ChatFixtures.SITE_TURN)
+                f.session.confirmReview()
+                f.session.awaitIdle()
+                assertNull(f.session.state.value.review)
+                assertEquals(1, f.server.posts.size)
+            }
+        }
+        Fixture(backgroundScope).use { f ->
+            f.loadAndOpen()
+            f.server.chatBody = page(revision = 90, empty = true)
+            f.confirm()
+            assertTrue(f.session.state.value.reviewChecks.single().canConfirm)
+            f.session.reset()
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.confirmReview()
+            f.session.awaitIdle()
+            assertTrue(f.session.state.value.reviewChecks.isEmpty())
+            assertNull(f.session.state.value.review)
+            assertEquals(1, f.server.posts.size)
+        }
+    }
+
+    @Test
     fun aDismissedUncertainRequestCanReopenAfterItsTurnLeavesThePage() = runTest {
         Fixture(backgroundScope).use { f ->
             f.loadAndOpen()
