@@ -127,9 +127,13 @@ Whumpo to answer this form." with the update action. No field is rendered.
   level otherwise; an unresolved send blocks edits and new writes.
 - API (`MobileApiClientTest`): 422 field problems only on interaction routes;
   retries send the frozen request bytes unchanged.
-- Not yet covered: Roborazzi goldens for the form (none recorded), the
-  keyboard and TalkBack instrumented test, live Worker, physical devices,
-  release builds and customer acceptance.
+- Device (`androidTest/.../FormDeviceTest.kt`, API 28 and 36 emulators in CI):
+  typed input sends nothing until Send; every field and action is reachable at
+  200% text, with 48dp actions and Accessibility Test Framework checks; the
+  action bar stays above the soft keyboard in the app window.
+- Not yet covered: Roborazzi goldens for the form (none recorded), physical
+  TalkBack, live Worker, physical devices, release builds and customer
+  acceptance.
 
 ## Wiring
 
