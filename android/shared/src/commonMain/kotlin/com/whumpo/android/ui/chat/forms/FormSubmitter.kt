@@ -198,7 +198,7 @@ class FormSubmitter(
                 SendAttempt(mutation, SendOutcome.Rejected, problem = e.message, fieldId = e.fieldId)
             // An unmapped interaction 409: reread to explain it, but only a receipt check settles the write.
             is MobileApiException.Unrecognized -> SendAttempt(mutation, SendOutcome.Unknown).also {
-                if (e.status == 409 && e.code != null) conflictRead = mutation.request.expectedAnswerRevision
+                if (e.status == 409 && e.code != "unrecognized") conflictRead = mutation.request.expectedAnswerRevision
             }
             is MobileApiException.ValidationFailed, is MobileApiException.OnboardingRequired,
             is MobileApiException.PayloadTooLarge, is MobileApiException.UnsupportedMediaType ->
