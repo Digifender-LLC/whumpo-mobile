@@ -285,6 +285,7 @@ class ProjectsViewModelTest {
         vm.addPhoto("content://media/picker/1")
         vm.photos.first { it.uploads.isEmpty() && api.requests.any { r -> r.method == HttpMethod.Put } }
 
+        assertEquals(seenBeforePut!!.id, store.removed.await())
         assertArrayEquals(photoBytes, seenBeforePut!!.jpeg)
         assertEquals("van.jpg", seenBeforePut!!.name)
         assertTrue(store.saved.isEmpty())

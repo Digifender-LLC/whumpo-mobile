@@ -223,7 +223,8 @@ class ChatSessionTest {
     }
 
     private val ok: Scripted =
-        { reply(200, ChatFixtures.body("review.confirm")) }
+        { reply(200, JsonObject(Json.parseToJsonElement(ChatFixtures.body("review.confirm")).jsonObject +
+            ("requestId" to JsonPrimitive(ChatFixtures.SEND_IDS.first()))).toString()) }
 
     @Test
     fun confirmUsesTheCurrentConversationRevisionEvenWhenTheReviewTurnIsOlder() = runTest {
@@ -322,11 +323,11 @@ class ChatSessionTest {
         s.openReview(ChatFixtures.SITE_TURN)
         s.confirmReview()
         s.awaitIdle()
-        // The conversation still shows the review as pending, so nothing is confirmed; one POST only.
+        // The request-specific 404 confirms nothing committed; the review's page state is not a receipt.
         assertEquals(1, server.count("/reviews/confirm"))
         val flow = s.state.value.review
         assertEquals(ReviewStep.Failed, flow?.step)
-        assertTrue(flow?.message.orEmpty().contains("Didn't hear back"))
+        assertTrue(flow?.message.orEmpty().contains("request was not found"))
     }
 
     @Test

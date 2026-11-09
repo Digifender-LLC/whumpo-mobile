@@ -69,8 +69,19 @@ internal fun expiryText(iso: String): String = iso.replace('T', ' ').take(16) + 
 
 /** The in-chat card for a review: status, then Review change (primary) and Open preview (secondary). Order and labels are fixed (D8). */
 @Composable
-fun ReviewCard(turn: ChatTurn, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit, modifier: Modifier = Modifier) {
-    val review = turn.review ?: return
+fun ReviewCard(turn: ChatTurn, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit, modifier: Modifier = Modifier, retained: ReviewFlow? = null) {
+    val review = turn.review ?: retained?.review ?: return
+    ReviewCardContent(review, turn.id, actions, onOpenPreview, modifier, retained?.canCheckOutcome == true)
+}
+
+/** The existing review card also keeps a retained check reachable outside the newest page. */
+@Composable
+internal fun ReviewCheckCard(flow: ReviewFlow, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit) {
+    ReviewCardContent(flow.review, flow.turnId, actions, onOpenPreview, Modifier, flow.canCheckOutcome)
+}
+
+@Composable
+private fun ReviewCardContent(review: Review, turnId: String, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit, modifier: Modifier, canCheckOutcome: Boolean) {
     val actionable = review.canApprove && review.state == "pending"
     val badge = when {
         review.kind !in setOf("specification", "site", "application", "app-restore") || review.unavailableReason == "client_update_required" -> "Update required"
@@ -87,8 +98,10 @@ fun ReviewCard(turn: ChatTurn, actions: ChatActions, onOpenPreview: (PreviewRef)
             review.project?.let { Text(it.name, style = MaterialTheme.typography.labelLarge, color = WhumpoTheme.colors.inkMuted) }
             Text(review.disclosure.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
             StatusBadge(badge, good = review.state == "applied")
-            if (actionable) {
-                WhumpoPrimaryButton({ actions.onOpenReview(turn.id) }, Modifier.heightIn(min = 48.dp).testTag("review-open")) { Text("Review change") }
+            if (canCheckOutcome) {
+                WhumpoPrimaryButton({ actions.onOpenReview(turnId) }, Modifier.heightIn(min = 48.dp).testTag("review-check-open")) { Text("Check again") }
+            } else if (actionable) {
+                WhumpoPrimaryButton({ actions.onOpenReview(turnId) }, Modifier.heightIn(min = 48.dp).testTag("review-open")) { Text("Review change") }
             }
             review.preview?.takeIf { actionable }?.let { preview ->
                 WhumpoSecondaryButton({ onOpenPreview(preview) }, Modifier.heightIn(min = 48.dp).testTag("review-card-preview")) { Text("Open preview") }
@@ -140,6 +153,13 @@ fun ReviewSheetContent(flow: ReviewFlow, actions: ChatActions, onOpenPreview: (P
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when (flow.step) {
                 ReviewStep.Done -> WhumpoPrimaryButton(actions::onDismissReview, Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("review-done")) { Text("Done") }
+                ReviewStep.Pending, ReviewStep.Uncertain -> {
+                    WhumpoPrimaryButton(
+                        { actions.onCheckReview(flow.requestId) },
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("review-check"),
+                    ) { Text("Check again") }
+                    WhumpoQuietButton(actions::onDismissReview, Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("review-dismiss")) { Text("Not now") }
+                }
                 else -> {
                     val label = when (flow.step) {
                         ReviewStep.Reauthenticating -> "Checking your passkey..."

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -27,7 +28,7 @@ import kotlinx.coroutines.launch
  */
 class ChatViewModel(
     private val drafts: ChatDraftRepository,
-    account: AccountRepository,
+    private val account: AccountRepository,
     client: MobileApiClient,
     clientInfo: ClientInfo,
     reauth: ReauthHook,
@@ -114,9 +115,23 @@ class ChatViewModel(
 
     override fun onDiscardUnsent() = session.discardUnsent()
 
-    override fun onOpenReview(turnId: String) = session.openReview(turnId)
+    override fun onOpenReview(turnId: String) {
+        withCurrentSession { session.openReview(turnId) }
+    }
 
     override fun onConfirmReview() = session.confirmReview()
+
+    override fun onCheckReview(requestId: String) {
+        withCurrentSession { session.checkReview(requestId) }
+    }
+
+    // A stale UI callback can arrive before the account collector has reset the session.
+    private fun withCurrentSession(action: () -> Unit) {
+        val owner = mutableState.value.owner ?: return
+        viewModelScope.launch {
+            if (account.activeAccount.firstOrNull() == owner && mutableState.value.owner == owner) action()
+        }
+    }
 
     override fun onDismissReview() = session.dismissReview()
 
