@@ -9,11 +9,13 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.time.format.ResolverStyle
 
 /** [ZoneTime] on java.time, shared by the Android and JVM targets. */
 object JavaZoneTime : ZoneTime {
     private val wire = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
-    private val hm = DateTimeFormatter.ofPattern("HH:mm")
+    // STRICT: the default SMART style reads "24:00" as midnight of the same date.
+    private val hm = DateTimeFormatter.ofPattern("HH:mm").withResolverStyle(ResolverStyle.STRICT)
 
     private fun zoneOf(zone: String): ZoneId? = try {
         if (zone in ZoneId.getAvailableZoneIds() || zone == "UTC") ZoneId.of(zone) else null
