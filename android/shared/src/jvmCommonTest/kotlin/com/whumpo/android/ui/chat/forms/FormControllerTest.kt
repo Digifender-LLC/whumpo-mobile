@@ -9,6 +9,7 @@ import com.whumpo.core.api.MobileApiException
 import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -479,6 +480,66 @@ class FormControllerTest {
         c.onSaveDraft()
         assertTrue("short-text" in c.screen().errors, "the new 5-character limit still applies")
         assertTrue(api.sent.isEmpty())
+    }
+
+    private fun savedRead(text: String) = read("draft").edit("draft.short-text", JsonPrimitive(text)).edit("answerRevision", JsonPrimitive(2))
+
+    @Test
+    fun editsAfterASuccessfulSaveSurviveCloseAndReopen() = test { api ->
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("short-text", Answer.Text("Synthetic A"))
+        c.onSaveDraft()
+        val saved = api.sent.single()
+        val savedBytes = saved.bytes()
+        assertEquals(SendOutcome.Committed, c.screen().send.attempt?.outcome)
+        c.onAnswer("short-text", Answer.Text("Synthetic B"))
+        val b = c.screen().answers
+        c.onClose()
+        api.onRead = { savedRead("Synthetic A") }
+        c.open(DRAFT_ID)
+        assertEquals(b, c.screen().answers)
+        assertNull(c.screen().review)
+        assertEquals(1, api.sent.size, "closing and reopening send nothing")
+        c.onSaveDraft()
+        val next = api.sent[1]
+        assertNotEquals(saved.request.requestId, next.request.requestId)
+        assertEquals(2, next.request.expectedAnswerRevision)
+        assertTrue("Synthetic B" in next.bytes().decodeToString())
+        assertTrue(savedBytes.contentEquals(saved.bytes()))
+    }
+
+    @Test
+    fun aSaveWithoutLaterEditsReopensToTheSavedDraftAndResetStillClears() = test { api ->
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("short-text", Answer.Text("Synthetic A"))
+        c.onSaveDraft()
+        val a = c.screen().answers
+        c.onClose()
+        api.onRead = { savedRead("Synthetic A") }
+        c.open(DRAFT_ID)
+        assertEquals(a, c.screen().answers)
+        assertNull(c.screen().review)
+        c.onAnswer("short-text", Answer.Text("Synthetic B"))
+        c.onClose()
+        c.reset()
+        c.open(DRAFT_ID)
+        assertEquals(Answer.Text("Synthetic A"), c.screen().answers["short-text"], "an account change keeps nothing local")
+        assertEquals(1, api.sent.size)
+    }
+
+    @Test
+    fun aCommittedSubmitKeepsNoAnswers() = test { api ->
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("short-text", Answer.Text("Synthetic C"))
+        c.onSubmit()
+        assertEquals(SendOutcome.Committed, c.screen().send.attempt?.outcome)
+        c.onClose()
+        c.open(DRAFT_ID)
+        assertEquals(draft.definition.initialAnswers(draft.draft), c.screen().answers)
+        assertNull(c.screen().send.attempt)
     }
 
     @Test

@@ -136,7 +136,9 @@ Whumpo to answer this form." with the update action. No field is rendered.
   gate and unsent answers for reopen, also across another form, and an
   account change drops them; a newer saved draft is staged for review rather
   than overwriting edits, both choices send nothing, and removed or retyped
-  fields are taken out while changed constraints still validate.
+  fields are taken out while changed constraints still validate; edits made
+  after a successful save survive close and reopen at the saved revision, while
+  a committed submit keeps no answers.
 - API (`MobileApiClientTest`): 422 field problems only on interaction routes;
   retries send the frozen request bytes unchanged.
 - Device (`androidTest/.../FormDeviceTest.kt`, API 28 and 36 emulators in CI):

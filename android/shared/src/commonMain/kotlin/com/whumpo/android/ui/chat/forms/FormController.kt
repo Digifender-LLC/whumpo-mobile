@@ -126,11 +126,17 @@ class FormController(
         val send = sub.state.value
         val screen = shown()?.screen
         val form = screen?.read as? FormRead.Form
+        val attempt = send.attempt
+        // A committed save leaves the form open: later edits are kept against the saved revision.
+        val saved = attempt?.takeIf { it.outcome == SendOutcome.Committed && it.request.operation == "save-draft" }?.receipt
         val answers = when {
             screen == null -> keptAnswers
-            send.attempt?.outcome == SendOutcome.Committed -> null
+            attempt?.outcome == SendOutcome.Committed && saved == null -> null
             form == null || form.state != FormState.Open || form.submission != null -> null
-            else -> KeptAnswers(screen.answers, form, screen.review)
+            else -> {
+                val base = if (saved == null) form else form.copy(answerRevision = maxOf(form.answerRevision, saved.answerRevision))
+                KeptAnswers(screen.answers, base, screen.review)
+            }
         }
         if (!send.unresolved) sub.reset()
         if (send.unresolved || answers != null) kept[interactionId] = Kept(sub.takeIf { send.unresolved }, answers)
