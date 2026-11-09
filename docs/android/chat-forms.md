@@ -138,7 +138,10 @@ Whumpo to answer this form." with the update action. No field is rendered.
   than overwriting edits, both choices send nothing, and removed or retyped
   fields are taken out while changed constraints still validate; edits made
   after a successful save survive close and reopen at the saved revision, while
-  a committed submit keeps no answers.
+  a committed submit keeps no answers. Edits are measured against the answers
+  of the latest save confirmed committed (even when its reply came late), never
+  an unconfirmed one, so returning to an older value after a save is still an
+  edit and a newer read is staged for review.
 - API (`MobileApiClientTest`): 422 field problems only on interaction routes;
   retries send the frozen request bytes unchanged.
 - Device (`androidTest/.../FormDeviceTest.kt`, API 28 and 36 emulators in CI):

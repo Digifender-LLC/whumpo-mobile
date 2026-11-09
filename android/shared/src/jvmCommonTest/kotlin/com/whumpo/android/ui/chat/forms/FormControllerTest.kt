@@ -259,7 +259,8 @@ class FormControllerTest {
         val suggestion = buildJsonObject { put("value", "Synthetic suggestion"); put("provenance", "suggested") }
         val saved = buildJsonObject { put("short-text", "Synthetic saved") }
         for ((draftValue, expected) in listOf<Pair<JsonElement, Map<String, Answer>>>(
-            JsonNull to mapOf("short-text" to Answer.Text("Synthetic suggestion")),
+            // The fixture also declares a suggested default for `choice`.
+            JsonNull to mapOf("short-text" to Answer.Text("Synthetic suggestion"), "choice" to Answer.One("option-a")),
             JsonObject(emptyMap()) to emptyMap(),
             saved to mapOf("short-text" to Answer.Text("Synthetic saved")),
         )) {
@@ -526,6 +527,105 @@ class FormControllerTest {
         c.reset()
         c.open(DRAFT_ID)
         assertEquals(Answer.Text("Synthetic A"), c.screen().answers["short-text"], "an account change keeps nothing local")
+        assertEquals(1, api.sent.size)
+    }
+
+    private fun newerRead(text: String, revision: Int) =
+        read("draft").edit("draft.short-text", JsonPrimitive(text)).edit("answerRevision", JsonPrimitive(revision))
+
+    @Test
+    fun returningToTheOldDraftAfterASaveIsAnEditAgainstTheSave() = test { api ->
+        val newer = wire.decode(newerRead("Synthetic C", 3)) as FormRead.Form
+        for (choice in listOf("newer", "mine")) {
+            api.onRead = { read("draft") }
+            val c = controller(api)
+            c.open(DRAFT_ID)
+            val d = c.screen().answers
+            c.onAnswer("short-text", Answer.Text("Synthetic A"))
+            c.onSaveDraft()
+            assertEquals(SendOutcome.Committed, c.screen().send.attempt?.outcome)
+            c.onAnswer("short-text", d.getValue("short-text"))
+            assertEquals(d, c.screen().answers)
+            c.onClose()
+            api.onRead = { newerRead("Synthetic C", 3) }
+            c.open(DRAFT_ID)
+            assertEquals(d, c.screen().answers, "D stays visible")
+            assertEquals(FormReview(newer.draft, setOf("short-text"), emptyList()), c.screen().review)
+            if (choice == "newer") c.onUseNewerAnswers() else c.onKeepMyAnswers()
+            assertEquals(if (choice == "newer") newer.draft else d, c.screen().answers)
+            assertEquals(1, api.sent.size, "choosing sends nothing")
+            c.reset()
+            api.sent.clear()
+        }
+    }
+
+    @Test
+    fun eachCommittedSaveMovesTheBaseline() = test { api ->
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("short-text", Answer.Text("Synthetic A"))
+        c.onSaveDraft()
+        c.onAnswer("short-text", Answer.Text("Synthetic B"))
+        c.onSaveDraft()
+        assertEquals(listOf(1, 2), api.sent.map { it.request.expectedAnswerRevision })
+        c.onAnswer("short-text", Answer.Text("Synthetic A"))
+        c.onClose()
+        api.onRead = { newerRead("Synthetic C", 4) }
+        c.open(DRAFT_ID)
+        assertEquals(Answer.Text("Synthetic A"), c.screen().answers["short-text"], "A is an edit against the later save B")
+        assertEquals(setOf("short-text"), c.screen().review?.differs)
+        // Without edits after the latest save, the newer read is simply followed.
+        val d = controller(api)
+        api.onRead = { read("draft") }
+        d.open(DRAFT_ID)
+        d.onAnswer("short-text", Answer.Text("Synthetic A"))
+        d.onSaveDraft()
+        d.onClose()
+        api.onRead = { newerRead("Synthetic C", 3) }
+        d.open(DRAFT_ID)
+        assertEquals(Answer.Text("Synthetic C"), d.screen().answers["short-text"])
+        assertNull(d.screen().review)
+        assertEquals(3, api.sent.size)
+    }
+
+    @Test
+    fun aSaveMovesTheBaselineOnlyOnceCommittedEvenWhenItsReplyIsLate() = test { api ->
+        val gate = CompletableDeferred<Unit>()
+        api.mutateGate = gate
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        val d = c.screen().answers
+        c.onAnswer("short-text", Answer.Text("Synthetic A"))
+        c.onSaveDraft()
+        c.onClose()
+        c.open(DRAFT_ID)
+        assertEquals(SendOutcome.Sending, c.screen().send.attempt?.outcome)
+        assertEquals(Answer.Text("Synthetic A"), c.screen().answers["short-text"])
+        gate.complete(Unit)
+        assertEquals(SendOutcome.Committed, c.screen().send.attempt?.outcome)
+        c.onAnswer("short-text", d.getValue("short-text"))
+        c.onClose()
+        api.onRead = { newerRead("Synthetic C", 3) }
+        c.open(DRAFT_ID)
+        assertEquals(d, c.screen().answers, "D is an edit against the committed save A")
+        assertEquals(setOf("short-text"), c.screen().review?.differs)
+        assertEquals(1, api.sent.size)
+    }
+
+    @Test
+    fun anUnknownSaveDoesNotMoveTheBaseline() = test { api ->
+        api.onMutate = { throw lost }
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("short-text", Answer.Text("Synthetic A"))
+        c.onSaveDraft()
+        assertEquals(SendOutcome.Unknown, c.screen().send.attempt?.outcome)
+        c.onClose()
+        api.onRead = { newerRead("Synthetic C", 2) }
+        c.open(DRAFT_ID)
+        assertEquals(SendOutcome.Unknown, c.screen().send.attempt?.outcome, "the receipt gate survives")
+        assertEquals(Answer.Text("Synthetic A"), c.screen().answers["short-text"], "A is still unconfirmed, so it is an edit")
+        assertEquals(setOf("short-text"), c.screen().review?.differs)
         assertEquals(1, api.sent.size)
     }
 

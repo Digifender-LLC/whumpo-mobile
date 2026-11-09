@@ -54,8 +54,22 @@ class FormController(
     private var seenReread: FormRead? = null
     private val kept = mutableMapOf<String, Kept>()
 
-    /** Unsent answers and the read they were made against, reconciled with the next read on reopen. */
-    private class KeptAnswers(val answers: Map<String, Answer>, val read: FormRead.Form, val review: FormReview?)
+    /** Unsent answers, the read they were made against and their [baseline] at [revision], reconciled on reopen. */
+    private class KeptAnswers(
+        val answers: Map<String, Answer>,
+        val read: FormRead.Form,
+        val review: FormReview?,
+        val baseline: Map<String, Answer>,
+        val revision: Int,
+    )
+
+    /**
+     * Save-draft answers per interaction: [pending] is the request ID and answers of the latest save sent; [base] is
+     * the answers of the latest save confirmed committed, at [revision]. Only a committed save moves [base].
+     */
+    private data class Saved(val pending: Pair<String, Map<String, Answer>>?, val base: Map<String, Answer>?, val revision: Int)
+
+    private val saves = mutableMapOf<String, Saved>()
 
     /** What a closed form keeps until [reset]: its unresolved send and its unsent answers. */
     private class Kept(val submitter: FormSubmitter?, val answers: KeptAnswers?)
@@ -120,22 +134,25 @@ class FormController(
         close()
         kept.values.forEach { it.submitter?.reset() }
         kept.clear()
+        saves.clear()
     }
 
     private fun keep(interactionId: String, sub: FormSubmitter) {
         val send = sub.state.value
         val screen = shown()?.screen
         val form = screen?.read as? FormRead.Form
+        settleSaves(interactionId, send)
         val attempt = send.attempt
-        // A committed save leaves the form open: later edits are kept against the saved revision.
-        val saved = attempt?.takeIf { it.outcome == SendOutcome.Committed && it.request.operation == "save-draft" }?.receipt
+        // A committed save leaves the form open, so later edits are kept; a committed submit or cancel keeps nothing.
+        val terminal = attempt?.outcome == SendOutcome.Committed && attempt.request.operation != "save-draft"
+        if (terminal) saves.remove(interactionId)
         val answers = when {
             screen == null -> keptAnswers
-            attempt?.outcome == SendOutcome.Committed && saved == null -> null
+            terminal -> null
             form == null || form.state != FormState.Open || form.submission != null -> null
             else -> {
-                val base = if (saved == null) form else form.copy(answerRevision = maxOf(form.answerRevision, saved.answerRevision))
-                KeptAnswers(screen.answers, base, screen.review)
+                val (baseline, revision) = baseline(form)
+                KeptAnswers(screen.answers, form, screen.review, baseline, revision)
             }
         }
         if (!send.unresolved) sub.reset()
@@ -146,27 +163,57 @@ class FormController(
     private fun starting(form: FormRead.Form): Pair<Map<String, Answer>, FormReview?> {
         val k = keptAnswers
         keptAnswers = null
+        settleSaves(form.interactionId, submitter?.state?.value)
         if (k == null || form.state != FormState.Open || form.submission != null) return form.definition.initialAnswers(form.draft) to null
-        if (k.read.definitionDigest == form.definitionDigest && k.read.answerRevision == form.answerRevision) return k.answers to k.review
-        return reconcile(k.read, k.answers, form)
+        // A save committed while the form was closed moves the baseline too.
+        val s = saves[form.interactionId]?.takeIf { it.base != null && it.revision > k.revision }
+        val baseline = s?.base ?: k.baseline
+        val revision = s?.revision ?: k.revision
+        if (k.read.definitionDigest == form.definitionDigest && revision == form.answerRevision) return k.answers to k.review
+        return reconcile(k.read.definition, baseline, k.answers, form)
+    }
+
+    /** The answers edits are measured against: the latest committed save when it is current, else the read's own. */
+    private fun baseline(form: FormRead.Form): Pair<Map<String, Answer>, Int> {
+        val s = saves[form.interactionId]
+        val base = s?.base
+        if (s != null && base != null && s.revision >= form.answerRevision) return base to s.revision
+        return form.definition.initialAnswers(form.draft) to form.answerRevision
+    }
+
+    /** Moves the saved baseline to a pending save's own answers once its outcome is committed; a refusal drops it. */
+    private fun settleSaves(interactionId: String, send: FormSendState?) {
+        val s = saves[interactionId] ?: return
+        val pending = s.pending ?: return
+        val attempt = send?.attempt?.takeIf { it.request.requestId == pending.first } ?: return
+        when (attempt.outcome) {
+            SendOutcome.Committed -> saves[interactionId] = Saved(null, pending.second, attempt.receipt?.answerRevision ?: s.revision)
+            SendOutcome.Rejected -> saves[interactionId] = s.copy(pending = null)
+            else -> Unit
+        }
     }
 
     /**
-     * A newer read never overwrites the owner's edits. Unedited answers follow [newer]. Otherwise answers whose field
+     * A newer read never overwrites the owner's edits. Answers equal to [baseline] (unedited) follow [newer]. Otherwise answers whose field
      * keeps its id and type stay (Send still validates them against the new constraints), answers for removed or
      * retyped fields are taken out, and a differing newer draft waits in [FormReview] for the owner's choice.
      */
-    private fun reconcile(old: FormRead.Form, local: Map<String, Answer>, newer: FormRead.Form): Pair<Map<String, Answer>, FormReview?> {
+    private fun reconcile(
+        old: FormDefinition,
+        baseline: Map<String, Answer>,
+        local: Map<String, Answer>,
+        newer: FormRead.Form,
+    ): Pair<Map<String, Answer>, FormReview?> {
         val fresh = newer.definition.initialAnswers(newer.draft)
-        if (local == old.definition.initialAnswers(old.draft)) return fresh to null
+        if (local == baseline) return fresh to null
         val now = newer.definition.fields.associateBy { it.id }
-        val before = old.definition.fields.associateBy { it.id }
+        val before = old.fields.associateBy { it.id }
         val kept = local.filter { (id, _) ->
             val o = before[id]
             val n = now[id]
             o != null && n != null && o.kind.shape() == n.kind.shape()
         }
-        val dropped = old.definition.fields.filter { it.id in local && it.id !in kept }.map { it.label }
+        val dropped = old.fields.filter { it.id in local && it.id !in kept }.map { it.label }
         val server = newer.draft
         val differs = if (server == null) {
             emptySet()
@@ -199,6 +246,7 @@ class FormController(
 
     private fun onSend(send: FormSendState) {
         val current = shown() ?: return
+        settleSaves(current.interactionId, send)
         var screen = current.screen.copy(send = send)
         val reread = send.reread
         val form = screen.read as? FormRead.Form
@@ -214,7 +262,7 @@ class FormController(
                     }
                     val open = reread.state == FormState.Open && reread.submission == null
                     val (answers, review) = if (form != null && open) {
-                        reconcile(form, screen.answers, reread)
+                        reconcile(form.definition, baseline(form).first, screen.answers, reread)
                     } else {
                         (reread.draft ?: screen.answers) to null
                     }
@@ -274,7 +322,14 @@ class FormController(
             return
         }
         _pane.value = current.copy(screen = screen.copy(errors = emptyMap()))
-        submitter?.start(form, operation, form.definition.encodeAnswers(screen.answers))
+        val sub = submitter ?: return
+        settleSaves(form.interactionId, sub.state.value)
+        if (sub.start(form, operation, form.definition.encodeAnswers(screen.answers)) && draft) {
+            val requestId = sub.state.value.attempt?.request?.requestId ?: return
+            val s = saves[form.interactionId]
+            saves[form.interactionId] = Saved(requestId to screen.answers, s?.base, s?.revision ?: 0)
+            settleSaves(form.interactionId, sub.state.value)
+        }
     }
 
     override fun onCheckAgain() {
