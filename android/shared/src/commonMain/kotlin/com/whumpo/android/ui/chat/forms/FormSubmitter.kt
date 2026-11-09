@@ -84,7 +84,6 @@ data class FormSendState(
  * no polling, no new request ID while an outcome is unresolved, and every check or retry is an explicit tap. The
  * only automatic call is one follow-up read per confirmed submit for the lifetime of this object, which is the screen
  * visit: keep it across recreation and pane changes, and call [reset] when the signed-in account changes.
- * PENDING ADOPTION: driven by [ProposedFormWire] reads; not reached from the live chat until that contract is adopted.
  */
 class FormSubmitter(
     private val api: FormApi,

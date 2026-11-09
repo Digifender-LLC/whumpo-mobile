@@ -131,13 +131,13 @@ class FormControllerTest {
 
     @Test
     fun aPageForAnotherDigestFormOrFieldIsIgnoredAndCanBeRetried() = test { api ->
-        val wrong = listOf(
-            page("project", listOf(PROJECT_ONE), JsonNull, digest = "b".repeat(64)),
-            page("project", listOf(PROJECT_ONE), JsonNull, interactionId = "66666666-6666-4666-8666-000000000001"),
-            page("projects", listOf(PROJECT_ONE), JsonNull),
+        val wrong: List<(String) -> JsonObject> = listOf(
+            { field -> page(field, listOf(PROJECT_ONE), JsonNull, digest = "b".repeat(64)) },
+            { field -> page(field, listOf(PROJECT_ONE), JsonNull, interactionId = "66666666-6666-4666-8666-000000000001") },
+            { field -> page(if (field == "project") "projects" else "project", listOf(PROJECT_ONE), JsonNull) },
         )
         for (bad in wrong) {
-            api.onPage = { _, _ -> bad }
+            api.onPage = { field, _ -> bad(field) }
             val c = controller(api)
             c.open(DRAFT_ID)
             assertEquals(NAME_NOT_LOADED, resourceName(PROJECT_ONE, c.screen().resourceNames))

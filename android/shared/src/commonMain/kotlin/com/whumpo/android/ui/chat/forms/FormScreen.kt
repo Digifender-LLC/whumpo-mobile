@@ -83,7 +83,7 @@ data class FormScreenState(
 /**
  * The native form (docs/android/chat-forms.md): full height on compact widths, or inside the right pane on wide
  * ones. Actions stay pinned above the keyboard, except at large text where they follow the last field so nothing is
- * covered. PENDING ADOPTION: rendered only from [ProposedFormWire] reads; the live chat still shows the placeholder card.
+ * covered. Opened from the chat card through [FormController].
  */
 @Composable
 fun FormScreen(state: FormScreenState, zones: ZoneTime, actions: FormActions, modifier: Modifier = Modifier) {

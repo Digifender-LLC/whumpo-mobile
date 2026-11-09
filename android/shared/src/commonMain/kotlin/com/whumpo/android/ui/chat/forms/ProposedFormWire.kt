@@ -32,8 +32,8 @@ enum class FormState(val wire: String) { Open("open"), Submitted("submitted"), C
 data class Submission(val id: String, val answers: Map<String, Answer>, val continuation: JsonObject?)
 
 /**
- * Decodes the native forms read in docs/mobile-api-forms-proposal.md. PENDING ADOPTION: that shape is a reviewed
- * proposal, not yet part of docs/mobile-api-v1.md, and this decoder is not reached from the live read path.
+ * Decodes the native forms `interaction.read` adopted in docs/mobile-api-v1.md (first reviewed as
+ * docs/mobile-api-forms-proposal.md).
  * It fails closed: an unknown or malformed member, state, kind, type, binding or presentation, a non-empty `cards`
  * or an answer that does not fit its field yields [FormRead.UpdateRequired], so nothing renders and nothing is sent.
  * Extra read and envelope members are server metadata and are ignored. The digest is opaque and echoed unchanged.

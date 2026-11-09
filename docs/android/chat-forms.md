@@ -1,13 +1,13 @@
 # Native chat forms (design)
 
-Status: client implementation pending contract adoption. The model, decoder,
-send recovery and Compose screen live in
-`android/shared/src/commonMain/kotlin/com/whumpo/android/ui/chat/forms/`, built
-against the synthetic proposal in `docs/mobile-api-forms-proposal.md` and
-`tests/fixtures/proposed/forms.json`. That proposal is not yet the adopted
-contract, so nothing here is reached from the live chat: the interaction card
-still shows its placeholder, and the client header, admitted field types and
-bindings are unchanged.
+Status: implemented against the adopted contract in
+[mobile API v1](../mobile-api-v1.md) and `tests/fixtures/mobile-v1/`, and wired
+into the chat. The model, decoder, send recovery, resources paging, controller
+and Compose screen live in
+`android/shared/src/commonMain/kotlin/com/whumpo/android/ui/chat/forms/`; the
+synthetic catalog in `tests/fixtures/proposed/forms.json` drives the tests.
+Verified only by synthetic JVM and host tests in client CI: no live Worker,
+physical device, TalkBack, release build or customer acceptance.
 
 ## Goal
 
@@ -118,19 +118,27 @@ Whumpo to answer this form." with the update action. No field is rendered.
   Sent is status text; an unconfirmed send offers only Check again, and not
   received only Send again; actions stay reachable at 200% text and on wide
   screens; submitted answers are read-only with "Name not loaded".
+- Controller (`jvmCommonTest/.../FormControllerTest.kt`): opening reads once
+  and writes nothing; the opaque `nextBefore` is echoed unchanged; a page for
+  another form, digest or field is ignored and can be retried; late pages and
+  reads after close or account change are ignored, and a queued read never
+  starts; a failed read offers only Try loading again; an unknown form fails
+  closed with nothing sent; a 422 `fieldId` shows at a known field and at form
+  level otherwise; an unresolved send blocks edits and new writes.
+- API (`MobileApiClientTest`): 422 field problems only on interaction routes;
+  retries send the frozen request bytes unchanged.
 - Not yet covered: Roborazzi goldens for the form (none recorded), the
-  keyboard and TalkBack instrumented test, the resources picker paging, live
-  Worker, physical devices, release builds and customer acceptance.
+  keyboard and TalkBack instrumented test, live Worker, physical devices,
+  release builds and customer acceptance.
 
-## Dependencies
+## Wiring
 
-- Adoption of the native forms read, resources and 422 shapes into
-  `docs/mobile-api-v1.md` and `tests/fixtures/mobile-v1/`, with the paired
-  website fixture copy and compatibility pin. Until then the decoder stays
-  unreached and the chat card keeps its placeholder.
-- Then: route `interaction.read` through `ProposedFormWire`, implement
-  `FormApi` on `MobileApiClient`, open the form from the chat card, add 422
-  `fieldId` handling to `MobileApiException`, and keep `FormSubmitter` per
-  interaction for the screen visit, resetting it on account change.
-- The `Whumpo-Client` header already declares all nine field types; that must
-  match what the build renders when the screen is wired.
+- `ChatViewModel` owns one `FormController` over `ClientFormApi`
+  (`MobileApiClient`) and resets it with the chat on sign-out or account change.
+- The chat card's Open form button reads the form; it opens in the detail pane
+  on wide screens and full height on compact ones, where Back closes it.
+- `FormSubmitter` sends frozen request bytes (`MobileApiClient.freezeMutation`);
+  an unmapped interaction 409 stays receipt-gated and triggers one reread to
+  explain replacement, a closed form or newer answers.
+- The `Whumpo-Client` header already declares all nine field types; they match
+  what the screen renders.
