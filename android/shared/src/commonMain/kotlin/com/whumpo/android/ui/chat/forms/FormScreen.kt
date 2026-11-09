@@ -194,6 +194,7 @@ private fun EditableFields(read: FormRead.Form, state: FormScreenState, zones: Z
             enabled = enabled,
             names = state.resourceNames,
             canLoadMore = field.id in state.moreResources,
+            formKey = read.interactionId,
             zones = zones,
             focus = requesters.getValue(field.id),
             actions = actions,
@@ -220,6 +221,7 @@ private fun FieldControl(
     enabled: Boolean,
     names: Map<String, String>,
     canLoadMore: Boolean,
+    formKey: String,
     zones: ZoneTime,
     focus: FocusRequester,
     actions: FormActions,
@@ -248,7 +250,7 @@ private fun FieldControl(
             focus = focus, modifier = tag, help = listOf(help, "Use YYYY-MM-DD.").filter { it.isNotEmpty() }.joinToString(" "),
             keyboard = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
         ) { actions.onAnswer(field.id, if (it.isEmpty()) null else Answer.Text(it)) }
-        is FieldKind.DateTime -> DateTimeInput(field, kind, answer, error, help, enabled, zones, focus, actions)
+        is FieldKind.DateTime -> DateTimeInput(formKey, field, kind, answer, error, help, enabled, zones, focus, actions)
         is FieldKind.Choice -> Options(
             field, kind.options, error, help, enabled, focus, multiple = false,
             selected = { (answer as? Answer.One)?.id == it },
@@ -330,6 +332,7 @@ private fun TextInput(
 
 @Composable
 private fun DateTimeInput(
+    formKey: String,
     field: FormField,
     kind: FieldKind.DateTime,
     answer: Answer?,
@@ -340,9 +343,18 @@ private fun DateTimeInput(
     focus: FocusRequester,
     actions: FormActions,
 ) {
-    val initial = (answer as? Answer.Text)?.value?.let { zones.fromUtc(it, kind.zone) }
-    var date by rememberSaveable(field.id) { mutableStateOf(initial?.date.orEmpty()) }
-    var time by rememberSaveable(field.id) { mutableStateOf(initial?.time.orEmpty()) }
+    fun shown(a: Answer?) = (a as? Answer.Text)?.value?.let { zones.fromUtc(it, kind.zone) }
+    // The typed text belongs to this form's field. It follows [answer] only when the answer is not the one this
+    // field last produced (a reread, another device, another form), so in-progress input is never overwritten.
+    var date by rememberSaveable(formKey, field.id) { mutableStateOf(shown(answer)?.date.orEmpty()) }
+    var time by rememberSaveable(formKey, field.id) { mutableStateOf(shown(answer)?.time.orEmpty()) }
+    var produced by remember(formKey, field.id) { mutableStateOf(answer) }
+    if (answer != produced) {
+        val replaced = shown(answer)
+        date = replaced?.date.orEmpty()
+        time = replaced?.time.orEmpty()
+        produced = answer
+    }
     val local = if (date.isEmpty() && time.isEmpty()) null else zones.toUtc(date, time, kind.zone)
     val offset = (local as? ZoneTime.Local.Exact)?.offset
     val zoneNote = "Time zone: ${kind.zone}" + (offset?.let { " ($it)" } ?: "") + "."
@@ -355,15 +367,14 @@ private fun DateTimeInput(
         date = d
         time = t
         val next = if (d.isEmpty() && t.isEmpty()) null else zones.toUtc(d, t, kind.zone)
-        actions.onAnswer(
-            field.id,
-            when (next) {
-                null -> null
-                is ZoneTime.Local.Exact -> Answer.Text(next.utc)
-                // Kept as an invalid value so validation reports it instead of silently dropping it.
-                else -> Answer.Text("$d $t")
-            },
-        )
+        val out = when (next) {
+            null -> null
+            is ZoneTime.Local.Exact -> Answer.Text(next.utc)
+            // Kept as an invalid value so validation reports it instead of silently dropping it.
+            else -> Answer.Text("$d $t")
+        }
+        produced = out
+        actions.onAnswer(field.id, out)
     }
     Column(Modifier.fillMaxWidth().testTag("form-field-${field.id}"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(labelOf(field), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)

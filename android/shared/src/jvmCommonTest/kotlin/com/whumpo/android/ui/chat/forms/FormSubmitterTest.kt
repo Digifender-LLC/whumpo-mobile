@@ -16,8 +16,10 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -62,6 +64,47 @@ class FormSubmitterTest {
     }
 
     private fun test(body: suspend TestScope.(FakeApi) -> Unit) = runTest(UnconfinedTestDispatcher()) { body(FakeApi()) }
+
+    /** Launched work waits for [runCurrent], so a call can be queued but not yet made. */
+    private fun queued(body: suspend TestScope.(FakeApi) -> Unit) = runTest(StandardTestDispatcher()) { body(FakeApi()) }
+
+    @Test
+    fun resetBeforeAQueuedSendMakesNoCall() = queued { api ->
+        val s = submitter(api)
+        assertTrue(s.start(open, "submit", answers))
+        s.reset()
+        runCurrent()
+        assertTrue(api.mutations.isEmpty())
+        assertEquals(FormSendState(), s.state.value)
+    }
+
+    @Test
+    fun resetBeforeAQueuedReceiptCheckMakesNoCall() = queued { api ->
+        val s = submitter(api)
+        api.onMutate = { throw lost }
+        s.start(open, "submit", answers)
+        runCurrent()
+        assertEquals(SendOutcome.Unknown, s.state.value.attempt?.outcome)
+        s.checkAgain()
+        s.reset()
+        runCurrent()
+        assertTrue(api.receipts.isEmpty())
+        assertEquals(1, api.mutations.size)
+        assertEquals(FormSendState(), s.state.value)
+    }
+
+    @Test
+    fun resetBeforeAQueuedRereadMakesNoCall() = queued { api ->
+        val s = submitter(api)
+        s.start(open, "save-draft", answers)
+        runCurrent()
+        assertEquals(SendOutcome.Committed, s.state.value.attempt?.outcome)
+        s.reload(open.interactionId)
+        s.reset()
+        runCurrent()
+        assertEquals(0, api.reads)
+        assertEquals(FormSendState(), s.state.value)
+    }
 
     @Test
     fun confirmedSubmitAnnouncesSentOnceAndReadsOnce() = test { api ->

@@ -111,6 +111,7 @@ class FormSubmitter(
         _state.update { it.copy(attempt = attempt.copy(outcome = SendOutcome.Checking)) }
         val g = generation
         scope.launch {
+            if (g != generation) return@launch
             val receipt = try {
                 api.receipt(attempt.request.requestId)
             } catch (e: CancellationException) {
@@ -149,6 +150,8 @@ class FormSubmitter(
     private fun send(request: InteractionMutateRequest) {
         val g = generation
         scope.launch {
+            // A call queued before [reset] never reaches the API for the new account.
+            if (g != generation) return@launch
             val receipt = try {
                 api.mutate(request)
             } catch (e: CancellationException) {
@@ -205,6 +208,7 @@ class FormSubmitter(
         _state.update { it.copy(reading = true) }
         val g = generation
         scope.launch {
+            if (g != generation) return@launch
             val read = try {
                 wire.decode(api.read(interactionId))
             } catch (e: CancellationException) {

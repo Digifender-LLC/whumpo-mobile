@@ -17,6 +17,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.whumpo.android.ui.chat.forms.edit
+import kotlinx.serialization.json.JsonPrimitive
 import androidx.compose.ui.unit.dp
 import com.whumpo.android.ui.chat.forms.Answer
 import com.whumpo.android.ui.chat.forms.FormActions
@@ -170,6 +176,61 @@ class FormScreenTest : RobolectricUiTest() {
     fun actionsArePinnedOnWideDarkScreens() {
         launch(Screen.Expanded, dark = true) { FormScreen(openState(), JavaZoneTime, Recorder()) }.use {
             compose.onNodeWithTag("form-send").assertIsDisplayed()
+        }
+    }
+
+    /** Owns the answers like the real caller: every edit is fed back into the screen state. */
+    private class Owner(initial: FormScreenState) : FormActions {
+        var state by mutableStateOf(initial)
+        override fun onAnswer(fieldId: String, answer: Answer?) {
+            state = state.copy(answers = if (answer == null) state.answers - fieldId else state.answers + (fieldId to answer))
+        }
+        override fun onSubmit() {}
+        override fun onSaveDraft() {}
+        override fun onCheckAgain() {}
+        override fun onSendAgain() {}
+        override fun onReload() {}
+        override fun onLoadMoreResources(fieldId: String) {}
+        override fun onClose() {}
+        override fun onUpdate() {}
+    }
+
+    private fun shows(tag: String, text: String) =
+        compose.onNodeWithTag(tag).performScrollTo().assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString(text)))
+
+    @Test
+    fun dateTimeFollowsReplacedAnswersButKeepsTypingInProgress() {
+        val a = mapOf("datetime" to Answer.Text("2030-03-04T15:30:00.000Z"))
+        val owner = Owner(FormScreenState(open, a))
+        launch(Screen.Compact) { FormScreen(owner.state, JavaZoneTime, owner) }.use {
+            shows("form-field-datetime-date", "2030-03-04")
+            shows("form-field-datetime-time", "15:30")
+            compose.runOnIdle { owner.state = owner.state.copy(answers = mapOf("datetime" to Answer.Text("2031-05-06T07:08:00.000Z"))) }
+            shows("form-field-datetime-date", "2031-05-06")
+            shows("form-field-datetime-time", "07:08")
+            compose.onNodeWithTag("form-field-datetime-time").performTextReplacement("09:00")
+            compose.runOnIdle { assertEquals(Answer.Text("2031-05-06T09:00:00.000Z"), owner.state.answers["datetime"]) }
+            compose.onNodeWithTag("form-field-datetime-date").performTextReplacement("2031-05-0")
+            shows("form-field-datetime-date", "2031-05-0")
+            shows("form-field-datetime-time", "09:00")
+            compose.runOnIdle { assertEquals(Answer.Text("2031-05-0 09:00"), owner.state.answers["datetime"]) }
+        }
+    }
+
+    @Test
+    fun sameFieldIdInAnotherFormShowsThatFormsAnswer() {
+        val other = ProposedFormsFixture.wire.decode(
+            ProposedFormsFixture.read("open").edit("envelope.id", JsonPrimitive("66666666-6666-4666-8666-000000000099")),
+        ) as FormRead.Form
+        val owner = Owner(FormScreenState(open, mapOf("datetime" to Answer.Text("2030-03-04T15:30:00.000Z"))))
+        launch(Screen.Compact) { FormScreen(owner.state, JavaZoneTime, owner) }.use {
+            shows("form-field-datetime-time", "15:30")
+            compose.runOnIdle { owner.state = FormScreenState(other, mapOf("datetime" to Answer.Text("2031-05-06T07:08:00.000Z"))) }
+            shows("form-field-datetime-date", "2031-05-06")
+            shows("form-field-datetime-time", "07:08")
+            compose.runOnIdle { owner.state = FormScreenState(open, emptyMap()) }
+            shows("form-field-datetime-date", "")
+            shows("form-field-datetime-time", "")
         }
     }
 
