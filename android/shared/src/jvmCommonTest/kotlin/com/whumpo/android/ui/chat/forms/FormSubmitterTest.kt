@@ -34,7 +34,7 @@ class FormSubmitterTest {
         var receiptGate: CompletableDeferred<Unit>? = null
         var onMutate: (InteractionMutateRequest) -> InteractionReceipt = { receiptFor(it) }
         var onReceipt: (String) -> InteractionReceipt = { throw MobileApiException.NotFound("Not found.") }
-        var onRead: () -> JsonObject = { read("submitted") }
+        var onRead: () -> JsonObject = { ProposedFormsFixture.read("submitted") }
 
         override suspend fun mutate(request: InteractionMutateRequest): InteractionReceipt {
             mutations += request
@@ -206,7 +206,7 @@ class FormSubmitterTest {
         val second = s.state.value.feedback
         assertEquals("Couldn't load the next step", second?.text)
         assertNotEquals(first?.id, second?.id)
-        api.onRead = { read("submitted") }
+        api.onRead = { ProposedFormsFixture.read("submitted") }
         s.reload(open.interactionId)
         assertEquals("Next step loaded", s.state.value.feedback?.text)
         assertFalse(s.state.value.followUpFailed)
@@ -216,7 +216,7 @@ class FormSubmitterTest {
     @Test
     fun followUpReadWithoutASubmissionIsNotTheNextStep() = test { api ->
         val s = submitter(api)
-        api.onRead = { read("open") }
+        api.onRead = { ProposedFormsFixture.read("open") }
         s.start(open, "submit", answers)
         assertTrue(s.state.value.followUpFailed)
     }

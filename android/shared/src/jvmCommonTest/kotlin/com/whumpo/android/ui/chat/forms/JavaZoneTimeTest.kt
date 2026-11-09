@@ -12,7 +12,7 @@ class JavaZoneTimeTest {
     fun convertsWallClockTimeToTheUtcWireValue() {
         assertEquals(ZoneTime.Local.Exact("2030-03-04T15:30:00.000Z", "2030-03-04", "15:30", "UTC"), z.toUtc("2030-03-04", "15:30", "UTC"))
         assertEquals(ZoneTime.Local.Exact("2030-07-01T10:00:00.000Z", "2030-07-01", "12:00", "UTC+02:00"), z.toUtc("2030-07-01", "12:00", "Europe/Berlin"))
-        assertEquals(z.toUtc("2030-07-01", "12:00", "Europe/Berlin"), z.fromUtc("2030-07-01T10:00:00.000Z", "Europe/Berlin"))
+        assertEquals<ZoneTime.Local?>(z.toUtc("2030-07-01", "12:00", "Europe/Berlin"), z.fromUtc("2030-07-01T10:00:00.000Z", "Europe/Berlin"))
     }
 
     @Test
