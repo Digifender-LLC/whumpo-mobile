@@ -38,9 +38,10 @@ interface SessionProvider {
 
     /**
      * Called when the server rejected the session (`proof_required` with `signin`, or `identity_changed`) on an
-     * authenticated route. The app clears local private state; a retained retry waits for the owner to sign in.
+     * authenticated route. Clear only if [rejectedToken] still identifies the current session. The comparison and
+     * erase must be atomic with session changes, so a late response cannot erase a different account's state.
      */
-    suspend fun onSessionRejected()
+    suspend fun onSessionRejected(rejectedToken: String)
 }
 
 /** A client-generated ID for a durable write (lowercase UUID). Generate once per owner action and reuse it for every retry of that action. */
@@ -341,42 +342,44 @@ class MobileApiClient(
         extraHeaders: List<Pair<String, String>> = emptyList(),
         write: Boolean = false,
     ): Raw {
-        val first = try {
-            return execOnce(method, path, auth, params, body, extraHeaders, write)
-        } catch (e: MobileApiException.IdentityChanged) {
-            e
-        }
-        val reauth = lastReauth
-        // An anonymous call carries no session, so a refusal of it (a full challenge table, say) says nothing about the stored one.
-        if (!auth) throw first
-        if (reauth == null || reauth.elapsedNow() > REAUTH_RACE_WINDOW) return reject(first)
-        return try {
-            execOnce(method, path, auth, params, body, extraHeaders, write)
-        } catch (e: MobileApiException.IdentityChanged) {
-            reject(e)
-        }
-    }
-
-    private suspend fun reject(e: MobileApiException.IdentityChanged): Nothing {
-        sessions.onSessionRejected()
-        throw e
-    }
-
-    private suspend fun execOnce(
-        method: HttpMethod,
-        path: String,
-        auth: Boolean,
-        params: List<Pair<String, String?>> = emptyList(),
-        body: io.ktor.http.content.OutgoingContent? = null,
-        extraHeaders: List<Pair<String, String>> = emptyList(),
-        write: Boolean = false,
-    ): Raw {
+        // Capture once: even the reauth-race retry must never send this account's payload as another account.
         val token = if (auth) {
             sessions.bearerToken()?.takeIf { BEARER.matches(it) }
                 ?: throw MobileApiException.ProofRequired("Sign in to continue.", MobileApiException.ProofRequired.Proof.SIGN_IN)
         } else {
             null
         }
+        val first = try {
+            return execOnce(method, path, token, params, body, extraHeaders, write)
+        } catch (e: MobileApiException.IdentityChanged) {
+            e
+        }
+        val reauth = lastReauth
+        // An anonymous refusal says nothing about the stored session.
+        if (token == null) throw first
+        if (sessions.bearerToken() != token) throw first
+        if (reauth == null || reauth.elapsedNow() > REAUTH_RACE_WINDOW) return reject(first, token)
+        return try {
+            execOnce(method, path, token, params, body, extraHeaders, write)
+        } catch (e: MobileApiException.IdentityChanged) {
+            reject(e, token)
+        }
+    }
+
+    private suspend fun reject(e: MobileApiException.IdentityChanged, token: String): Nothing {
+        sessions.onSessionRejected(token)
+        throw e
+    }
+
+    private suspend fun execOnce(
+        method: HttpMethod,
+        path: String,
+        token: String?,
+        params: List<Pair<String, String?>> = emptyList(),
+        body: io.ktor.http.content.OutgoingContent? = null,
+        extraHeaders: List<Pair<String, String>> = emptyList(),
+        write: Boolean = false,
+    ): Raw {
         val response = try {
             http.request(mobileApiBase + path) {
                 this.method = method
@@ -403,8 +406,8 @@ class MobileApiClient(
                 response.status.value, bytes.decodeToString(), response.headers[HttpHeaders.RetryAfter],
             )
             // identity_changed is reported by [exec], which may retry it first.
-            if (auth && error is MobileApiException.ProofRequired && error.proof == MobileApiException.ProofRequired.Proof.SIGN_IN) {
-                sessions.onSessionRejected()
+            if (token != null && error is MobileApiException.ProofRequired && error.proof == MobileApiException.ProofRequired.Proof.SIGN_IN) {
+                sessions.onSessionRejected(token)
             }
             throw error
         }

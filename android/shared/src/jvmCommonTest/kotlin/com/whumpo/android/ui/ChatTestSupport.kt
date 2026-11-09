@@ -64,7 +64,7 @@ internal object ChatFixtures {
 internal class TestSessions : SessionProvider {
     override suspend fun bearerToken(): String = ChatFixtures.token
 
-    override suspend fun onSessionRejected() = Unit
+    override suspend fun onSessionRejected(rejectedToken: String) = Unit
 }
 
 internal fun testClient(

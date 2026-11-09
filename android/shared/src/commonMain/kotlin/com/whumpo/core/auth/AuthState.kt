@@ -39,9 +39,15 @@ sealed interface AuthState {
 
     /**
      * The account (or its first-run welcome) must be finished in the browser. [canCheck] is true once signed in
-     * (the welcome step), when the app can ask the server whether it is done.
+     * (the welcome step), when the app can ask the server whether it is done. [canOpen] is true only when the browser
+     * step can actually start: a hand-off for the account, or a safe setup path from this account's own bootstrap.
      */
-    data class FinishSetup(val busy: Boolean = false, val problem: AuthProblem? = null, val canCheck: Boolean = false) : AuthState
+    data class FinishSetup(
+        val busy: Boolean = false,
+        val problem: AuthProblem? = null,
+        val canCheck: Boolean = false,
+        val canOpen: Boolean = false,
+    ) : AuthState
 
     /** `client_update_required`: nothing else is allowed. */
     data object UpdateRequired : AuthState

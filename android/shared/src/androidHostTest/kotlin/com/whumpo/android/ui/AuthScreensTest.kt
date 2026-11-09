@@ -115,10 +115,26 @@ class AuthScreensTest : RobolectricUiTest() {
     }
 
     @Test
+    fun aFailedSetupCheckOffersAnExplicitRetryAndSignOut() {
+        val actions = RecordingActions()
+        show(AuthState.FinishSetup(problem = AuthProblem.Network, canCheck = true), actions).use {
+            compose.onNodeWithTag("auth-problem").assert(polite).assertIsDisplayed()
+            compose.onNodeWithTag("auth-check-setup").assertIsEnabled().performClick()
+            compose.onNodeWithTag("auth-sign-out").assertIsEnabled().performClick()
+        }
+        assertEquals(listOf("check", "signOut"), actions.calls)
+        show(AuthState.FinishSetup(busy = true, canCheck = true)).use {
+            compose.onNodeWithTag("auth-open-setup").assertIsNotEnabled()
+            compose.onNodeWithTag("auth-check-setup").assertIsNotEnabled()
+            compose.onNodeWithTag("auth-sign-out").assertIsEnabled()
+        }
+    }
+
+    @Test
     fun finishSetupOffersCheckAndSignOutOnlyOnceSignedIn() {
         val actions = RecordingActions()
-        show(AuthState.FinishSetup(canCheck = true), actions).use {
-            compose.onNodeWithTag("auth-open-setup").assertHeightIsAtLeast(48.dp).performClick()
+        show(AuthState.FinishSetup(canCheck = true, canOpen = true), actions).use {
+            compose.onNodeWithTag("auth-open-setup").assertHeightIsAtLeast(48.dp).assertIsEnabled().performClick()
             compose.onNodeWithTag("auth-check-setup").assertHeightIsAtLeast(48.dp).performClick()
             compose.onNodeWithTag("auth-sign-out").performClick()
         }
@@ -126,6 +142,27 @@ class AuthScreensTest : RobolectricUiTest() {
         show(AuthState.FinishSetup(canCheck = false)).use {
             absent("auth-check-setup"); absent("auth-sign-out")
         }
+    }
+
+    @Test
+    fun theBrowserActionIsUnavailableWithoutASafeSetupPath() {
+        val actions = RecordingActions()
+        // A failed bootstrap keeps its own problem and retry; a missing or unsafe path has nothing to open.
+        for (state in listOf(
+            AuthState.FinishSetup(problem = AuthProblem.ServiceUnavailable, canCheck = true),
+            AuthState.FinishSetup(canCheck = true),
+        )) {
+            show(state, actions).use {
+                compose.onNodeWithTag("auth-open-setup").assertIsDisplayed().assertIsNotEnabled().performClick()
+                compose.onNodeWithTag("auth-check-setup").assertIsEnabled()
+                if (state.problem != null) compose.onNode(hasText("Whumpo is busy right now.")).assertIsDisplayed()
+            }
+        }
+        assertEquals(emptyList<String>(), actions.calls)
+        show(AuthState.FinishSetup(canCheck = true, canOpen = true), actions).use {
+            compose.onNodeWithTag("auth-open-setup").assertIsEnabled().performClick()
+        }
+        assertEquals(listOf("setup"), actions.calls)
     }
 
     @Test

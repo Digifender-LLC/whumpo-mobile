@@ -27,7 +27,7 @@ class AuthScreenshotTest : RobolectricUiTest() {
         "auth-welcome-session-ended" to { AuthFlow(AuthState.SignedOut(AuthProblem.SessionEnded), RecordingActions()) },
         "auth-waiting" to { AuthFlow(AuthState.WaitingForBrowser(), RecordingActions()) },
         "auth-exchanging" to { AuthFlow(AuthState.WaitingForBrowser(exchanging = true), RecordingActions()) },
-        "auth-finish-setup" to { AuthFlow(AuthState.FinishSetup(canCheck = true), RecordingActions()) },
+        "auth-finish-setup" to { AuthFlow(AuthState.FinishSetup(canCheck = true, canOpen = true), RecordingActions()) },
     )
 
     @Test

@@ -33,7 +33,7 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = versionProps.getProperty("versionCodeBase").toInt() + runNumber
         versionName = versionProps.getProperty("versionName")
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.whumpo.android.FixtureTestRunner"
     }
 
     // Two environments only. `local` talks to the developer's own `pnpm dev` server over
@@ -130,5 +130,6 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.ktor.client.mock)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

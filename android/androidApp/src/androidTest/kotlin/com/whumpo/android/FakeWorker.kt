@@ -4,7 +4,9 @@ import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.util.Collections
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
@@ -15,10 +17,27 @@ import kotlin.concurrent.thread
 class FakeWorker(private val port: Int = 8787) : AutoCloseable {
     class Seen(val method: String, val path: String, val headers: Map<String, String>, val body: ByteArray)
 
-    val requests: MutableList<Seen> = Collections.synchronizedList(mutableListOf())
+    val requests: MutableList<Seen> = CopyOnWriteArrayList()
 
     /** While true, every photo PUT is read and then dropped without a reply (a lost reply; OkHttp may retry it once itself). */
     @Volatile var dropUploads = false
+
+    @Volatile var onboardingComplete = true
+    @Volatile var bootstrapUnavailable = false
+
+    /** Holds a captured bootstrap reply, so tests can observe the gate before the response arrives. */
+    class BootstrapHold {
+        val entered = CountDownLatch(1)
+        private val release = CountDownLatch(1)
+
+        fun awaitRequest() = check(entered.await(10, TimeUnit.SECONDS)) { "No bootstrap request arrived" }
+        fun release() = release.countDown()
+        internal fun awaitRelease() {
+            if (!release.await(15, TimeUnit.SECONDS)) throw java.io.IOException("Bootstrap reply was never released")
+        }
+    }
+
+    @Volatile var bootstrapHold: BootstrapHold? = null
 
     // SO_REUSEADDR: the next test rebinds the port while the last one's connections are still in TIME_WAIT.
     private val server = ServerSocket().apply {
@@ -29,6 +48,8 @@ class FakeWorker(private val port: Int = 8787) : AutoCloseable {
     @Volatile private var open = true
     private val clients = mutableSetOf<Socket>()
     internal val clientCount: Int get() = synchronized(clients) { clients.size }
+
+    init { active = this }
 
     private val acceptor = thread(isDaemon = true, name = "fake-worker") {
         while (open) {
@@ -75,12 +96,7 @@ class FakeWorker(private val port: Int = 8787) : AutoCloseable {
             read += n
         }
         val path = target.substringBefore('?')
-        requests += Seen(method, path, headers, body)
-
-        if (method == "PUT" && "/photos/" in path && dropUploads) {
-            return
-        }
-        val (status, json) = route(method, path)
+        val (status, json) = exchange(method, path, headers, body)
         val bytes = json.toByteArray()
         socket.getOutputStream().apply {
             write("HTTP/1.1 $status\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
@@ -90,10 +106,31 @@ class FakeWorker(private val port: Int = 8787) : AutoCloseable {
       }
     }
 
+    /** The deployed test flavor calls this in process; only local tests use the socket transport. */
+    internal fun exchange(method: String, path: String, headers: Map<String, String>, body: ByteArray): Pair<String, String> {
+        requests += Seen(method, path, headers, body)
+        if (method == "PUT" && "/photos/" in path && dropUploads) throw java.io.IOException("Synthetic lost upload reply")
+        val response = route(method, path)
+        if (path == "/api/mobile/v1/bootstrap") {
+            bootstrapHold?.let { hold ->
+                hold.entered.countDown()
+                hold.awaitRelease()
+            }
+        }
+        return response
+    }
+
+    fun requestsSnapshot(): List<Seen> = synchronized(requests) { requests.toList() }
+
     private fun route(method: String, path: String): Pair<String, String> {
         val base = "/api/mobile/v1"
         val rest = path.removePrefix(base)
         return when {
+            method == "GET" && rest == "/bootstrap" && bootstrapUnavailable ->
+                "503 Service Unavailable" to """{"version":1,"error":{"code":"unavailable","message":"Try again later."}}"""
+            method == "GET" && rest == "/bootstrap" -> "200 OK" to
+                """{"version":1,"onboarding":{"complete":$onboardingComplete,"browserPath":${if (onboardingComplete) "null" else "\"/workspace/welcome\""}},"chat":{"revision":0,"mode":"ai"},"projectCount":1,"pendingReviewCount":0}"""
+            method == "POST" && rest == "/session/logout" -> "200 OK" to """{"version":1,"signedOut":true}"""
             method == "GET" && rest == "/projects" -> "200 OK" to """{"version":1,"items":[$PROJECT],"nextCursor":null}"""
             method == "GET" && rest == "/projects/$PROJECT_ID" -> "200 OK" to """{"version":1,"project":$PROJECT}"""
             method == "GET" && rest == "/projects/$PROJECT_ID/versions" -> "200 OK" to """{"version":1,"items":[]}"""
@@ -105,6 +142,7 @@ class FakeWorker(private val port: Int = 8787) : AutoCloseable {
     }
 
     override fun close() {
+        bootstrapHold?.release()
         val remaining = synchronized(clients) {
             open = false
             clients.toList()
@@ -113,9 +151,12 @@ class FakeWorker(private val port: Int = 8787) : AutoCloseable {
         remaining.forEach { it.close() }
         acceptor.join(5_000)
         check(!acceptor.isAlive) { "Loopback fixture did not stop accepting connections" }
+        if (active === this) active = null
     }
 
     companion object {
+        @Volatile internal var active: FakeWorker? = null
+            private set
         const val PROJECT_ID = "11111111-1111-4111-8111-000000000001"
         private const val PROJECT = """{"id":"$PROJECT_ID","name":"Example Detailing","purpose":"Mobile detailing in a synthetic city","status":"draft","siteLive":false,"backendLive":false,"createdAt":"2026-10-04T12:00:00.000Z","updatedAt":"2026-10-04T12:00:00.000Z"}"""
     }
