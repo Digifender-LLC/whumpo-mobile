@@ -48,6 +48,11 @@ class ChatBehaviorTest : RobolectricUiTest() {
         var transcriptRetries = 0
         val reviewChecks = mutableListOf<String>()
         var resends = 0
+        val forms = mutableListOf<String>()
+
+        override fun onOpenForm(interactionId: String) {
+            forms += interactionId
+        }
 
         override fun onDraftChanged(text: String) {
             drafts += text
@@ -138,13 +143,17 @@ class ChatBehaviorTest : RobolectricUiTest() {
     }
 
     @Test
-    fun anInteractionWithRawJsonGetsASafeGenericCard() {
+    fun anInteractionCardOpensTheNativeFormOnlyOnTap() {
+        val recorder = Recorder()
+        val turns = ChatScenes.turns.take(1)
         launch(Screen.Compact) {
             // Only the first turn, so the list is not scrolled past the card.
-            ChatLayout(ChatScenes.screen(ChatScenes.ready.copy(turns = ChatScenes.turns.take(1))), WidthClass.Compact, Recorder(), animated = false)
+            ChatLayout(ChatScenes.screen(ChatScenes.ready.copy(turns = turns)), WidthClass.Compact, recorder, animated = false)
         }.use {
-            compose.onNodeWithTag("interaction-generic").assertExists()
             compose.onNode(hasText("Whumpo has a form for you")).assertExists()
+            kotlin.test.assertEquals(emptyList(), recorder.forms)
+            compose.onNodeWithTag("interaction-open").assertHeightIsAtLeast(48.dp).performClick()
+            kotlin.test.assertEquals(listOfNotNull(turns.single().interaction?.interactionId), recorder.forms)
         }
     }
 

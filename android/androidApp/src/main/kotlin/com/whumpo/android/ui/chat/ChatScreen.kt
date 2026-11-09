@@ -4,10 +4,12 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.whumpo.android.ui.chat.forms.JavaZoneTime
 import com.whumpo.android.ui.shell.WidthClass
 import com.whumpo.core.auth.BrowserLauncher
 
@@ -25,7 +27,10 @@ fun ChatScreen(viewModel: ChatViewModel, width: WidthClass, origin: String, brow
         onOpenPreview = { preview -> if (!browser.open(origin + preview.path)) open(context, origin + preview.path) },
         onUpdateApp = { open(context, "market://details?id=${context.packageName}") },
         onHelp = { open(context, origin) },
+        formActions = viewModel.formActions,
+        zones = JavaZoneTime,
     )
+    BackHandler(enabled = screen.form != null) { viewModel.formActions.onClose() }
 }
 
 private fun open(context: Context, url: String) {

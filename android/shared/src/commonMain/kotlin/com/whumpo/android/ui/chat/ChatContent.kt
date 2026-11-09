@@ -60,6 +60,7 @@ import com.whumpo.android.ui.state.ErrorCard
 import com.whumpo.android.ui.state.OfflineBanner
 import com.whumpo.android.ui.state.Skeleton
 import com.whumpo.android.ui.state.UpdateRequiredScreen
+import com.whumpo.android.ui.chat.forms.FormPane
 import com.whumpo.android.ui.state.WhumpoIcons
 import com.whumpo.android.ui.state.WhumpoMascot
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
@@ -67,6 +68,7 @@ import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.android.ui.theme.WhumpoSecondaryButton
 import com.whumpo.android.ui.theme.WhumpoTheme
 import com.whumpo.core.api.ChatTurn
+import com.whumpo.core.api.InteractionRef
 import com.whumpo.core.api.PreviewRef
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -83,6 +85,7 @@ interface ChatActions {
     fun onConfirmReview() {}
     fun onCheckReview(requestId: String) {}
     fun onDismissReview() {}
+    fun onOpenForm(interactionId: String) {}
 }
 
 object NoChatActions : ChatActions
@@ -93,6 +96,8 @@ data class ChatScreenState(
     val draft: String = "",
     val composerEnabled: Boolean = false,
     val chat: ChatState = ChatState(),
+    /** The open form, if any; memory-only. */
+    val form: FormPane? = null,
     /** For relative times. The ViewModel refreshes it with every state change; tests pin it. */
     val now: Instant = Clock.System.now(),
 ) {
@@ -260,7 +265,7 @@ private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenP
             }
         }
         if (turn.review != null || reviewCheck != null) ReviewCard(turn, actions, onOpenPreview, retained = reviewCheck)
-        turn.interaction?.let { InteractionCard(it.state) }
+        turn.interaction?.let { InteractionCard(it, actions::onOpenForm) }
     }
 }
 
@@ -380,22 +385,38 @@ private fun Composer(screen: ChatScreenState, actions: ChatActions) {
     }
 }
 
-/** An interaction whose payload is still raw JSON (WH-105). Nothing from it is rendered or sent. */
+/** A form in the conversation. It opens natively; its read decides what can be shown or sent. */
 @Composable
-fun InteractionCard(state: String, modifier: Modifier = Modifier) {
+fun InteractionCard(interaction: InteractionRef, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
     Card(
-        modifier.fillMaxWidth().padding(start = 36.dp).testTag("interaction-generic"),
+        modifier.fillMaxWidth().padding(start = 36.dp).testTag("interaction-${interaction.interactionId}"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(WhumpoIcons.Chat, contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Whumpo has a form for you", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            Icon(
+                WhumpoIcons.Chat,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Answering forms in the app is coming soon. Finish this one on the Whumpo website. Status: $state.",
+                    "Whumpo has a form for you",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    when (interaction.state) {
+                        "open" -> "Answer it here. Nothing is sent until you choose Send."
+                        "submitted" -> "You sent this form."
+                        else -> "This form is no longer open."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                WhumpoSecondaryButton({ onOpen(interaction.interactionId) }, Modifier.heightIn(min = 48.dp).testTag("interaction-open")) {
+                    Text(if (interaction.state == "open") "Open form" else "View form")
+                }
             }
         }
     }

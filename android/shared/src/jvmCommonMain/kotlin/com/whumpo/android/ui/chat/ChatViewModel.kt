@@ -2,6 +2,11 @@ package com.whumpo.android.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.whumpo.android.ui.chat.forms.ClientFormApi
+import com.whumpo.android.ui.chat.forms.FormActions
+import com.whumpo.android.ui.chat.forms.FormController
+import com.whumpo.android.ui.chat.forms.JavaZoneTime
+import com.whumpo.android.ui.chat.forms.ProposedFormWire
 import com.whumpo.core.account.AccountScope
 import com.whumpo.core.api.ClientInfo
 import com.whumpo.core.api.MobileApiClient
@@ -46,9 +51,14 @@ class ChatViewModel(
 
     private val session = ChatSession(viewModelScope, client, clientInfo, reauth, onSendCommitted = { clearDraft() })
 
-    /** What the screen draws: the draft state joined with the conversation. */
-    val screen: StateFlow<ChatScreenState> = combine(state, session.state) { draft, chat ->
-        ChatScreenState(signedIn = draft.owner != null, draft = draft.draft, composerEnabled = draft.composerEnabled, chat = chat)
+    // The open form and its answers are memory-only and dropped on sign-out or account change.
+    private val forms = FormController(ClientFormApi(client), ProposedFormWire(JavaZoneTime), viewModelScope)
+
+    val formActions: FormActions get() = forms
+
+    /** What the screen draws: the draft state joined with the conversation and the open form. */
+    val screen: StateFlow<ChatScreenState> = combine(state, session.state, forms.pane) { draft, chat, form ->
+        ChatScreenState(signedIn = draft.owner != null, draft = draft.draft, composerEnabled = draft.composerEnabled, chat = chat, form = form)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ChatScreenState())
 
     private var saveJob: Job? = null
@@ -58,6 +68,7 @@ class ChatViewModel(
             account.activeAccount.collectLatest { owner ->
                 saveJob?.cancel()
                 session.reset()
+                forms.reset()
                 if (owner == null) {
                     mutableState.value = UiState(loading = false)
                     return@collectLatest
@@ -134,6 +145,10 @@ class ChatViewModel(
     }
 
     override fun onDismissReview() = session.dismissReview()
+
+    override fun onOpenForm(interactionId: String) {
+        withCurrentSession { forms.open(interactionId) }
+    }
 
     internal suspend fun awaitIdle() = session.awaitIdle()
 
