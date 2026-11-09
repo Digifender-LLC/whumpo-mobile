@@ -91,6 +91,110 @@ class ReviewConfirmRecoveryTest {
     }
 
     @Test
+    fun transcriptRetryCanRecoverIndependentlyOfReceiptAvailability() = runTest {
+        for (notFound in listOf(false, true)) {
+            Fixture(backgroundScope).use { f ->
+                f.loadAndOpen()
+                f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+                f.confirm()
+                f.session.dismissReview()
+                f.server.chatBody = page(revision = 90, empty = true)
+                f.session.refreshNow()
+                f.session.awaitIdle()
+                f.server.chatError = ChatFixtures.error("unavailable")
+                f.server.receiptReply = {
+                    if (notFound) reply(ChatFixtures.error("not_found")) else throw IOException("Synthetic receipt outage")
+                }
+                f.session.refreshNow()
+                f.session.awaitIdle()
+                assertTrue(f.session.state.value.phase is Phase.Failed)
+                val reads = f.server.receiptIds.size
+                f.server.chatError = null
+                f.server.receiptReply = { throw IOException("Synthetic receipt outage continues") }
+                f.session.load()
+                f.session.awaitIdle()
+                assertEquals(Phase.Ready, f.session.state.value.phase)
+                val retained = f.session.state.value.reviewChecks.single()
+                assertEquals(REQUEST, retained.requestId)
+                assertEquals(if (notFound) ReviewStep.Failed else ReviewStep.Uncertain, retained.step)
+                assertEquals(notFound, retained.canConfirm)
+                if (notFound) assertEquals(reads, f.server.receiptIds.size)
+                assertTrue(f.server.receiptIds.all { it == REQUEST })
+                assertEquals(1, f.server.posts.size)
+            }
+        }
+    }
+
+    @Test
+    fun aDismissedOffPageConfirmationCanSettleWhileTranscriptReadsKeepFailing() = runTest {
+        Fixture(backgroundScope).use { f ->
+            f.loadAndOpen()
+            val original = f.session.state.value.review!!
+            f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+            f.confirm()
+            f.session.dismissReview()
+            f.server.chatBody = page(revision = 90, empty = true)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            f.server.chatError = ChatFixtures.error("unavailable")
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            assertTrue(f.session.state.value.phase is Phase.Failed)
+            assertTrue(f.session.state.value.turns.isEmpty())
+            assertNull(f.session.state.value.review)
+            assertEquals(REQUEST, f.session.state.value.reviewChecks.single().requestId)
+            assertTrue(f.session.state.value.reviewChecks.single().canCheckOutcome)
+            assertFalse(f.session.state.value.reviewChecks.single().canConfirm)
+
+            f.server.receiptReply = { reply(200, receipt("completed")) }
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.awaitIdle()
+            val settled = f.session.state.value.review!!
+            assertEquals(ReviewStep.Done, settled.step)
+            assertEquals(original.requestId, settled.requestId)
+            assertEquals(original.revision, settled.revision)
+            assertEquals(original.review.control, settled.review.control)
+            assertTrue(f.session.state.value.phase is Phase.Failed)
+            assertTrue(f.session.state.value.reviewChecks.isEmpty())
+            assertTrue(f.server.receiptIds.all { it == REQUEST })
+            assertEquals(1, f.server.posts.size)
+        }
+    }
+
+    @Test
+    fun aTranscriptOutageDoesNotChangeAnOffPageNotFoundAttemptsExplicitRetryPayload() = runTest {
+        Fixture(backgroundScope).use { f ->
+            f.loadAndOpen()
+            f.server.receiptReply = { throw IOException("Synthetic receipt outage") }
+            f.confirm()
+            val original = f.server.posts.single()
+            f.session.dismissReview()
+            f.server.chatBody = page(revision = 90, empty = true)
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            f.server.chatError = ChatFixtures.error("unavailable")
+            f.server.receiptReply = { reply(ChatFixtures.error("not_found")) }
+            f.session.refreshNow()
+            f.session.awaitIdle()
+            assertTrue(f.session.state.value.phase is Phase.Failed)
+            assertEquals(ReviewStep.Failed, f.session.state.value.reviewChecks.single().step)
+            assertTrue(f.session.state.value.reviewChecks.single().canConfirm)
+            val reads = f.server.receiptIds.size
+            f.session.openReview(ChatFixtures.SITE_TURN)
+            f.session.awaitIdle()
+            assertEquals(reads, f.server.receiptIds.size)
+            assertEquals(1, f.server.posts.size)
+            f.server.confirmReply = { reply(200, acknowledgment("completed")) }
+            f.confirm()
+            assertEquals(original, f.server.posts.last())
+            assertEquals(2, f.server.posts.size)
+            assertEquals(ReviewStep.Done, f.session.state.value.review?.step)
+            assertTrue(f.session.state.value.phase is Phase.Failed)
+            assertTrue(f.session.state.value.reviewChecks.isEmpty())
+        }
+    }
+
+    @Test
     fun aDismissedOffPageNotFoundAttemptRemainsReachableForAnExplicitIdenticalRetry() = runTest {
         val ids = ArrayDeque(listOf(REQUEST, NEXT_REQUEST))
         Fixture(backgroundScope, newId = { ids.removeFirst() }).use { f ->

@@ -138,14 +138,14 @@ fun ChatPane(
             val phase = chat.phase
             when {
                 !screen.signedIn -> SignedOutNotice()
-                phase is Phase.Loading -> Skeleton("Loading your conversation", Modifier.padding(horizontal = 20.dp), animated = animated)
-                phase is Phase.Failed -> ErrorCard(phase.what, phase.safe, actions::onRetry, Modifier.padding(horizontal = 20.dp))
+                phase is Phase.Loading && chat.reviewChecks.isEmpty() -> Skeleton("Loading your conversation", Modifier.padding(horizontal = 20.dp), animated = animated)
+                phase is Phase.Failed && chat.reviewChecks.isEmpty() -> ErrorCard(phase.what, phase.safe, actions::onRetry, Modifier.padding(horizontal = 20.dp))
                 phase is Phase.UpdateRequired -> UpdateRequiredScreen(onUpdate = onUpdateApp, onHelp = onHelp)
                 chat.turns.isEmpty() && chat.outbound == null && chat.reviewChecks.isEmpty() -> EmptyConversation(actions)
                 else -> Transcript(chat, screen.now, actions, animated, onOpenPreview)
             }
         }
-        chat.notice?.let {
+        chat.notice?.takeUnless { chat.phase is Phase.Failed && chat.reviewChecks.isNotEmpty() }?.let {
             Text(
                 it,
                 style = MaterialTheme.typography.bodyMedium,
@@ -217,7 +217,8 @@ private fun EmptyConversation(actions: ChatActions) {
 private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, animated: Boolean, onOpenPreview: (PreviewRef) -> Unit) {
     val listState = rememberLazyListState()
     val missingChecks = chat.reviewChecks.filter { check -> chat.turns.none { it.id == check.turnId } }
-    val extras = missingChecks.size + (if (chat.outbound != null) 1 else 0) + (if (chat.typing) 1 else 0)
+    val failure = chat.phase as? Phase.Failed
+    val extras = missingChecks.size + (if (failure != null) 1 else 0) + (if (chat.outbound != null) 1 else 0) + (if (chat.typing) 1 else 0)
     val count = chat.turns.size + extras
     LaunchedEffect(count) { if (count > 0) listState.scrollToItem(count - 1) }
     LazyColumn(
@@ -226,6 +227,7 @@ private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, anim
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        failure?.let { item(key = "transcript-error") { ErrorCard(it.what, it.safe, actions::onRetry) } }
         items(chat.turns, key = { it.id }) { turn ->
             TurnItem(turn, now, actions, onOpenPreview, chat.reviewChecks.lastOrNull { it.turnId == turn.id })
         }

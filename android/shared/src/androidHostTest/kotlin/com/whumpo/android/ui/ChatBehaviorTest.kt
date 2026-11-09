@@ -9,8 +9,10 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import com.whumpo.android.ui.chat.ChatActions
 import com.whumpo.android.ui.chat.ChatLayout
@@ -41,6 +43,7 @@ class ChatBehaviorTest : RobolectricUiTest() {
         var dismisses = 0
         var opened: String? = null
         var checks = 0
+        var transcriptRetries = 0
         val reviewChecks = mutableListOf<String>()
         var resends = 0
 
@@ -66,6 +69,10 @@ class ChatBehaviorTest : RobolectricUiTest() {
 
         override fun onCheckSend() {
             checks += 1
+        }
+
+        override fun onRetry() {
+            transcriptRetries += 1
         }
 
         override fun onCheckReview(requestId: String) {
@@ -262,6 +269,54 @@ class ChatBehaviorTest : RobolectricUiTest() {
         }
         assertEquals(1, actions.confirms)
         assertTrue(actions.reviewChecks.isEmpty())
+    }
+
+    @Test
+    fun transcriptFailuresAndRefreshesKeepRetainedReopenActionsAccessibleWithoutEnablingSend() {
+        val failure = Phase.Failed("Couldn't load your conversation.", "Check the confirmation result before trying again.")
+        for (phase in listOf(failure, Phase.Loading)) {
+            for (step in listOf(ReviewStep.Pending, ReviewStep.Uncertain, ReviewStep.Failed)) {
+                val actions = Recorder()
+                val flow = ChatScenes.flow(step).copy(retryAllowed = step == ReviewStep.Failed)
+                val chat = ChatScenes.ready.copy(phase = phase, turns = emptyList(), reviewChecks = listOf(flow), notice = "Older notice.")
+                launch(Screen.Compact) {
+                    ChatLayout(ChatScenes.screen(chat, draft = "Saved draft"), WidthClass.Compact, actions, animated = false)
+                }.use {
+                    val tag = if (step == ReviewStep.Failed) "review-open" else "review-check-open"
+                    val label = if (step == ReviewStep.Failed) "Review change" else "Check again"
+                    compose.onNodeWithTag(tag).assertIsEnabled().assertHeightIsAtLeast(48.dp).assert(hasText(label)).performClick()
+                    compose.onNodeWithTag("chat-send").assertIsNotEnabled()
+                    if (phase is Phase.Failed) {
+                        compose.onNodeWithTag("chat-transcript").performScrollToNode(hasTestTag("state-error"))
+                        compose.onNodeWithTag("state-error").assert(polite())
+                        compose.onNode(hasText(failure.what)).assertExists()
+                        compose.onNode(hasText(failure.safe)).assertExists()
+                        compose.onNode(hasText("Try again")).performClick()
+                        compose.onNodeWithTag("chat-notice").assertDoesNotExist()
+                    } else {
+                        compose.onNodeWithTag("state-error").assertDoesNotExist()
+                    }
+                }
+                assertEquals(flow.turnId, actions.opened)
+                assertEquals(0, actions.confirms)
+                assertEquals(0, actions.sends)
+                assertEquals(if (phase is Phase.Failed) 1 else 0, actions.transcriptRetries)
+            }
+        }
+    }
+
+    @Test
+    fun aFailedTranscriptWithoutRetainedActionsKeepsItsExistingErrorCard() {
+        val failure = Phase.Failed("Couldn't load your conversation.", "Nothing was changed.")
+        launch(Screen.Compact) {
+            ChatLayout(ChatScenes.screen(ChatScenes.ready.copy(phase = failure, turns = emptyList()), draft = "Saved draft"), WidthClass.Compact, Recorder(), animated = false)
+        }.use {
+            compose.onNodeWithTag("state-error").assertExists()
+            compose.onNodeWithTag("chat-transcript").assertDoesNotExist()
+            compose.onNodeWithTag("review-check-open").assertDoesNotExist()
+            compose.onNodeWithTag("review-open").assertDoesNotExist()
+            compose.onNodeWithTag("chat-send").assertIsNotEnabled()
+        }
     }
 
     @Test
