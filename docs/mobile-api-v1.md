@@ -168,7 +168,7 @@ Every error is `{version:1,error:{code,message,...}}` with the fixed status belo
 | `request_conflict`, `stale_revision`, `chat_busy`, `review_unavailable` | 409 | Replay with changed payload, stale conversation, a pending reply, or a stale/expired review. |
 | `payload_too_large` | 413 | Over the route bound. |
 | `unsupported_media_type` | 415 | Not a prepared JPEG. |
-| WH-105 field codes (open set) | 422 | Interaction-route field validation; the error adds `fieldId` when one field is at fault. Show it at that field, or at form level when `fieldId` is absent or unknown; never branch on the code. Not yet handled by the client. |
+| WH-105 field codes (open set) | 422 | Interaction-route field validation, passed through from the WH-105 vocabulary; it is outside the closed mobile codes, so `errors.json` has no case for it. The error adds `fieldId` when one field is at fault. Show it at that field, or at form level when `fieldId` is absent or unknown; never branch on the code. The synthetic example is `errors.field422` in the [forms catalog](../tests/fixtures/proposed/forms.json). Not yet handled by the client. |
 | `rate_limited` | 429 | Wait `retryAfterSeconds`. |
 | `unavailable` | 503 | Platform or provider unavailable; authentication and help stay reachable. |
 
