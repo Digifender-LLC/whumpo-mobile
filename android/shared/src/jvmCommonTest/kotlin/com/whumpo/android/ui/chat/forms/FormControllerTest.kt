@@ -35,7 +35,7 @@ class FormControllerTest {
         val pages = mutableListOf<Pair<String, JsonElement?>>()
         var readGate: CompletableDeferred<Unit>? = null
         var pageGate: CompletableDeferred<Unit>? = null
-        var onRead: (String) -> JsonObject = { read("draft") }
+        var onRead: (String) -> JsonObject = { ProposedFormsFixture.read("draft") }
         var onPage: (String, JsonElement?) -> JsonObject = { field, _ -> page(field, listOf(PROJECT_ONE), JsonNull) }
         var onMutate: (InteractionMutateRequest) -> InteractionReceipt = {
             InteractionReceipt(1, it.requestId, it.interactionId, it.operation, it.expectedAnswerRevision + 1)
@@ -109,7 +109,7 @@ class FormControllerTest {
         assertEquals(draft, c.screen().read)
         assertEquals(draft.draft.orEmpty(), c.screen().answers)
         // The first page of each resource field loads; that is a read, never a write.
-        assertEquals(listOf("project" to null, "projects" to null), api.pages)
+        assertEquals(listOf<Pair<String, JsonElement?>>("project" to null, "projects" to null), api.pages)
     }
 
     @Test
