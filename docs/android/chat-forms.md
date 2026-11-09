@@ -108,7 +108,11 @@ Whumpo to answer this form." with the update action. No field is rendered.
   refused; daylight-saving gaps and repeats are never guessed; one request per
   attempt, receipt check only on tap, Send again reuses the same request
   object, one automatic read per confirmed submit, separate announcements for
-  separate saves, and an account change drops pending work and late replies.
+  separate saves, and an account change drops pending work and late replies,
+  including calls still queued. Only errors refused before any write (closed
+  validation, sign-in, onboarding, size, media, stale revision, not found,
+  update required) allow a new request ID; `unavailable`, `rate_limited`, a
+  code at the wrong status and anything unrecognized stay receipt-gated.
 - Host UI (`androidHostTest/.../FormScreenTest.kt`): update required shows no
   fields and no Get help; required labels; 48dp targets; first-problem focus;
   Sent is status text; an unconfirmed send offers only Check again, and not

@@ -164,18 +164,27 @@ class FormSubmitter(
         }
     }
 
+    /**
+     * Only contract errors that are refused before any write ([Rejected][SendOutcome.Rejected]) allow a new request
+     * ID. Everything else, including `unavailable`, `rate_limited`, a code at the wrong status, an unknown code or
+     * a malformed reply, leaves the outcome unknown until a tapped receipt check settles it.
+     */
     private fun fail(request: InteractionMutateRequest, e: Exception) {
+        val notSent = "Your answers weren't sent. Check them and try again."
         val attempt = when (e) {
             is MobileApiException.Transport ->
                 SendAttempt(request, if (e.outcomeUnknown) SendOutcome.Unknown else SendOutcome.NotReceived)
-            // No contract body, or the ID already holds a write: the outcome is not known.
-            is MobileApiException.Unrecognized, is MobileApiException.InvalidResponse, is MobileApiException.RequestConflict ->
-                SendAttempt(request, SendOutcome.Unknown)
             is MobileApiException.ClientUpdateRequired ->
                 SendAttempt(request, SendOutcome.Rejected, problem = "Update Whumpo to answer this form.", updateRequired = true)
             is MobileApiException.StaleRevision ->
                 SendAttempt(request, SendOutcome.Rejected, problem = "This form changed. Reload it to see the latest version.")
-            is MobileApiException -> SendAttempt(request, SendOutcome.Rejected, problem = "Your answers weren't sent. Check them and try again.")
+            is MobileApiException.NotFound ->
+                SendAttempt(request, SendOutcome.Rejected, problem = "This form is no longer available.")
+            is MobileApiException.ProofRequired, is MobileApiException.IdentityIncomplete ->
+                SendAttempt(request, SendOutcome.Rejected, problem = "Sign in again, then send your answers.")
+            is MobileApiException.ValidationFailed, is MobileApiException.OnboardingRequired,
+            is MobileApiException.PayloadTooLarge, is MobileApiException.UnsupportedMediaType ->
+                SendAttempt(request, SendOutcome.Rejected, problem = notSent)
             else -> SendAttempt(request, SendOutcome.Unknown)
         }
         _state.update { it.copy(attempt = attempt) }

@@ -73,6 +73,29 @@ sealed class MobileApiException(val code: String, message: String, cause: Throwa
     companion object {
         private val lenient = Json { ignoreUnknownKeys = true }
 
+        /** The fixed status of each code (docs/mobile-api-v1.md, Errors). A code at any other status is not a contract error. */
+        private val statusOf = mapOf(
+            "client_update_required" to 426,
+            "proof_required" to 401,
+            "identity_incomplete" to 403,
+            "onboarding_required" to 409,
+            "identity_changed" to 409,
+            "invalid_request" to 400,
+            "unknown_field" to 400,
+            "missing_field" to 400,
+            "invalid_cursor" to 400,
+            "unsupported_control" to 400,
+            "not_found" to 404,
+            "request_conflict" to 409,
+            "stale_revision" to 409,
+            "chat_busy" to 409,
+            "review_unavailable" to 409,
+            "payload_too_large" to 413,
+            "unsupported_media_type" to 415,
+            "rate_limited" to 429,
+            "unavailable" to 503,
+        )
+
         @Serializable
         private class Envelope(val version: Int, val error: Body)
 
@@ -94,6 +117,7 @@ sealed class MobileApiException(val code: String, message: String, cause: Throwa
             } catch (_: Exception) {
                 null
             } ?: return Unrecognized(status, null)
+            if (statusOf[b.code] != status) return Unrecognized(status, b.code)
             val m = b.message
             return when (b.code) {
                 "client_update_required" -> ClientUpdateRequired(m, b.minimumBuild, b.contract)

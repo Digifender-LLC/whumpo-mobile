@@ -272,6 +272,76 @@ class FormSubmitterTest {
     }
 
     @Test
+    fun unavailableStaysReceiptGatedAndRetriesOnlyTheOriginalAfterA404() = test { api ->
+        val s = submitter(api)
+        api.onMutate = { throw MobileApiException.Unavailable("Unavailable.") }
+        s.start(open, "submit", answers)
+        assertEquals(SendOutcome.Unknown, s.state.value.attempt?.outcome)
+        assertFalse(s.start(open, "submit", answers))
+        assertFalse(s.state.value.canStart)
+        s.sendAgain()
+        assertEquals(1, api.mutations.size)
+        s.checkAgain()
+        assertEquals(listOf(api.mutations[0].requestId), api.receipts)
+        assertEquals(SendOutcome.NotReceived, s.state.value.attempt?.outcome)
+        api.onMutate = { receiptFor(it) }
+        s.sendAgain()
+        assertEquals(2, api.mutations.size)
+        assertSame(api.mutations[0], api.mutations[1])
+        assertEquals(SendOutcome.Committed, s.state.value.attempt?.outcome)
+    }
+
+    @Test
+    fun repliesThatDoNotProveNothingWasWrittenStayUnknown() = test { api ->
+        val unproven = listOf(
+            MobileApiException.Unavailable("Unavailable."),
+            MobileApiException.RateLimited("Slow down.", 5),
+            MobileApiException.IdentityChanged("Changed."),
+            MobileApiException.RequestConflict("Conflict."),
+            MobileApiException.ChatBusy("Busy."),
+            MobileApiException.ReviewUnavailable("Stale."),
+            MobileApiException.Unrecognized(500, null),
+            MobileApiException.Unrecognized(422, "example_problem"),
+            MobileApiException.InvalidResponse("Bad shape."),
+            IllegalStateException("synthetic"),
+            // A closed validation body at the wrong status is not a contract error.
+            MobileApiException.fromResponse(500, """{"version":1,"error":{"code":"invalid_request","message":"Synthetic."}}"""),
+            MobileApiException.fromResponse(503, """{"version":1,"error":{"code":"not_found","message":"Synthetic."}}"""),
+        )
+        for (e in unproven) {
+            val s = submitter(api)
+            api.onMutate = { throw e }
+            s.start(open, "submit", answers)
+            assertEquals(SendOutcome.Unknown, s.state.value.attempt?.outcome, e.toString())
+            assertFalse(s.start(open, "submit", answers), e.toString())
+        }
+        assertEquals(unproven.size, api.mutations.size)
+        assertTrue(api.receipts.isEmpty())
+    }
+
+    @Test
+    fun onlyRefusalsBeforeAnyWriteAllowANewRequest() = test { api ->
+        val refused = listOf(
+            MobileApiException.fromResponse(400, """{"version":1,"error":{"code":"invalid_request","message":"Synthetic."}}"""),
+            MobileApiException.fromResponse(404, """{"version":1,"error":{"code":"not_found","message":"Synthetic."}}"""),
+            MobileApiException.fromResponse(409, """{"version":1,"error":{"code":"stale_revision","message":"Synthetic."}}"""),
+            MobileApiException.ProofRequired("Sign in.", MobileApiException.ProofRequired.Proof.SIGN_IN),
+            MobileApiException.IdentityIncomplete("Finish in the browser."),
+            MobileApiException.OnboardingRequired("Finish welcome."),
+            MobileApiException.PayloadTooLarge("Too large."),
+            MobileApiException.UnsupportedMediaType("Not JPEG."),
+            MobileApiException.ClientUpdateRequired("Update.", null, null),
+        )
+        for (e in refused) {
+            val s = submitter(api)
+            api.onMutate = { throw e }
+            s.start(open, "submit", answers)
+            assertEquals(SendOutcome.Rejected, s.state.value.attempt?.outcome, e.toString())
+            assertTrue(s.state.value.canStart, e.toString())
+        }
+    }
+
+    @Test
     fun updateRequiredAndUnrecognizedRepliesAreHandledSafely() = test { api ->
         val s = submitter(api)
         api.onMutate = { throw MobileApiException.ClientUpdateRequired("Update.", null, null) }
