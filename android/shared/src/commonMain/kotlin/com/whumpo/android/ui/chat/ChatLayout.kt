@@ -42,7 +42,7 @@ fun ChatLayout(
                 } else if (flow != null) {
                     ReviewPane(flow, actions, onOpenPreview)
                 } else {
-                    DetailPlaceholder(hint = "Reviews and forms open here, next to your conversation.")
+                    DetailPlaceholder(hint = "Reviews open here, next to your conversation.")
                 }
             },
             modifier = Modifier.fillMaxSize(),
