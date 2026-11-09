@@ -531,6 +531,9 @@ class FormControllerTest {
 
     @Test
     fun aCommittedSubmitKeepsNoAnswers() = test { api ->
+        // A complete saved draft, so Send passes validation.
+        val complete = read("draft").edit("draft", read("submitted").getValue("submission").jsonObject.getValue("answers"))
+        api.onRead = { complete }
         val c = controller(api)
         c.open(DRAFT_ID)
         c.onAnswer("short-text", Answer.Text("Synthetic C"))
@@ -538,7 +541,8 @@ class FormControllerTest {
         assertEquals(SendOutcome.Committed, c.screen().send.attempt?.outcome)
         c.onClose()
         c.open(DRAFT_ID)
-        assertEquals(draft.definition.initialAnswers(draft.draft), c.screen().answers)
+        val server = wire.decode(complete) as FormRead.Form
+        assertEquals(server.definition.initialAnswers(server.draft), c.screen().answers)
         assertNull(c.screen().send.attempt)
     }
 
