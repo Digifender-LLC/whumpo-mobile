@@ -21,7 +21,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.security.SecureRandom
-import java.time.Instant
 
 /**
  * Credentials never reach the device log, a plain file or the backup system. The bearer is random per run, so finding it
@@ -39,7 +38,7 @@ class CredentialHygieneTest {
     fun setUp() = Fixtures.reset()
 
     @After
-    fun tearDown() = runBlocking { Fixtures.container.sessions.clear() }
+    fun tearDown() = Fixtures.reset()
 
     /** Files under the app's data directory whose bytes contain any of [needles] in plain text. */
     private fun plainTextHits(vararg needles: String): List<String> {
@@ -65,26 +64,22 @@ class CredentialHygieneTest {
         // The loopback stand-in speaks cleartext HTTP on 127.0.0.1, which only the local flavor allows.
         assumeTrue(BuildConfig.WHUMPO_ENVIRONMENT == "local")
         val sessions = Fixtures.container.sessions
-        FakeWorker().use { worker ->
-            // What a finished sign-in leaves: the bearer in memory and sealed in the account store. Synthetic values only.
-            sessions.begin(token)
-            runBlocking { sessions.establish(label, Instant.now().plusSeconds(3_600).toString(), null) }
-            ActivityScenario.launch(MainActivity::class.java).use {
-                compose.waitUntil(10_000) { compose.onAllNodesWithTag("nav-projects").fetchSemanticsNodes().isNotEmpty() }
-                listOf("projects", "activity", "settings", "chat").forEach {
-                    compose.onNodeWithTag("nav-$it").performClick()
-                    compose.waitForIdle()
-                }
-                fun requests() = synchronized(worker.requests) { worker.requests.toList() }
-                // The bearer really went through the HTTP stack, so a logging interceptor or error path would have seen it.
-                compose.waitUntil(10_000) { requests().any { it.headers["authorization"] == "Bearer $token" } }
-                assertTrue(requests().none { "cookie" in it.headers })
-                assertEquals("plain-text copies of the bearer or account label", emptyList<String>(), plainTextHits(token, label))
+        val worker = Fixtures.signIn(label, token)
+        ActivityScenario.launch(MainActivity::class.java).use {
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("nav-projects").fetchSemanticsNodes().isNotEmpty() }
+            listOf("projects", "activity", "settings", "chat").forEach {
+                compose.onNodeWithTag("nav-$it").performClick()
+                compose.waitForIdle()
             }
-            runBlocking { sessions.clear() }
-            assertNull(runBlocking { sessions.bearerToken() })
-            assertFalse(WhumpoApplication.accountStateDirectory(Fixtures.app).exists())
+            fun requests() = synchronized(worker.requests) { worker.requests.toList() }
+            // The bearer really went through the HTTP stack, so a logging interceptor or error path would have seen it.
+            compose.waitUntil(10_000) { requests().any { it.headers["authorization"] == "Bearer $token" } }
+            assertTrue(requests().none { "cookie" in it.headers })
+            assertEquals("plain-text copies of the bearer or account label", emptyList<String>(), plainTextHits(token, label))
         }
+        runBlocking { sessions.clear() }
+        assertNull(runBlocking { sessions.bearerToken() })
+        assertFalse(WhumpoApplication.accountStateDirectory(Fixtures.app).exists())
 
         val log = DeviceShell.run("logcat -d -b all")
         assertTrue("logcat returned nothing to search", log.length > 1_000)

@@ -18,6 +18,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
@@ -26,6 +28,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -90,14 +93,18 @@ class AuthControllerTest {
         }
     }
 
-    private inner class Rig(private val scope: TestScope) {
+    private inner class Rig(
+        private val scope: TestScope,
+        val dir: File = File(temp.root, "account-state"),
+        val box: FakeSecretBox = FakeSecretBox(),
+    ) {
         var now: Instant = Instant.parse("2026-10-04T12:00:00Z")
         val calls = CopyOnWriteArrayList<Call>()
 
         /** path -> replacement status and body; `null` makes the request fail like a dropped connection. */
         val overrides = mutableMapOf<String, Pair<Int, String>?>()
-        val box = FakeSecretBox()
-        val dir = File(temp.root, "account-state")
+        var bootstrapGate: CompletableDeferred<Unit>? = null
+        var bootstrapEntered: CompletableDeferred<Unit>? = null
         val store = AccountStateStore(dir, box)
         val sessions = SessionManager(store, UnconfinedTestDispatcher(scope.testScheduler)) { now }
         val passkeys = FakePasskeys()
@@ -108,6 +115,12 @@ class AuthControllerTest {
                 calls += Call(path, request.headers[HttpHeaders.Authorization], request.body.toByteArray().decodeToString())
                 val override = if (overrides.containsKey(path)) overrides[path] ?: throw IOException("connection dropped") else null
                 val (status, body) = override ?: (200 to checkNotNull(ok[path]) { "unexpected $path" })
+                if (path == "/bootstrap") {
+                    val gate = bootstrapGate
+                    bootstrapEntered?.complete(Unit)
+                    // Model a response already in flight even when its caller signs out and cancels.
+                    withContext(NonCancellable) { gate?.await() }
+                }
                 respond(body, HttpStatusCode.fromValue(status), headersOf(HttpHeaders.ContentType, "application/json; charset=utf-8"))
             },
             "https://whumpo.com/api/mobile/v1",
@@ -117,9 +130,24 @@ class AuthControllerTest {
         val auth = AuthController(api, sessions, passkeys, browser, "https://whumpo.com", scope.backgroundScope)
 
         suspend fun started(): Rig {
-            sessions.restore()
+            auth.start()
             auth.state.first { it != AuthState.Restoring }
+            settle()
             return this
+        }
+
+        fun restarted() = Rig(scope, dir, box).also { it.now = now }
+
+        fun observe() = CopyOnWriteArrayList<AuthState>().also { observed ->
+            scope.backgroundScope.launch(UnconfinedTestDispatcher(scope.testScheduler)) {
+                auth.state.collect { observed += it }
+            }
+        }
+
+        fun holdBootstrap(): CompletableDeferred<Unit> {
+            bootstrapGate = CompletableDeferred()
+            bootstrapEntered = CompletableDeferred()
+            return bootstrapGate!!
         }
 
         /** Lets queued work run, then waits a moment of real time so a request that should not happen has a chance to. */
@@ -142,6 +170,7 @@ class AuthControllerTest {
     @Test
     fun startsSignedOutWithNoStoredSession() = test {
         assertEquals(AuthState.SignedOut(), auth.state.value)
+        assertTrue(paths().isEmpty())
     }
 
     @Test
@@ -171,6 +200,84 @@ class AuthControllerTest {
         restarted.restore()
         assertEquals(SessionManager.State.SignedIn, restarted.state.first())
         assertEquals(token, restarted.bearerToken())
+    }
+
+    @Test
+    fun aRestoredCompleteAccountWaitsForBootstrapBeforeOpeningTheShell() = test {
+        auth.signInWithPasskey()
+        await(AuthState.Ready)
+        val restarted = restarted()
+        val observed = restarted.observe()
+        val gate = restarted.holdBootstrap()
+
+        restarted.auth.start()
+        restarted.bootstrapEntered!!.await()
+        restarted.await(AuthState.FinishSetup(busy = true, canCheck = true))
+        assertFalse(observed.contains(AuthState.Ready))
+        assertEquals(listOf("/bootstrap"), restarted.paths())
+        assertEquals("Bearer $token", restarted.calls.single().auth)
+
+        gate.complete(Unit)
+        restarted.await(AuthState.Ready)
+    }
+
+    @Test
+    fun aRestoredIncompleteAccountKeepsSetupAndCanFinishAfterBrowserReturn() = test {
+        auth.signInWithPasskey()
+        await(AuthState.Ready)
+        val restarted = restarted()
+        val observed = restarted.observe()
+        restarted.overrides["/bootstrap"] = 200 to unfinished()
+        restarted.auth.start()
+        restarted.await(AuthState.FinishSetup(canCheck = true, canOpen = true))
+        assertFalse(observed.contains(AuthState.Ready))
+
+        restarted.auth.openSetup()
+        restarted.settle()
+        assertEquals(listOf("https://whumpo.com/welcome"), restarted.browser.opened.toList())
+        restarted.auth.checkSetupAgain()
+        restarted.settle()
+        restarted.await(AuthState.FinishSetup(canCheck = true, canOpen = true))
+        assertFalse(observed.contains(AuthState.Ready))
+
+        restarted.overrides.remove("/bootstrap")
+        restarted.auth.checkSetupAgain()
+        restarted.await(AuthState.Ready)
+    }
+
+    @Test
+    fun aRestoredBootstrapFailureStaysClosedUntilAnExplicitSuccessfulRetry() = test {
+        auth.signInWithPasskey()
+        await(AuthState.Ready)
+        val restarted = restarted()
+        val observed = restarted.observe()
+        restarted.overrides["/bootstrap"] = null
+        restarted.auth.start()
+        restarted.await(AuthState.FinishSetup(problem = AuthProblem.Network, canCheck = true))
+        restarted.settle()
+        assertFalse(observed.contains(AuthState.Ready))
+        assertEquals(1, restarted.paths().count { it == "/bootstrap" })
+        assertEquals(token, restarted.sessions.bearerToken())
+        assertTrue(dir.exists())
+
+        restarted.overrides.remove("/bootstrap")
+        restarted.auth.checkSetupAgain()
+        restarted.await(AuthState.Ready)
+        assertEquals(2, restarted.paths().count { it == "/bootstrap" })
+    }
+
+    @Test
+    fun aRejectedRestoredSessionIsErasedInsteadOfShowingSetupOrTheShell() = test {
+        auth.signInWithPasskey()
+        await(AuthState.Ready)
+        val restarted = restarted()
+        val observed = restarted.observe()
+        restarted.overrides["/bootstrap"] = 401 to err("proof_required", ""","proof":"signin"""")
+        restarted.auth.start()
+        restarted.await(AuthState.SignedOut(AuthProblem.SessionEnded))
+        assertFalse(observed.contains(AuthState.Ready))
+        assertNull(restarted.sessions.bearerToken())
+        assertFalse(dir.exists())
     }
 
     @Test
@@ -263,7 +370,7 @@ class AuthControllerTest {
     fun anIncompleteAccountIsSentToTheBrowserAndGetsNoSession() = test {
         overrides["/session/login/verify"] = 403 to err("identity_incomplete", ""","next":"browser"""")
         auth.signInWithPasskey()
-        await(AuthState.FinishSetup())
+        await(AuthState.FinishSetup(canOpen = true))
         assertFalse(dir.exists())
 
         auth.openSetup()
@@ -277,17 +384,228 @@ class AuthControllerTest {
         val unfinished = """{"version":1,"onboarding":{"complete":false,"browserPath":"/welcome"},"chat":null,"projectCount":0,"pendingReviewCount":0}"""
         overrides["/bootstrap"] = 200 to unfinished
         auth.signInWithPasskey()
-        await(AuthState.FinishSetup(canCheck = true))
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
 
         auth.openSetup()
         settle()
         assertEquals(listOf("https://whumpo.com/welcome"), browser.opened.toList())
 
         auth.checkSetupAgain()
-        await(AuthState.FinishSetup(canCheck = true))
+        settle()
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
         overrides.remove("/bootstrap")
         auth.checkSetupAgain()
         await(AuthState.Ready)
+    }
+
+    private fun unfinished(path: String? = "/welcome") =
+        """{"version":1,"onboarding":{"complete":false,"browserPath":${path?.let { JsonPrimitive(it) } ?: "null"}},"chat":null,"projectCount":0,"pendingReviewCount":0}"""
+
+    @Test
+    fun incompleteOnboardingNeverOpensTheShellWithoutASafeBrowserPath() = test {
+        auth.signInWithPasskey()
+        await(AuthState.Ready)
+        for (path in listOf(null, "//evil.example/welcome", "/welcome\\evil", "/welcome\n")) {
+            val restarted = restarted()
+            val observed = restarted.observe()
+            restarted.overrides["/bootstrap"] = 200 to unfinished(path)
+            restarted.auth.start()
+            restarted.await(AuthState.FinishSetup(canCheck = true))
+            assertFalse(observed.contains(AuthState.Ready))
+            restarted.auth.openSetup()
+            restarted.await(AuthState.FinishSetup(problem = AuthProblem.NoBrowser, canCheck = true))
+            assertTrue(restarted.browser.opened.isEmpty())
+        }
+    }
+
+    @Test
+    fun openingSetupAfterAFailedBootstrapKeepsTheBootstrapProblem() = test {
+        auth.signInWithPasskey()
+        await(AuthState.Ready)
+        val failures = listOf(
+            (503 to err("unavailable")) to AuthProblem.ServiceUnavailable,
+            (429 to err("rate_limited", ""","retryAfterSeconds":60""")) to AuthProblem.RateLimited,
+            (200 to "not json") to AuthProblem.Generic,
+        )
+        for ((response, problem) in failures) {
+            val restarted = restarted()
+            restarted.overrides["/bootstrap"] = response
+            restarted.auth.start()
+            restarted.await(AuthState.FinishSetup(problem = problem, canCheck = true))
+            restarted.auth.openSetup()
+            restarted.settle()
+            assertEquals(AuthState.FinishSetup(problem = problem, canCheck = true), restarted.auth.state.value)
+            assertTrue(restarted.browser.opened.isEmpty())
+
+            restarted.overrides.remove("/bootstrap")
+            restarted.auth.checkSetupAgain()
+            restarted.await(AuthState.Ready)
+        }
+    }
+
+    @Test
+    fun freshSignInBootstrapFailureAlsoRequiresAnExplicitRetry() = test {
+        val observed = observe()
+        overrides["/bootstrap"] = 503 to err("unavailable")
+        auth.signInWithPasskey()
+        await(AuthState.FinishSetup(problem = AuthProblem.ServiceUnavailable, canCheck = true))
+        assertFalse(observed.contains(AuthState.Ready))
+
+        overrides.remove("/bootstrap")
+        auth.checkSetupAgain()
+        await(AuthState.Ready)
+    }
+
+    @Test
+    fun failedSetupRechecksAreRecoverableAndRefreshTheBrowserPath() = test {
+        overrides["/bootstrap"] = 200 to unfinished()
+        auth.signInWithPasskey()
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
+        settle()
+        val observed = observe()
+
+        overrides["/bootstrap"] = 429 to err("rate_limited", ""","retryAfterSeconds":60""")
+        auth.checkSetupAgain()
+        await(AuthState.FinishSetup(problem = AuthProblem.RateLimited, canCheck = true))
+        settle()
+        overrides["/bootstrap"] = 200 to "not json"
+        auth.checkSetupAgain()
+        await(AuthState.FinishSetup(problem = AuthProblem.Generic, canCheck = true))
+        settle()
+        overrides["/bootstrap"] = 200 to unfinished("/welcome/resume")
+        auth.checkSetupAgain()
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
+        settle()
+        auth.openSetup()
+        settle()
+        assertEquals(listOf("https://whumpo.com/welcome/resume"), browser.opened.toList())
+        assertFalse(observed.contains(AuthState.Ready))
+    }
+
+    @Test
+    fun bootstrapCanRequireAnUpdateWithoutOpeningTheShell() = test {
+        overrides["/bootstrap"] = 426 to err("client_update_required")
+        val observed = observe()
+        auth.signInWithPasskey()
+        await(AuthState.UpdateRequired)
+        assertFalse(observed.contains(AuthState.Ready))
+        withContext(Dispatchers.Default) { auth.signOutNow() }
+        await(AuthState.SignedOut())
+    }
+
+    @Test
+    fun signingOutDuringRestoreIgnoresItsLateBootstrapResponse() = test {
+        auth.signInWithPasskey()
+        await(AuthState.Ready)
+        val restarted = restarted()
+        val observed = restarted.observe()
+        val gate = restarted.holdBootstrap()
+        restarted.auth.start()
+        restarted.bootstrapEntered!!.await()
+        restarted.await(AuthState.FinishSetup(busy = true, canCheck = true))
+
+        withContext(Dispatchers.Default) { restarted.auth.signOutNow() }
+        restarted.await(AuthState.SignedOut())
+        gate.complete(Unit)
+        restarted.settle()
+        assertEquals(AuthState.SignedOut(), restarted.auth.state.value)
+        assertNull(restarted.sessions.bearerToken())
+        assertFalse(dir.exists())
+        assertFalse(observed.contains(AuthState.Ready))
+    }
+
+    @Test
+    fun aPriorAccountsCompletedBootstrapCannotOpenTheNewAccountsShell() = test {
+        val gate = holdBootstrap()
+        val observed = observe()
+        auth.signInWithPasskey()
+        bootstrapEntered!!.await()
+        await(AuthState.FinishSetup(busy = true, canCheck = true))
+        val nextToken = "0".repeat(63) + "3"
+        sessions.begin(nextToken)
+        sessions.establish("n***@example.test", "2026-10-11T12:00:00Z", null)
+        gate.complete(Unit)
+        settle()
+        await(AuthState.FinishSetup(canCheck = true))
+        assertFalse(observed.contains(AuthState.Ready))
+
+        bootstrapGate = null
+        overrides["/bootstrap"] = 200 to unfinished("/welcome/new-account")
+        auth.checkSetupAgain()
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
+        settle()
+        assertEquals("Bearer $nextToken", calls.last { it.path == "/bootstrap" }.auth)
+        auth.openSetup()
+        settle()
+        assertEquals(listOf("https://whumpo.com/welcome/new-account"), browser.opened.toList())
+    }
+
+    @Test
+    fun aPriorAccountsRejectedBootstrapCannotEraseTheNewAccountOrItsDrafts() = runTest {
+        for ((index, response) in listOf(
+            401 to err("proof_required", ""","proof":"signin""""),
+            409 to err("identity_changed"),
+        ).withIndex()) {
+            val rig = Rig(this, File(temp.root, "rejected-bootstrap-$index")).started()
+            with(rig) {
+                val gate = holdBootstrap()
+                overrides["/bootstrap"] = response
+                auth.signInWithPasskey()
+                bootstrapEntered!!.await()
+                val nextToken = "0".repeat(63) + "3"
+                sessions.begin(nextToken)
+                sessions.establish("n***@example.test", "2026-10-11T12:00:00Z", null)
+                val account = store.activeAccount.value!!
+                store.write(account, com.whumpo.core.account.StateSlot.CHAT_DRAFT, "new account draft")
+
+                gate.complete(Unit)
+                settle()
+                assertEquals(AuthState.FinishSetup(canCheck = true), auth.state.value)
+                assertEquals(nextToken, sessions.bearerToken())
+                assertEquals(account, store.activeAccount.value)
+                assertEquals("new account draft", store.read(account, com.whumpo.core.account.StateSlot.CHAT_DRAFT))
+            }
+        }
+    }
+
+    @Test
+    fun aPriorAccountsLateUpdateRequirementCannotBlockTheNewAccount() = test {
+        val gate = holdBootstrap()
+        overrides["/bootstrap"] = 426 to err("client_update_required")
+        auth.signInWithPasskey()
+        bootstrapEntered!!.await()
+        sessions.begin("0".repeat(63) + "3")
+        sessions.establish("n***@example.test", "2026-10-11T12:00:00Z", null)
+        gate.complete(Unit)
+        settle()
+        assertEquals(AuthState.FinishSetup(canCheck = true), auth.state.value)
+    }
+
+    @Test
+    fun switchingAwayFromReadyRequiresTheNewAccountsOwnBootstrap() = test {
+        auth.signInWithPasskey()
+        await(AuthState.Ready)
+        val nextToken = "0".repeat(63) + "3"
+        sessions.begin(nextToken)
+        sessions.establish("n***@example.test", "2026-10-11T12:00:00Z", null)
+        await(AuthState.FinishSetup(canCheck = true))
+
+        auth.checkSetupAgain()
+        await(AuthState.Ready)
+        assertEquals("Bearer $nextToken", calls.last { it.path == "/bootstrap" }.auth)
+    }
+
+    @Test
+    fun switchingAccountsClosesTheGateAndNeverReusesThePreviousSetupPath() = test {
+        overrides["/bootstrap"] = 200 to unfinished("/welcome/old-account")
+        auth.signInWithPasskey()
+        await(AuthState.FinishSetup(canCheck = true, canOpen = true))
+        sessions.begin("0".repeat(63) + "3")
+        sessions.establish("n***@example.test", "2026-10-11T12:00:00Z", null)
+        await(AuthState.FinishSetup(canCheck = true))
+        auth.openSetup()
+        await(AuthState.FinishSetup(problem = AuthProblem.NoBrowser, canCheck = true))
+        assertTrue(browser.opened.isEmpty())
     }
 
     @Test

@@ -42,6 +42,8 @@ class SessionManager(
         override fun toString() = "Stored(<redacted>)"
     }
 
+    // Rejection's compare-and-erase is atomic with every session mutation.
+    private val mutationLock = Any()
     private val restored = MutableStateFlow(false)
     private val ended = MutableStateFlow(false)
 
@@ -66,84 +68,104 @@ class SessionManager(
 
     /** Loads the stored session. Call once at start-up; unreadable or expired state is erased. */
     suspend fun restore() = withContext(io) {
-        try {
-            store.restore()
-            val account = store.activeAccount.value
-            val stored = account?.let { store.read(it, SLOT) }?.let { Json.decodeFromString(Stored.serializer(), it) }
-            stored?.let(::adopt)
-            // An account with no stored session (a crash mid sign-in) is not a sign-in.
-            if (account != null && stored == null) {
-                ended.value = true
+        synchronized(mutationLock) {
+            try {
+                store.restore()
+                val account = store.activeAccount.value
+                val stored = account?.let { store.read(it, SLOT) }?.let { Json.decodeFromString(Stored.serializer(), it) }
+                stored?.let(::adopt)
+                // An account with no stored session (a crash mid sign-in) is not a sign-in.
+                if (account != null && stored == null) {
+                    ended.value = true
+                    store.signOut()
+                }
+            } catch (_: Exception) {
                 store.signOut()
             }
-        } catch (_: Exception) {
-            store.signOut()
+            if (expiresAt?.let { !clock().isBefore(it) } == true) clearLocked(ended = true)
+            restored.value = true
         }
-        if (expiresAt?.let { !clock().isBefore(it) } == true) clear(ended = true)
-        restored.value = true
     }
 
     /** Holds [newToken] in memory so `GET /session` can run. Nothing is stored until [establish]. */
-    fun begin(newToken: String) {
+    fun begin(newToken: String) = synchronized(mutationLock) {
         token = newToken
     }
 
     /** Drops a token from [begin] when the sign-in could not be completed. */
-    fun discardPending() {
+    fun discardPending() = synchronized(mutationLock) {
         if (store.activeAccount.value == null) token = null
     }
 
     /** Stores the session begun with [begin] for the account called [accountLabel]. */
-    suspend fun establish(accountLabel: String, expiresAt: String, freshUntil: String?) = withContext(io) {
-        val current = checkNotNull(token) { "begin() first" }
-        val expires = Instant.parse(expiresAt)
-        val fresh = freshUntil?.let(Instant::parse)
-        val scope = AccountScope.of(accountLabel)
-        store.signOut()
-        store.activate(scope)
-        store.write(scope, SLOT, Json.encodeToString(Stored.serializer(), Stored(current, expiresAt, freshUntil, accountLabel)))
-        token = current
-        this@SessionManager.expiresAt = expires
-        freshUntilAt = fresh
-        label = accountLabel
-        ended.value = false
+    suspend fun establish(
+        accountLabel: String,
+        expiresAt: String,
+        freshUntil: String?,
+        expectedToken: String? = null,
+    ): Unit = withContext(io) {
+        synchronized(mutationLock) {
+            val current = checkNotNull(token) { "begin() first" }
+            if (expectedToken != null && current != expectedToken) return@synchronized
+            val expires = Instant.parse(expiresAt)
+            val fresh = freshUntil?.let(Instant::parse)
+            val scope = AccountScope.of(accountLabel)
+            store.signOut()
+            token = current
+            this@SessionManager.expiresAt = expires
+            freshUntilAt = fresh
+            label = accountLabel
+            ended.value = false
+            store.activate(scope)
+            store.write(scope, SLOT, Json.encodeToString(Stored.serializer(), Stored(current, expiresAt, freshUntil, accountLabel)))
+        }
     }
 
     /** A fresh passkey proof moved `freshUntil`; it never extends `expiresAt`. */
     suspend fun updateFresh(freshUntil: String) = withContext(io) {
-        val newFresh = Instant.parse(freshUntil)
-        val account = store.activeAccount.value
-        val t = token
-        val e = expiresAt
-        val l = label
-        if (account != null && t != null && e != null && l != null) {
-            store.write(account, SLOT, Json.encodeToString(Stored.serializer(), Stored(t, e.toString(), freshUntil, l)))
-            freshUntilAt = newFresh
+        synchronized(mutationLock) {
+            val newFresh = Instant.parse(freshUntil)
+            val account = store.activeAccount.value
+            val t = token
+            val e = expiresAt
+            val l = label
+            if (account != null && t != null && e != null && l != null) {
+                store.write(account, SLOT, Json.encodeToString(Stored.serializer(), Stored(t, e.toString(), freshUntil, l)))
+                freshUntilAt = newFresh
+            }
         }
     }
 
     /** Erases the session and every account-scoped record on this device. */
     suspend fun clear(ended: Boolean = false) = withContext(io) {
+        synchronized(mutationLock) { clearLocked(ended) }
+    }
+
+    private fun clearLocked(ended: Boolean) {
         token = null
         expiresAt = null
         freshUntilAt = null
         label = null
-        this@SessionManager.ended.value = ended
+        this.ended.value = ended
         store.signOut()
     }
 
     override suspend fun bearerToken(): String? {
-        val t = token
-        val exp = expiresAt
-        val expired = exp != null && !clock().isBefore(exp)
+        val (current, expired) = synchronized(mutationLock) {
+            token to (expiresAt?.let { !clock().isBefore(it) } == true)
+        }
         if (expired) {
-            clear(ended = true)
+            if (current != null) onSessionRejected(current)
             return null
         }
-        return t
+        return current
     }
 
-    override suspend fun onSessionRejected() = clear(ended = true)
+    override suspend fun onSessionRejected(rejectedToken: String) = withContext(io) {
+        synchronized(mutationLock) {
+            if (token == rejectedToken) clearLocked(ended = true)
+        }
+    }
 
     private fun adopt(stored: Stored) {
         token = stored.token

@@ -96,7 +96,7 @@ class AccountStateTest {
 
     @Test
     fun draftSurvivesActivityRecreationAndProcessRestart() {
-        store.activate(Fixtures.ownerA)
+        Fixtures.signIn()
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         compose.onNodeWithTag("chat-composer").performTextInput("Add a booking page")
         // The ViewModel saves after a short debounce on the real clock.
@@ -119,7 +119,7 @@ class AccountStateTest {
 
     @Test
     fun signOutFromSettingsClearsDraftsAndReturnsToWelcome() {
-        store.activate(Fixtures.ownerA)
+        Fixtures.signIn()
         store.write(Fixtures.ownerA, StateSlot.CHAT_DRAFT, "erase me")
         val scenario = ActivityScenario.launch(MainActivity::class.java)
 

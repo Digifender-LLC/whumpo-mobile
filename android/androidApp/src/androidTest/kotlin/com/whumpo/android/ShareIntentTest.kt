@@ -24,7 +24,6 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -32,8 +31,9 @@ import org.junit.runner.RunWith
 
 /**
  * WH-085 on the emulator: the system share sheet's intents (ACTION_SEND) reach the app, and nothing is uploaded or sent
- * until the owner confirms (the photo is read on the phone for the preview, in memory only). The server is [FakeWorker] on device loopback; this is synthetic emulator evidence, not
- * a physical device and not a safety-scan or provider result.
+ * until the owner confirms (the photo is read on the phone for the preview, in memory only). [FakeWorker] serves synthetic
+ * responses over device loopback locally and through an in-process test engine in the deployed flavor. This is emulator
+ * evidence, not a physical device, safety-scan or provider result.
  */
 @RunWith(AndroidJUnit4::class)
 class ShareIntentTest {
@@ -45,20 +45,13 @@ class ShareIntentTest {
 
     @Before
     fun signedInWithAFakeWorker() {
-        // The loopback stand-in speaks cleartext HTTP on 127.0.0.1, which only the local flavor's network config allows.
-        assumeTrue(BuildConfig.WHUMPO_ENVIRONMENT == "local")
         Fixtures.reset()
-        worker = FakeWorker()
-        // Account state plus an in-memory bearer, as a finished sign-in would leave them. Synthetic values only.
-        Fixtures.container.sessions.begin("0".repeat(63) + "1")
-        Fixtures.container.accountState.activate(Fixtures.ownerA)
+        worker = Fixtures.signIn()
     }
 
     @After
     fun cleanUp() {
         scenario?.close()
-        if (!::worker.isInitialized) return
-        if (::worker.isInitialized) worker.close()
         Fixtures.reset()
     }
 
@@ -250,13 +243,24 @@ class ShareIntentTest {
 
         scenario!!.onActivity { it.handleShare(sharedPhoto().also { i -> i.setPackage(null) }) }
         waitFor { Fixtures.container.shares.preview.value is com.whumpo.android.ui.share.PreviewState.Ready }
-        Fixtures.container.accountState.activate(Fixtures.ownerB)
-        waitFor { Fixtures.container.shares.pending.value == null }
-        assertEquals(com.whumpo.android.ui.share.PreviewState.Idle, Fixtures.container.shares.preview.value)
+        Fixtures.signIn(Fixtures.LABEL_B, "0".repeat(63) + "2")
+        waitForShareCleared()
+        assertShareCleared()
 
         scenario!!.onActivity { it.handleShare(sharedText("another")) }
         Fixtures.container.accountState.signOut()
-        waitFor { Fixtures.container.shares.pending.value == null }
+        waitForShareCleared()
+        assertShareCleared()
+    }
+
+    private fun waitForShareCleared() = waitFor {
+        Fixtures.container.shares.pending.value == null &&
+            Fixtures.container.shares.preview.value == com.whumpo.android.ui.share.PreviewState.Idle
+    }
+
+    private fun assertShareCleared() {
+        compose.waitForIdle()
+        assertEquals(null, Fixtures.container.shares.pending.value)
         assertEquals(com.whumpo.android.ui.share.PreviewState.Idle, Fixtures.container.shares.preview.value)
     }
 

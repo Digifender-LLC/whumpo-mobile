@@ -33,7 +33,7 @@ class DeepLinkTest {
     }
 
     private fun signIn() {
-        Fixtures.container.accountState.activate(Fixtures.ownerA)
+        Fixtures.signIn()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("nav-chat").fetchSemanticsNodes().isNotEmpty() }
     }
 

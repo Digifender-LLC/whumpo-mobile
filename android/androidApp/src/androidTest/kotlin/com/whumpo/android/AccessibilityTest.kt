@@ -17,8 +17,7 @@ import org.junit.runner.RunWith
 /**
  * Accessibility Test Framework checks (touch target size, contrast, labels, duplicate bounds) on every top-level screen:
  * the sign-in screen and the four shell destinations. `enableAccessibilityChecks` also checks after each click.
- * They run against whatever the screen shows with no server reachable (error and empty states), which is also what a
- * first-time owner can see. TalkBack speech itself is still manual device evidence (docs/android-build.md).
+ * The shell uses synthetic bootstrap/project replies and error or empty replies for other data. TalkBack speech itself is still manual device evidence (docs/android-build.md).
  */
 @RunWith(AndroidJUnit4::class)
 class AccessibilityTest {
@@ -42,7 +41,7 @@ class AccessibilityTest {
 
     @Test
     fun everyShellDestinationPasses() {
-        Fixtures.container.accountState.activate(Fixtures.ownerA)
+        Fixtures.signIn()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("nav-chat").fetchSemanticsNodes().isNotEmpty() }
         listOf("chat", "projects", "activity", "settings").forEach { route ->
             compose.onNodeWithTag("nav-$route").performClick()
