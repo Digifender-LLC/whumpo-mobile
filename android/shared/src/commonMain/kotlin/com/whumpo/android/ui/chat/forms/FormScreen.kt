@@ -497,7 +497,7 @@ private fun ActionBar(read: FormRead.Form, state: FormScreenState, actions: Form
         SendOutcome.Unknown -> "We couldn't confirm your answers arrived. Check before sending again."
         SendOutcome.Checking -> "Checking whether your answers arrived…"
         SendOutcome.NotReceived -> "Your answers didn't arrive. Send them again; nothing changes."
-        SendOutcome.Rejected -> attempt?.problem
+        SendOutcome.Rejected -> attempt.problem
         SendOutcome.Committed, null -> null
     }
     val committedSubmit = attempt != null && attempt.outcome == SendOutcome.Committed && attempt.request.operation != "save-draft"
@@ -510,7 +510,7 @@ private fun ActionBar(read: FormRead.Form, state: FormScreenState, actions: Form
                 attempt?.updateRequired == true ->
                     WhumpoPrimaryButton(actions::onUpdate, buttons.testTag("form-update")) { Text("Open Play Store") }
                 attempt?.outcome == SendOutcome.Unknown || attempt?.outcome == SendOutcome.Checking ->
-                    WhumpoPrimaryButton(actions::onCheckAgain, buttons.testTag("form-check"), enabled = attempt?.outcome == SendOutcome.Unknown) { Text("Check again") }
+                    WhumpoPrimaryButton(actions::onCheckAgain, buttons.testTag("form-check"), enabled = attempt.outcome == SendOutcome.Unknown) { Text("Check again") }
                 attempt?.outcome == SendOutcome.NotReceived ->
                     WhumpoPrimaryButton(actions::onSendAgain, buttons.testTag("form-send-again")) { Text("Send again") }
                 committedSubmit -> if (send.followUpFailed) {
