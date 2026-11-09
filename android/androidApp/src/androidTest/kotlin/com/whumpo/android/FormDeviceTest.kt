@@ -1,7 +1,6 @@
 package com.whumpo.android
 
-import android.view.WindowManager
-import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,7 +9,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -20,8 +19,8 @@ import androidx.compose.ui.test.tryPerformAccessibilityChecks
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.whumpo.android.ui.chat.forms.Answer
 import com.whumpo.android.ui.chat.forms.FieldKind
@@ -37,6 +36,8 @@ import com.whumpo.android.ui.theme.WhumpoTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,7 +49,23 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class FormDeviceTest {
     @get:Rule
-    val compose = createAndroidComposeRule<ComponentActivity>()
+    val compose = createEmptyComposeRule()
+
+    private lateinit var scenario: ActivityScenario<MainActivity>
+
+    /** Hosts the form in [MainActivity] so the window keeps the app's edge-to-edge and adjustResize setup. */
+    @Before
+    fun setUp() {
+        Fixtures.reset()
+        Fixtures.signIn()
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+    }
+
+    @After
+    fun tearDown() {
+        scenario.close()
+        Fixtures.reset()
+    }
 
     private class Actions : FormActions {
         var answers by mutableStateOf(emptyMap<String, Answer>())
@@ -88,12 +105,15 @@ class FormDeviceTest {
 
     private fun show(fontScale: Float = 1f): Actions {
         val actions = Actions()
-        compose.setContent {
-            val base = LocalDensity.current
+        scenario.onActivity { activity ->
+            activity.setContent {
+                val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(base.density, fontScale)) {
-                WhumpoTheme { FormScreen(FormScreenState(form, actions.answers), JavaZoneTime, actions) }
+                    WhumpoTheme { FormScreen(FormScreenState(form, actions.answers), JavaZoneTime, actions) }
+                }
             }
         }
+        compose.waitForIdle()
         return actions
     }
 
@@ -121,11 +141,6 @@ class FormDeviceTest {
 
     @Test
     fun theActionBarStaysAboveTheSoftKeyboard() {
-        compose.runOnUiThread {
-            WindowCompat.setDecorFitsSystemWindows(compose.activity.window, false)
-            @Suppress("DEPRECATION")
-            compose.activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        }
         show()
         compose.onNodeWithTag("form-field-name").performClick()
 
@@ -134,8 +149,8 @@ class FormDeviceTest {
         val shown = runCatching {
             compose.waitUntil(10_000) {
                 var visible = false
-                compose.runOnUiThread {
-                    val root = compose.activity.window.decorView
+                scenario.onActivity { activity ->
+                    val root = activity.window.decorView
                     val insets = ViewCompat.getRootWindowInsets(root)
                     visible = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
                     imeBottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
