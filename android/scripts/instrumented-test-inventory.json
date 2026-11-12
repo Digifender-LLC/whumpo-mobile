@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "excludedClasses": [
+    "com.whumpo.android.WorkerJourneyTest"
+  ],
+  "classes": {
+    "com.whumpo.android.AccessibilityTest": [
+      "everyShellDestinationPasses",
+      "signInScreenPasses"
+    ],
+    "com.whumpo.android.AccountStateTest": [
+      "accountChangeAndSignOutEraseState",
+      "draftSurvivesActivityRecreationAndProcessRestart",
+      "keystoreBoxRoundTripsAndBindsAssociatedData",
+      "signOutFromSettingsClearsDraftsAndReturnsToWelcome",
+      "stateLivesInNoBackupStorageAndIsEncrypted"
+    ],
+    "com.whumpo.android.BackupRulesTest": [
+      "backupIsDisabled",
+      "dataExtractionRulesExcludeEveryDomainForCloudAndTransfer",
+      "fullBackupContentExcludesEveryDomain"
+    ],
+    "com.whumpo.android.CredentialHygieneTest": [
+      "aSignedInSessionNeverReachesTheDeviceLogOrAPlainFile",
+      "theBackupManagerRefusesThePackageWhileProtectedStateExists"
+    ],
+    "com.whumpo.android.DeepLinkTest": [
+      "aLinkWhileSignedOutWaitsForSignIn",
+      "aMalformedLinkChangesNothing",
+      "aProjectLinkOpensTheProjectWhenSignedIn",
+      "anActivityLinkOpensActivityWhenSignedIn"
+    ],
+    "com.whumpo.android.KeyboardInsetsTest": [
+      "anAbsentKeyboardClosesTheActivityBeforeSkipping",
+      "composerIsNotCoveredByTheKeyboard"
+    ],
+    "com.whumpo.android.LargeTextTest": [
+      "navigationLabelsAndContentRemainReachable"
+    ],
+    "com.whumpo.android.LoopbackFixtureTest": [
+      "closingTheFixtureDisconnectsAnIncompleteRequestAndReleasesItsPort"
+    ],
+    "com.whumpo.android.NavigationTest": [
+      "chatIsTheFirstDestination",
+      "everyDestinationIsReachableAndAnnouncedAsATab",
+      "selectedDestinationSurvivesConfigurationChange",
+      "settingsShowsTheBuildEnvironment",
+      "signedOutShowsWelcomeInsteadOfTheShell"
+    ],
+    "com.whumpo.android.OnboardingGateTest": [
+      "anotherAccountCannotReuseThePreviousAccountsSuccessfulBootstrap",
+      "restoredBootstrapFailureKeepsTheShellClosedUntilAnExplicitSuccessfulRetry",
+      "restoredSessionWaitsForBootstrapAndCompletedSetupBeforeShowingTheShell"
+    ],
+    "com.whumpo.android.PlatformAccessibilityTreeTest": [
+      "destinationsAreNamedSelectableTabsReachedByTheAccessibilityClickAction",
+      "everyActionableNodeHasSomethingToSay",
+      "interactiveWindowsIncludeTheApp",
+      "navigationEmitsPlatformSubtreeUpdates",
+      "theComposerIsAnEditableFieldNamedMessage"
+    ],
+    "com.whumpo.android.PushUnwiredTest": [
+      "noMessagingServiceReceiverOrProviderIsDeclared",
+      "noNotificationPermissionIsRequested",
+      "theAppIsWiredToNoPushProvider"
+    ],
+    "com.whumpo.android.ShareIntentTest": [
+      "aCorruptFileGivesAPlainFallbackAndTheDialogStillWorks",
+      "aFreshLauncherIntentDoesNotReplayAnOldShareFromHistory",
+      "aHostileExtraNeverCrashesTheApp",
+      "aLostReplyKeepsTheExactBytesAndRetriesTheSameRequestUntilLogoutErasesThem",
+      "aShareStillOpenSurvivesRotationWithoutReplayingItsAnswer",
+      "aSharedPhotoUploadsOnlyAfterAProjectIsChosenAndConfirmed",
+      "cancelSurvivesRotationAndTheShareIsNotUndone",
+      "cancellingAShareSendsAndUploadsNothing",
+      "rotationDoesNotReplayAShareAndAddDoesNotUploadTwice",
+      "sharedTextOnlyReachesTheDraftAfterConfirmAndIsNeverSent",
+      "thePreviewShowsThePhotoAndWritesNothingAndSendsNothingBeforeAdd",
+      "theThumbnailIsDroppedOnDismissAndOnAccountChange",
+      "unsupportedSharesAreIgnored"
+    ],
+    "com.whumpo.android.SystemConfigurationTest": [
+      "raisingTheSystemFontScaleWhileOpenKeepsTheShellUsable",
+      "rotatingTheDisplayKeepsTheDestinationAndTheDraft"
+    ]
+  },
+  "allowedSkips": {
+    "28": {
+      "local": {
+        "com.whumpo.android.KeyboardInsetsTest#composerIsNotCoveredByTheKeyboard": "Soft keyboard did not appear on this device",
+        "com.whumpo.android.CredentialHygieneTest#theBackupManagerRefusesThePackageWhileProtectedStateExists": "the image has no local backup transport"
+      },
+      "deployed": {
+        "com.whumpo.android.KeyboardInsetsTest#composerIsNotCoveredByTheKeyboard": "Soft keyboard did not appear on this device",
+        "com.whumpo.android.CredentialHygieneTest#aSignedInSessionNeverReachesTheDeviceLogOrAPlainFile": "AssumptionViolatedException",
+        "com.whumpo.android.CredentialHygieneTest#theBackupManagerRefusesThePackageWhileProtectedStateExists": "the image has no local backup transport"
+      }
+    },
+    "36": {
+      "local": {
+        "com.whumpo.android.CredentialHygieneTest#theBackupManagerRefusesThePackageWhileProtectedStateExists": "the image has no local backup transport"
+      },
+      "deployed": {
+        "com.whumpo.android.CredentialHygieneTest#aSignedInSessionNeverReachesTheDeviceLogOrAPlainFile": "AssumptionViolatedException",
+        "com.whumpo.android.CredentialHygieneTest#theBackupManagerRefusesThePackageWhileProtectedStateExists": "the image has no local backup transport"
+      }
+    }
+  }
+}

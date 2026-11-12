@@ -2,29 +2,47 @@
 set -euo pipefail
 script="$(cd "$(dirname "$0")" && pwd)/ci-instrumented.sh"
 python3 "$(dirname "$script")/test-anr-summary.py"
+bash "$(dirname "$script")/test-keyboard-geometry.sh"
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/android/scripts" "$fixture/bin"
 cp "$script" "$fixture/android/scripts/ci-instrumented.sh"
 cp "$(dirname "$script")/anr-summary.py" "$fixture/android/scripts/anr-summary.py"
 cp "$(dirname "$script")/verify-instrumented-results.py" "$fixture/android/scripts/verify-instrumented-results.py"
+cp "$(dirname "$script")/instrumented-test-inventory.json" "$fixture/android/scripts/instrumented-test-inventory.json"
+PYTHONDONTWRITEBYTECODE=1 python3 "$(dirname "$script")/test-verify-instrumented-results.py"
+cat >"$fixture/android/scripts/mock-results.py" <<'PYMOCK'
+import json, os
+from pathlib import Path
+import xml.etree.ElementTree as E
+inventory = json.loads(Path('scripts/instrumented-test-inventory.json').read_text())
+mode = os.environ.get('RESULT_MODE', 'pass')
+for flavor in ('local', 'deployed'):
+    folder = Path('androidApp/build/outputs/androidTest-results/connected/debug/flavors') / flavor
+    folder.mkdir(parents=True, exist_ok=True)
+    if mode == 'missing' or (mode == 'local-only' and flavor != 'local'):
+        continue
+    suite = E.Element('testsuites', tests='0', failures='0', errors='0', skipped='0')
+    for cls, names in inventory['classes'].items():
+        for name in names:
+            E.SubElement(suite, 'testcase', classname=cls, name=name)
+    if mode == 'empty':
+        suite.clear()
+    elif mode == 'fail':
+        E.SubElement(suite[0], 'failure').text = 'synthetic failure'
+        suite.set('failures', '1')
+    elif mode == 'skipped':
+        for case in suite:
+            E.SubElement(case, 'skipped').text = 'synthetic skip'
+        suite.set('skipped', str(len(suite)))
+    suite.set('tests', str(len(suite) + (mode == 'inconsistent')))
+    report = folder / 'TEST-device.xml'
+    report.write_text('<testsuites' if mode == 'malformed' else E.tostring(suite, encoding='unicode'))
+PYMOCK
 cat >"$fixture/android/gradlew" <<'SH'
 #!/usr/bin/env bash
 printf 'gradle %s\n' "$*" >>"$CALLS"
-for flavor in local deployed; do
-  report="androidApp/build/outputs/androidTest-results/connected/debug/flavors/$flavor"
-  mkdir -p "$report"
-  case "${RESULT_MODE:-pass}" in
-    pass) echo '<testsuites tests="2" failures="0" errors="0"><testsuite><testcase name="synthetic"/><testcase name="unavailable"><skipped/></testcase></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
-    empty) echo '<testsuites tests="0"/>' >"$report/TEST-device.xml" ;;
-    fail) echo '<testsuites tests="1" failures="1"><testsuite><testcase name="testRunFailed"><failure>Expected 51 tests, received 0</failure></testcase></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
-    skipped) echo '<testsuites tests="1"><testsuite><testcase name="unavailable"><skipped/></testcase></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
-    malformed) echo '<testsuites' >"$report/TEST-device.xml" ;;
-    inconsistent) echo '<testsuites tests="2"><testsuite><testcase name="synthetic"/></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
-    local-only) [[ "$flavor" != local ]] || echo '<testsuites tests="1"><testsuite><testcase name="synthetic"/></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
-    missing) ;;
-  esac
-done
+python3 scripts/mock-results.py
 exit "$GRADLE_STATUS"
 SH
 cat >"$fixture/android/scripts/test-worker-journey.sh" <<'SH'

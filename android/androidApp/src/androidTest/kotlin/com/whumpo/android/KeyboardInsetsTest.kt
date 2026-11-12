@@ -1,5 +1,13 @@
 package com.whumpo.android
 
+import android.os.Build
+import android.util.Log
+import android.view.Choreographer
+import android.view.View
+import android.view.ViewTreeObserver
+import androidx.compose.ui.test.ComposeTimeoutException
+import androidx.compose.ui.semantics.SemanticsNode
+import java.util.concurrent.ConcurrentLinkedQueue
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -52,12 +60,16 @@ class KeyboardInsetsTest {
     @Test
     fun composerIsNotCoveredByTheKeyboard() = withKeyboardActivity { scenario ->
         val imeAnimations = mutableSetOf<WindowInsetsAnimationCompat>()
+        var animationObserved = false
+        var animationGeneration = 0
         scenario.onActivity { activity ->
             ViewCompat.setWindowInsetsAnimationCallback(
                 activity.window.decorView,
                 object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
                     override fun onPrepare(animation: WindowInsetsAnimationCompat) {
                         if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) {
+                            animationGeneration++
+                            animationObserved = true
                             imeAnimations.add(animation)
                         }
                     }
@@ -69,6 +81,7 @@ class KeyboardInsetsTest {
 
                     override fun onEnd(animation: WindowInsetsAnimationCompat) {
                         if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) {
+                            animationGeneration++
                             imeAnimations.remove(animation)
                         }
                     }
@@ -77,45 +90,106 @@ class KeyboardInsetsTest {
         }
         compose.onNodeWithTag("chat-composer").performClick()
 
-        var imeBottom = 0
-        var windowHeight = 0
-        val shown = runCatching {
+        val shown = try {
             compose.waitUntil(10_000) {
                 var visible = false
+                var imeBottom = 0
                 scenario.onActivity { activity ->
                     val root = activity.window.decorView
                     val insets = ViewCompat.getRootWindowInsets(root)
                     visible = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
                     imeBottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
-                    windowHeight = root.height
                 }
                 visible && imeBottom > 0
             }
-        }.isSuccess
-        // Some headless emulator images never show a soft keyboard; record that as skipped.
-        assumeTrue("Soft keyboard did not appear on this device", shown)
+            true
+        } catch (_: ComposeTimeoutException) {
+            false
+        }
+        // API28's explicit conditional skip is incomplete keyboard coverage. API36
+        // must show the keyboard and execute this assertion in the required suite.
+        Log.i("KeyboardInsetsTest", "keyboardShown=$shown animationObserved=$animationObserved")
+        if (Build.VERSION.SDK_INT == 28) assumeTrue("Soft keyboard did not appear on this device", shown)
+        assertTrue("Soft keyboard must appear on API ${Build.VERSION.SDK_INT}", shown)
 
-        // Root insets expose the target IME size before its animation finishes. Compose
-        // idleness alone does not wait for that platform animation: imePadding is still
-        // following its intermediate frames. Compare geometry only after onEnd.
-        compose.waitUntil(10_000) {
-            var animating = false
-            scenario.onActivity { animating = imeAnimations.isNotEmpty() }
-            !animating
+        val samples = ConcurrentLinkedQueue<KeyboardGeometryStability.Frame>()
+        val stability = KeyboardGeometryStability()
+        var composerNode: SemanticsNode? = null
+        var lastFrame: KeyboardGeometryStability.Frame? = null
+        lateinit var root: View
+        scenario.onActivity { root = it.window.decorView }
+        var lastVsyncTimeNanos = 0L
+        val frameCallback = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                lastVsyncTimeNanos = frameTimeNanos
+                Choreographer.getInstance().postFrameCallback(this)
+            }
         }
-        scenario.onActivity { activity ->
-            val root = activity.window.decorView
-            val insets = ViewCompat.getRootWindowInsets(root)
-            assertTrue("Soft keyboard must remain visible", insets?.isVisible(WindowInsetsCompat.Type.ime()) == true)
-            imeBottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
-            windowHeight = root.height
+        val drawListener = ViewTreeObserver.OnDrawListener {
+            // onDraw runs in an actual rendered frame. The vsync timestamp prevents
+            // multiple draws/polls within one frame from counting as separate evidence.
+            val node = composerNode
+            if (node != null && lastVsyncTimeNanos > 0) {
+                val insets = ViewCompat.getRootWindowInsets(root)
+                val bottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+                samples.add(
+                    KeyboardGeometryStability.Frame(
+                        lastVsyncTimeNanos,
+                        node.boundsInWindow.bottom,
+                        root.height - bottom,
+                        bottom,
+                        root.height,
+                        insets?.isVisible(WindowInsetsCompat.Type.ime()) == true,
+                        imeAnimations.isNotEmpty(),
+                        animationGeneration,
+                    ),
+                )
+            }
         }
-        compose.waitForIdle()
-        val composerBottom = compose.onNodeWithTag("chat-composer")
-            .fetchSemanticsNode().boundsInWindow.bottom
-        assertTrue(
-            "composer bottom $composerBottom must be above keyboard top ${windowHeight - imeBottom}",
-            composerBottom <= windowHeight - imeBottom + 1f,
-        )
+        scenario.onActivity {
+            root.viewTreeObserver.addOnDrawListener(drawListener)
+            Choreographer.getInstance().postFrameCallback(frameCallback)
+        }
+        try {
+            compose.waitUntil(10_000) {
+                var stable = false
+                while (true) {
+                    val sample = samples.poll() ?: break
+                    if (sample.timeNanos > (lastFrame?.timeNanos ?: -1L)) {
+                        lastFrame = sample
+                        stable = stability.observe(sample)
+                    }
+                }
+                // A callback after the last draw invalidates that draw's evidence,
+                // even if the animation started and ended between polls.
+                scenario.onActivity {
+                    stable = stable && imeAnimations.isEmpty() &&
+                        lastFrame?.animationGeneration == animationGeneration
+                }
+                if (!stable) {
+                    val node = compose.onNodeWithTag("chat-composer").fetchSemanticsNode()
+                    scenario.onActivity {
+                        composerNode = node
+                        it.window.decorView.postInvalidateOnAnimation()
+                    }
+                }
+                stable
+            }
+            val frame = checkNotNull(lastFrame)
+            assertTrue(
+                "composer bottom ${frame.composerBottom} must be above keyboard top ${frame.keyboardTop}",
+                frame.composerBottom <= frame.keyboardTop + 1f,
+            )
+        } finally {
+            scenario.onActivity {
+                root.viewTreeObserver.removeOnDrawListener(drawListener)
+                Choreographer.getInstance().removeFrameCallback(frameCallback)
+            }
+            Log.i(
+                "KeyboardInsetsTest",
+                "animationObserved=$animationObserved stableRenderedFrames=${stability.stableFrames} " +
+                    "composerBottom=${lastFrame?.composerBottom} keyboardTop=${lastFrame?.keyboardTop}",
+            )
+        }
     }
 }

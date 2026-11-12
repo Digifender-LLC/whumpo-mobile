@@ -33,4 +33,4 @@ capture_anr "$out/anr-before.json" || true
 results=androidApp/build/outputs/androidTest-results/connected
 rm -rf "$results"
 ./gradlew connectedLocalDebugAndroidTest connectedDeployedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
-python3 scripts/verify-instrumented-results.py "$results"
+python3 scripts/verify-instrumented-results.py "$results" "$api"

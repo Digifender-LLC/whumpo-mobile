@@ -70,9 +70,35 @@ The script captures bounded, allowlisted device/tree/ANR diagnostics without hid
 the Gradle exit status. The shell regression exercises both API values, invalid
 API and physical serial rejection, missing/empty/failing JUnit results, and
 diagnostic-command failures. Before Gradle runs, the script removes preceding
-connected-test results; a successful Gradle exit also requires fresh, nonempty
-JUnit results with executed tests and no failures for both flavors. Direct
-instrumentation is diagnostic evidence, not a replacement for this Gradle gate.
+connected-test results; a successful Gradle exit also requires fresh JUnit matching
+`android/scripts/instrumented-test-inventory.json` for **the selected emulator and each flavor**,
+with exactly one report per flavor and no missing, duplicate, unknown or failing cases. This is a reviewed inventory
+of full JUnit class/method identities, not a count inferred from that run or a
+regex count of annotations. WorkerJourneyTest is explicitly excluded. Current
+client classes use AndroidJUnit4, have no inherited test methods or parameterized
+runners. When tests change, review and update the inventory: inherited tests use
+the concrete reporting class, and every parameterized description (including its
+parameter suffix) must be listed separately. Never strip parameter suffixes or
+accept a partial parameter set. Synthetic regressions cover these identities.
+
+API36 requires actual execution of `composerIsNotCoveredByTheKeyboard` in both
+flavors; a missing keyboard fails. API28 alone permits that case to skip for the
+exact keyboard-absence assumption. This is conditional suite completion **without
+keyboard coverage**, not equivalent keyboard acceptance. The existing deployed
+loopback-credential assumption and named missing-local-backup-transport assumption
+are also explicitly allowlisted per API/flavor in the inventory. All other skips
+are rejected; accepted skips print their identities and missing-coverage warning.
+
+The keyboard assertion samples three stable **rendered frames**, identified by
+vsync timestamps in OnDraw, with no active IME animation. Callback-generation
+changes reset the evidence, including animations between polls. Callback
+availability is logged, not required: distinct stable frames provide evidence on
+APIs without callbacks. A stable covered composer still fails the original 1px
+geometry assertion. Synthetic Java regressions exercise repeated-frame rejection,
+movement, animation and absence resets, and stable-but-covered geometry.
+
+Direct instrumentation is diagnostic evidence, not a replacement for this Gradle
+gate.
 Do not run
 the private `android/scripts/test-worker-journey.sh` from this public repository.
 It requires private website Worker source and dependencies; public CI does not
