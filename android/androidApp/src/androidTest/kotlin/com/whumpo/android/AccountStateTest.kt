@@ -3,7 +3,7 @@ package com.whumpo.android
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -11,6 +11,8 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import android.os.Looper
+import android.view.ViewTreeObserver
 import com.whumpo.android.security.KeystoreSecretBox
 import com.whumpo.core.account.AccountStateStore
 import com.whumpo.core.account.StateKind
@@ -27,6 +29,18 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.launch
 
 /** Keystore-protected, account-scoped state on a real Android runtime. */
 @RunWith(AndroidJUnit4::class)
@@ -122,15 +136,57 @@ class AccountStateTest {
         Fixtures.signIn()
         store.write(Fixtures.ownerA, StateSlot.CHAT_DRAFT, "erase me")
         val scenario = ActivityScenario.launch(MainActivity::class.java)
+        val observer = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val subscribed = CountDownLatch(1)
+        val signedOut = CountDownLatch(1)
+        val laidOut = CountDownLatch(1)
+        val publicationOnMain = AtomicReference<Boolean>()
+        val layoutOnMain = AtomicBoolean(true)
+        var tree: ViewTreeObserver? = null
+        val listener = ViewTreeObserver.OnGlobalLayoutListener {
+            if (signedOut.count == 0L) {
+                if (Looper.myLooper() != Looper.getMainLooper()) layoutOnMain.set(false)
+                laidOut.countDown()
+            }
+        }
+        try {
+            // Visible shell semantics synchronize with the real AuthGate's initial composition.
+            compose.onNodeWithTag("nav-settings").performClick()
+            compose.onNodeWithTag("settings-sign-out").performScrollTo().performClick()
+            // Unconfined here only records the StateFlow publication thread; it never touches UI.
+            // UNDISTPATCHED + onSubscription registers before the confirmation can publish null.
+            observer.launch(start = CoroutineStart.UNDISPATCHED) {
+                store.activeAccount.onSubscription { subscribed.countDown() }.first { account ->
+                    if (account == null) {
+                        publicationOnMain.set(Looper.myLooper() == Looper.getMainLooper())
+                        signedOut.countDown()
+                        true
+                    } else false
+                }
+            }
+            assertTrue("Account observer registered before sign-out", subscribed.await(5, TimeUnit.SECONDS))
+            scenario.onActivity { activity ->
+                tree = activity.window.decorView.viewTreeObserver
+                tree!!.addOnGlobalLayoutListener(listener)
+            }
+            compose.onNodeWithTag("settings-sign-out-confirm").performClick()
+            assertTrue("Background sign-out was observed", signedOut.await(5, TimeUnit.SECONDS))
+            compose.waitUntil(5_000) { store.activeAccount.value == null }
+            assertFalse(stateDir.exists())
 
-        compose.onNodeWithTag("nav-settings").performClick()
-        compose.onNodeWithTag("settings-sign-out").performScrollTo().performClick()
-        compose.onNodeWithTag("settings-sign-out-confirm").performClick()
-        compose.waitUntil(5_000) { store.activeAccount.value == null }
-        assertFalse(stateDir.exists())
-
-        compose.waitUntil(5_000) { compose.onAllNodesWithTag("auth-sign-in").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag("auth-sign-in").assertIsDisplayed()
-        scenario.close()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTag("auth-sign-in").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("auth-sign-in").assertIsDisplayed()
+            assertTrue("AuthGate laid out after sign-out", laidOut.await(5, TimeUnit.SECONDS))
+            // Assert captured facts on the instrumentation thread, never inside UI/Flow callbacks.
+            assertEquals("Session erasure publishes off main", false, publicationOnMain.get())
+            assertEquals("AuthGate UI layout stays on main", true, layoutOnMain.get())
+        } finally {
+            observer.cancel()
+            try {
+                Fixtures.onMain { tree?.takeIf { it.isAlive }?.removeOnGlobalLayoutListener(listener) }
+            } finally {
+                scenario.close()
+            }
+        }
     }
 }

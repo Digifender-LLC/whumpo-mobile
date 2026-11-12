@@ -112,6 +112,13 @@ movement, animation and absence resets, and stable-but-covered geometry.
 
 Direct instrumentation is diagnostic evidence, not a replacement for this Gradle
 gate.
+`AccountStateTest` uses the pinned Compose JUnit4 v2 rule's standard composition
+dispatcher. Its settings sign-out case registers an account-state observer before
+confirmation, observes off-main session erasure, and waits for a subsequent real
+AuthGate layout. Thread facts are captured in callbacks and asserted on the test
+thread; callback cleanup and activity closure run in `finally`. This retains the
+same test identity, inventory and skip policy. Compilation alone does not establish
+that the rule change fixes the hosted runtime failure.
 Do not run
 the private `android/scripts/test-worker-journey.sh` from this public repository.
 It requires private website Worker source and dependencies; public CI does not
