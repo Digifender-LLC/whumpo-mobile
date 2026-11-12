@@ -68,7 +68,12 @@ deployed flavor uses an in-process test engine and never contacts its configured
 website origin. Neither transport replaces the onboarding gate in production.
 The script captures bounded, allowlisted device/tree/ANR diagnostics without hiding
 the Gradle exit status. The shell regression exercises both API values, invalid
-API and physical serial rejection, and diagnostic-command failures. Do not run
+API and physical serial rejection, missing/empty/failing JUnit results, and
+diagnostic-command failures. Before Gradle runs, the script removes preceding
+connected-test results; a successful Gradle exit also requires fresh, nonempty
+JUnit results with executed tests and no failures for both flavors. Direct
+instrumentation is diagnostic evidence, not a replacement for this Gradle gate.
+Do not run
 the private `android/scripts/test-worker-journey.sh` from this public repository.
 It requires private website Worker source and dependencies; public CI does not
 replace that separate integration.

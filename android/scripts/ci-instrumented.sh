@@ -29,4 +29,8 @@ trap capture EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 capture_anr "$out/anr-before.json" || true
+# A previous run's reports cannot establish that this invocation executed tests.
+results=androidApp/build/outputs/androidTest-results/connected
+rm -rf "$results"
 ./gradlew connectedLocalDebugAndroidTest connectedDeployedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
+python3 scripts/verify-instrumented-results.py "$results"

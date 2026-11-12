@@ -7,9 +7,24 @@ trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/android/scripts" "$fixture/bin"
 cp "$script" "$fixture/android/scripts/ci-instrumented.sh"
 cp "$(dirname "$script")/anr-summary.py" "$fixture/android/scripts/anr-summary.py"
+cp "$(dirname "$script")/verify-instrumented-results.py" "$fixture/android/scripts/verify-instrumented-results.py"
 cat >"$fixture/android/gradlew" <<'SH'
 #!/usr/bin/env bash
 printf 'gradle %s\n' "$*" >>"$CALLS"
+for flavor in local deployed; do
+  report="androidApp/build/outputs/androidTest-results/connected/debug/flavors/$flavor"
+  mkdir -p "$report"
+  case "${RESULT_MODE:-pass}" in
+    pass) echo '<testsuites tests="2" failures="0" errors="0"><testsuite><testcase name="synthetic"/><testcase name="unavailable"><skipped/></testcase></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
+    empty) echo '<testsuites tests="0"/>' >"$report/TEST-device.xml" ;;
+    fail) echo '<testsuites tests="1" failures="1"><testsuite><testcase name="testRunFailed"><failure>Expected 51 tests, received 0</failure></testcase></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
+    skipped) echo '<testsuites tests="1"><testsuite><testcase name="unavailable"><skipped/></testcase></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
+    malformed) echo '<testsuites' >"$report/TEST-device.xml" ;;
+    inconsistent) echo '<testsuites tests="2"><testsuite><testcase name="synthetic"/></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
+    local-only) [[ "$flavor" != local ]] || echo '<testsuites tests="1"><testsuite><testcase name="synthetic"/></testsuite></testsuites>' >"$report/TEST-device.xml" ;;
+    missing) ;;
+  esac
+done
 exit "$GRADLE_STATUS"
 SH
 cat >"$fixture/android/scripts/test-worker-journey.sh" <<'SH'
@@ -85,6 +100,15 @@ run 28 0
 GRADLE_STATUS=42 run 36 42
 ADB_STATUS=9 run 36 0
 GRADLE_STATUS=42 ADB_STATUS=9 run 28 42
+RESULT_MODE=empty run 36 3
+RESULT_MODE=fail run 36 3
+RESULT_MODE=skipped run 28 3
+RESULT_MODE=malformed run 36 3
+RESULT_MODE=inconsistent run 36 3
+RESULT_MODE=local-only run 36 3
+# The preceding reports must be removed; a false adapter success cannot reuse them.
+run 36 0
+RESULT_MODE=missing run 36 3
 
 reject() {
   local status=0

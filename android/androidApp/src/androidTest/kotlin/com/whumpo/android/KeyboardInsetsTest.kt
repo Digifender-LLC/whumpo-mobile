@@ -5,6 +5,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsAnimationCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
@@ -50,6 +51,30 @@ class KeyboardInsetsTest {
 
     @Test
     fun composerIsNotCoveredByTheKeyboard() = withKeyboardActivity { scenario ->
+        val imeAnimations = mutableSetOf<WindowInsetsAnimationCompat>()
+        scenario.onActivity { activity ->
+            ViewCompat.setWindowInsetsAnimationCallback(
+                activity.window.decorView,
+                object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                    override fun onPrepare(animation: WindowInsetsAnimationCompat) {
+                        if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) {
+                            imeAnimations.add(animation)
+                        }
+                    }
+
+                    override fun onProgress(
+                        insets: WindowInsetsCompat,
+                        runningAnimations: MutableList<WindowInsetsAnimationCompat>,
+                    ): WindowInsetsCompat = insets
+
+                    override fun onEnd(animation: WindowInsetsAnimationCompat) {
+                        if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) {
+                            imeAnimations.remove(animation)
+                        }
+                    }
+                },
+            )
+        }
         compose.onNodeWithTag("chat-composer").performClick()
 
         var imeBottom = 0
@@ -70,6 +95,21 @@ class KeyboardInsetsTest {
         // Some headless emulator images never show a soft keyboard; record that as skipped.
         assumeTrue("Soft keyboard did not appear on this device", shown)
 
+        // Root insets expose the target IME size before its animation finishes. Compose
+        // idleness alone does not wait for that platform animation: imePadding is still
+        // following its intermediate frames. Compare geometry only after onEnd.
+        compose.waitUntil(10_000) {
+            var animating = false
+            scenario.onActivity { animating = imeAnimations.isNotEmpty() }
+            !animating
+        }
+        scenario.onActivity { activity ->
+            val root = activity.window.decorView
+            val insets = ViewCompat.getRootWindowInsets(root)
+            assertTrue("Soft keyboard must remain visible", insets?.isVisible(WindowInsetsCompat.Type.ime()) == true)
+            imeBottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+            windowHeight = root.height
+        }
         compose.waitForIdle()
         val composerBottom = compose.onNodeWithTag("chat-composer")
             .fetchSemanticsNode().boundsInWindow.bottom
