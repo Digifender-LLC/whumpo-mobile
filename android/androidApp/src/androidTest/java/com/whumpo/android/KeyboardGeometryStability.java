@@ -45,9 +45,8 @@ public final class KeyboardGeometryStability {
         if (frame.timeNanos <= lastTimeNanos) return false;
         lastTimeNanos = frame.timeNanos;
         if (frame.animating || !frame.visible || frame.imeBottom <= 0
-                || frame.windowHeight <= 0 || !Float.isFinite(frame.composerBottom)) {
-            previous = null;
-            stableFrames = 0;
+                || frame.windowHeight <= 0 || frame.composerBottom <= 0 || !Float.isFinite(frame.composerBottom)) {
+            reset();
             return false;
         }
         stableFrames = previous != null && frame.sameGeometry(previous) ? stableFrames + 1 : 1;
@@ -55,6 +54,12 @@ public final class KeyboardGeometryStability {
         // Stability is deliberately independent of the overlap assertion: a stable
         // covered composer must finish sampling and FAIL the original assertion.
         return stableFrames >= 3;
+    }
+
+    /** Discard stale geometry without allowing an already seen frame to count again. */
+    public void reset() {
+        previous = null;
+        stableFrames = 0;
     }
 
     public int getStableFrames() {

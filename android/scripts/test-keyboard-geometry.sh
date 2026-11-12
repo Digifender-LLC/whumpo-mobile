@@ -42,6 +42,23 @@ public class GeometryRegression {
         require(!state.observe(frame(7, 1200, 1500, false)), "reset after invalid frame");
         require(!state.observe(frame(8, 1200, 1500, false)), "second frame after invalid");
         require(state.observe(frame(9, 1200, 1500, false)), "recovered distinct frames");
+        for (float invalid : new float[]{0f, -1f, -100f}) {
+            state = new KeyboardGeometryStability();
+            require(!state.observe(frame(1, 1200, 1500, false)), "positive initial frame");
+            require(!state.observe(frame(2, 1200, 1500, false)), "positive second frame");
+            for (long time = 3; time <= 6; time++) {
+                require(!state.observe(frame(time, invalid, 1500, false)), "zero/negative bounds never settle");
+                require(state.getStableFrames() == 0, "zero/negative geometry clears prior evidence");
+            }
+            require(!state.observe(frame(7, 1200, 1500, false)), "first real frame after invalid bounds");
+            require(!state.observe(frame(8, 1200, 1500, false)), "second real frame after invalid bounds");
+            require(state.observe(frame(9, 1200, 1500, false)), "third real frame after invalid bounds");
+            state.reset();
+            require(!state.observe(frame(9, 1200, 1500, false)), "reset cannot reuse the previous draw");
+            require(!state.observe(frame(10, 1200, 1500, false)), "first fresh draw after stale node reset");
+            require(!state.observe(frame(11, 1200, 1500, false)), "second fresh draw after stale node reset");
+            require(state.observe(frame(12, 1200, 1500, false)), "three new draws required after stale node reset");
+        }
         System.out.println("Keyboard geometry: distinct frames, movement, animation, absence and overlap regressions passed");
     }
 }

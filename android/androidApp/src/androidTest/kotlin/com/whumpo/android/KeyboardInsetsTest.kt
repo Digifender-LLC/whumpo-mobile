@@ -7,6 +7,8 @@ import android.view.View
 import android.view.ViewTreeObserver
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutInfo
 import java.util.concurrent.ConcurrentLinkedQueue
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -112,10 +114,19 @@ class KeyboardInsetsTest {
         if (Build.VERSION.SDK_INT == 28) assumeTrue("Soft keyboard did not appear on this device", shown)
         assertTrue("Soft keyboard must appear on API ${Build.VERSION.SDK_INT}", shown)
 
-        val samples = ConcurrentLinkedQueue<KeyboardGeometryStability.Frame>()
+        data class ComposerDraw(
+            val nodeId: Int,
+            val layoutInfo: LayoutInfo,
+            val bounds: Rect,
+            val frame: KeyboardGeometryStability.Frame,
+        )
+        fun Rect.validComposerBounds(): Boolean = !isEmpty && bottom > 0f &&
+            left.isFinite() && top.isFinite() && right.isFinite() && bottom.isFinite()
+
+        val samples = ConcurrentLinkedQueue<ComposerDraw>()
         val stability = KeyboardGeometryStability()
         var composerNode: SemanticsNode? = null
-        var lastFrame: KeyboardGeometryStability.Frame? = null
+        var lastDraw: ComposerDraw? = null
         lateinit var root: View
         scenario.onActivity { root = it.window.decorView }
         var lastVsyncTimeNanos = 0L
@@ -132,18 +143,18 @@ class KeyboardInsetsTest {
             if (node != null && lastVsyncTimeNanos > 0) {
                 val insets = ViewCompat.getRootWindowInsets(root)
                 val bottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
-                samples.add(
-                    KeyboardGeometryStability.Frame(
-                        lastVsyncTimeNanos,
-                        node.boundsInWindow.bottom,
-                        root.height - bottom,
-                        bottom,
-                        root.height,
-                        insets?.isVisible(WindowInsetsCompat.Type.ime()) == true,
-                        imeAnimations.isNotEmpty(),
-                        animationGeneration,
-                    ),
+                val bounds = node.boundsInWindow
+                val frame = KeyboardGeometryStability.Frame(
+                    lastVsyncTimeNanos,
+                    if (node.layoutInfo.isAttached && bounds.validComposerBounds()) bounds.bottom else 0f,
+                    root.height - bottom,
+                    bottom,
+                    root.height,
+                    insets?.isVisible(WindowInsetsCompat.Type.ime()) == true,
+                    imeAnimations.isNotEmpty(),
+                    animationGeneration,
                 )
+                samples.add(ComposerDraw(node.id, node.layoutInfo, bounds, frame))
             }
         }
         scenario.onActivity {
@@ -154,32 +165,51 @@ class KeyboardInsetsTest {
             compose.waitUntil(10_000) {
                 var stable = false
                 while (true) {
-                    val sample = samples.poll() ?: break
-                    if (sample.timeNanos > (lastFrame?.timeNanos ?: -1L)) {
-                        lastFrame = sample
-                        stable = stability.observe(sample)
+                    val draw = samples.poll() ?: break
+                    val previous = lastDraw
+                    if (draw.frame.timeNanos > (previous?.frame?.timeNanos ?: -1L)) {
+                        if (previous != null && (draw.nodeId != previous.nodeId ||
+                                draw.layoutInfo !== previous.layoutInfo || draw.bounds != previous.bounds)) {
+                            stability.reset()
+                        }
+                        lastDraw = draw
+                        stable = stability.observe(draw.frame)
                     }
                 }
-                // A callback after the last draw invalidates that draw's evidence,
-                // even if the animation started and ended between polls.
+                // Resolve the current semantics node, rather than trust a cached node
+                // whose detached coordinator can return Rect.Zero. Any replacement or
+                // geometry change requires new drawn evidence before it can pass.
+                val fresh = compose.onNodeWithTag("chat-composer").fetchSemanticsNode()
                 scenario.onActivity {
-                    stable = stable && imeAnimations.isEmpty() &&
-                        lastFrame?.animationGeneration == animationGeneration
-                }
-                if (!stable) {
-                    val node = compose.onNodeWithTag("chat-composer").fetchSemanticsNode()
-                    scenario.onActivity {
-                        composerNode = node
-                        it.window.decorView.postInvalidateOnAnimation()
+                    val bounds = fresh.boundsInWindow
+                    val insets = ViewCompat.getRootWindowInsets(root)
+                    val bottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+                    val draw = lastDraw
+                    val matchesDraw = draw != null && fresh.layoutInfo.isAttached &&
+                        bounds.validComposerBounds() && fresh.id == draw.nodeId &&
+                        fresh.layoutInfo === draw.layoutInfo && bounds == draw.bounds &&
+                        root.height == draw.frame.windowHeight && bottom == draw.frame.imeBottom &&
+                        insets?.isVisible(WindowInsetsCompat.Type.ime()) == true &&
+                        imeAnimations.isEmpty() && draw.frame.animationGeneration == animationGeneration
+                    stable = stable && matchesDraw
+                    if (stable) {
+                        // Assert in the same main-thread observation as the fresh-node
+                        // validation. A stable covered composer fails immediately.
+                        assertTrue(
+                            "composer bottom ${bounds.bottom} must be above keyboard top ${root.height - bottom}",
+                            bounds.bottom <= root.height - bottom + 1f,
+                        )
+                    } else {
+                        if (!matchesDraw) {
+                            stability.reset()
+                            samples.clear()
+                        }
+                        composerNode = fresh
+                        root.postInvalidateOnAnimation()
                     }
                 }
                 stable
             }
-            val frame = checkNotNull(lastFrame)
-            assertTrue(
-                "composer bottom ${frame.composerBottom} must be above keyboard top ${frame.keyboardTop}",
-                frame.composerBottom <= frame.keyboardTop + 1f,
-            )
         } finally {
             scenario.onActivity {
                 root.viewTreeObserver.removeOnDrawListener(drawListener)
@@ -188,7 +218,7 @@ class KeyboardInsetsTest {
             Log.i(
                 "KeyboardInsetsTest",
                 "animationObserved=$animationObserved stableRenderedFrames=${stability.stableFrames} " +
-                    "composerBottom=${lastFrame?.composerBottom} keyboardTop=${lastFrame?.keyboardTop}",
+                    "composerBottom=${lastDraw?.frame?.composerBottom} keyboardTop=${lastDraw?.frame?.keyboardTop}",
             )
         }
     }
