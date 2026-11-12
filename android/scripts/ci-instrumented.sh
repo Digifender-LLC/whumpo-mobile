@@ -4,7 +4,14 @@ cd "$(dirname "$0")/.."
 api="${1:-}"
 [[ "$api" == 28 || "$api" == 36 ]] || { echo 'Expected API 28 or 36.' >&2; exit 2; }
 export ANDROID_SERIAL="${ANDROID_SERIAL:-emulator-5554}"
-[[ "$ANDROID_SERIAL" == emulator-* ]] || { echo 'Use a disposable emulator.' >&2; exit 2; }
+[[ "$ANDROID_SERIAL" =~ ^emulator-[0-9]+$ ]] || { echo 'Use a disposable emulator.' >&2; exit 2; }
+# AGP consumes ANDROID_SERIAL for selection; verify that exact target's actual API.
+if ! device_api="$(timeout -k 2s 10s adb -s "$ANDROID_SERIAL" shell getprop ro.build.version.sdk)"; then
+  echo 'Could not verify the selected emulator API.' >&2
+  exit 2
+fi
+device_api="${device_api%$'\r'}"
+[[ "$device_api" == "$api" ]] || { echo 'Selected emulator API does not match the requested API.' >&2; exit 2; }
 out=androidApp/build/outputs/instrumented-diagnostics
 mkdir -p "$out"
 capture_anr() {
@@ -33,4 +40,4 @@ capture_anr "$out/anr-before.json" || true
 results=androidApp/build/outputs/androidTest-results/connected
 rm -rf "$results"
 ./gradlew connectedLocalDebugAndroidTest connectedDeployedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
-python3 scripts/verify-instrumented-results.py "$results" "$api"
+python3 scripts/verify-instrumented-results.py "$results" "$api" "$ANDROID_SERIAL"

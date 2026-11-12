@@ -11,6 +11,7 @@ HERE = Path(__file__).parent
 VERIFY = runpy.run_path(str(HERE / "verify-instrumented-results.py"))["verify"]
 INVENTORY = json.loads((HERE / "instrumented-test-inventory.json").read_text())
 COMPOSER = "composerIsNotCoveredByTheKeyboard"
+SERIAL = "emulator-5554"
 CREDENTIAL = "aSignedInSessionNeverReachesTheDeviceLogOrAPlainFile"
 
 
@@ -21,6 +22,7 @@ class EvidenceTest(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.inventory = copy.deepcopy(INVENTORY)
         self.reports = {}
+        self.shape = "nested"
         self.reset_reports()
 
     def reset_reports(self):
@@ -39,13 +41,28 @@ class EvidenceTest(unittest.TestCase):
             suite.set("tests", str(len(suite)))
             folder = self.root / "debug" / "flavors" / flavor
             folder.mkdir(parents=True, exist_ok=True)
-            ET.ElementTree(suite).write(folder / "TEST-device.xml")
+            report = ET.Element("testsuites" if self.shape == "nested" else self.shape, suite.attrib)
+            if self.shape == "nested":
+                groups = {}
+                for case in suite:
+                    cls = case.get("classname")
+                    if cls not in groups:
+                        groups[cls] = ET.SubElement(report, "testsuite", name=cls)
+                    groups[cls].append(copy.deepcopy(case))
+                owners = list(groups.values())
+            else:
+                report.extend(copy.deepcopy(list(suite)))
+                owners = [report]
+            for owner in owners:
+                props = ET.SubElement(owner, "properties")
+                ET.SubElement(props, "property", name="device", value=SERIAL)
+            ET.ElementTree(report).write(folder / "TEST-device.xml")
         inventory = self.root / "inventory.json"
         inventory.write_text(json.dumps(self.inventory))
         return inventory
 
     def verify(self, api="36"):
-        VERIFY(self.root, api, self.save())
+        VERIFY(self.root, api, SERIAL, self.save())
 
     def skip(self, flavor, name, reason):
         case = next(c for c in self.reports[flavor] if c.get("name") == name)
@@ -53,6 +70,57 @@ class EvidenceTest(unittest.TestCase):
 
     def test_complete_suite(self):
         self.verify()
+
+    def test_supported_root_forms(self):
+        for shape in ("nested", "testsuite", "testsuites"):
+            with self.subTest(shape=shape):
+                self.shape = shape
+                self.verify()
+
+    def test_each_testcase_owner_must_bind_the_selected_device(self):
+        for mode in ("wrong", "missing", "mixed", "duplicate", "conflicting", "matching-parent-only"):
+            with self.subTest(mode=mode):
+                inventory = self.save()
+                report = self.root / "debug/flavors/local/TEST-device.xml"
+                tree = ET.parse(report)
+                root = tree.getroot()
+                owners = root.findall("testsuite")
+                for owner in owners if mode == "wrong" else owners[:1]:
+                    props = owner.find("properties")
+                    device = props.find("property")
+                    if mode in ("wrong", "mixed"):
+                        device.set("value", "emulator-5556")
+                    elif mode in ("missing", "matching-parent-only"):
+                        props.remove(device)
+                    else:
+                        ET.SubElement(props, "property", name="device",
+                                      value=SERIAL if mode == "duplicate" else "emulator-5556")
+                if mode == "matching-parent-only":
+                    props = ET.SubElement(root, "properties")
+                    ET.SubElement(props, "property", name="device", value=SERIAL)
+                tree.write(report)
+                with self.assertRaisesRegex(ValueError, "device metadata"):
+                    VERIFY(self.root, "36", SERIAL, inventory)
+
+    def test_flat_root_missing_device_is_rejected(self):
+        for shape in ("testsuite", "testsuites"):
+            with self.subTest(shape=shape):
+                self.shape = shape
+                inventory = self.save()
+                report = self.root / "debug/flavors/deployed/TEST-device.xml"
+                tree = ET.parse(report)
+                tree.getroot().remove(tree.getroot().find("properties"))
+                tree.write(report)
+                with self.assertRaisesRegex(ValueError, "device metadata"):
+                    VERIFY(self.root, "28", SERIAL, inventory)
+
+    def test_expected_serial_is_required_and_single(self):
+        inventory = self.save()
+        for serial in ("", "physical", "emulator-junk", "emulator-5554,physical", "emulator-5554,emulator-5556"):
+            with self.subTest(serial=serial), self.assertRaisesRegex(ValueError, "one numeric emulator"):
+                VERIFY(self.root, "36", serial, inventory)
+        with self.assertRaises(TypeError):
+            VERIFY(self.root, "36")
 
     def test_partial_suite(self):
         suite = self.reports["local"]
@@ -72,7 +140,7 @@ class EvidenceTest(unittest.TestCase):
         folder = self.root / "debug/flavors/local"
         (folder / "TEST-copy.xml").write_bytes((folder / "TEST-device.xml").read_bytes())
         with self.assertRaisesRegex(ValueError, "expected one JUnit report"):
-            VERIFY(self.root, "36", inventory)
+            VERIFY(self.root, "36", SERIAL, inventory)
 
     def test_unknown_case(self):
         self.reports["local"][0].set("name", "unreviewed")
@@ -134,7 +202,7 @@ class EvidenceTest(unittest.TestCase):
         suite.set("failures", "0")
         ET.ElementTree(suite).write(report)
         with self.assertRaisesRegex(ValueError, "inconsistent"):
-            VERIFY(self.root, "36", inventory)
+            VERIFY(self.root, "36", SERIAL, inventory)
 
     def test_inherited_and_parameterized_identities_are_exact(self):
         # JUnit reports inherited methods under the concrete child. Parameter suffixes

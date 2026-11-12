@@ -52,12 +52,19 @@ baselines), and requests both app unit-test tasks. If an app unit task reports
 `NO-SOURCE`, record that result without counting it as test coverage.
 
 Instrumentation needs an already available disposable emulator; the script
-accepts only API 28 or 36 and an `emulator-*` serial:
+accepts only API 28 or 36 and one numeric `emulator-<digits>` serial:
 
 ```sh
 bash android/scripts/ci-instrumented.sh 28
 bash android/scripts/ci-instrumented.sh 36
 ```
+
+The script preserves `ANDROID_SERIAL`, which pinned AGP consumes to select the
+connected target, and checks that exact emulator's actual API with a bounded
+`getprop ro.build.version.sdk` call before Gradle. A missing/unresponsive target,
+API mismatch, malformed serial or comma-separated device list fails before tests.
+This is a selected-device preflight under job ownership, not atomic device
+attestation across the entire run.
 
 Each run invokes only `connectedLocalDebugAndroidTest` and
 `connectedDeployedDebugAndroidTest`, with `WorkerJourneyTest` excluded. The
@@ -72,7 +79,13 @@ API and physical serial rejection, missing/empty/failing JUnit results, and
 diagnostic-command failures. Before Gradle runs, the script removes preceding
 connected-test results; a successful Gradle exit also requires fresh JUnit matching
 `android/scripts/instrumented-test-inventory.json` for **the selected emulator and each flavor**,
-with exactly one report per flavor and no missing, duplicate, unknown or failing cases. This is a reviewed inventory
+with exactly one report per flavor and no missing, duplicate, unknown or failing cases.
+The validator also requires the selected serial explicitly and exactly one matching
+`device` property on every XML container directly owning testcases. Both nested
+`testsuites` and supported flat `testsuite`/`testsuites` reports are checked;
+missing, duplicate, wrong or mixed device metadata fails. Report filenames do not
+attest serial or API. The current AGP reports contain serial metadata but no API
+property, so the API preflight supplies that check. This is a reviewed inventory
 of full JUnit class/method identities, not a count inferred from that run or a
 regex count of annotations. WorkerJourneyTest is explicitly excluded. Current
 client classes use AndroidJUnit4, have no inherited test methods or parameterized
