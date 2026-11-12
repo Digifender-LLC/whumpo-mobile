@@ -135,7 +135,28 @@ private fun numberProblem(kind: FieldKind.Number, text: String): String? {
     return null
 }
 
-internal fun plain(d: Double): String = if (d == kotlin.math.floor(d) && kotlin.math.abs(d) < 1e15) d.toLong().toString() else d.toString()
+/** [d] as plain decimal text, never exponent notation: `1.23456785E7` is `12345678.5`, `100.0` is `100`. */
+internal fun plain(d: Double): String = plainDecimal(d.toString()) ?: d.toString()
+
+private val DecimalLiteral = Regex("""(-?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]{1,3}))?""")
+
+/** Expands a decimal literal such as `5.0E-4` into plain text (`0.0005`), dropping trailing zeros; null if not one. */
+internal fun plainDecimal(literal: String): String? {
+    val m = DecimalLiteral.matchEntire(literal) ?: return null
+    val (sign, whole, fraction, exponent) = m.destructured
+    val digits = whole + fraction
+    val point = whole.length + (if (exponent.isEmpty()) 0 else exponent.toInt())
+    val padded = when {
+        point <= 0 -> "0".repeat(1 - point) + digits
+        point > digits.length -> digits + "0".repeat(point - digits.length)
+        else -> digits
+    }
+    val at = maxOf(point, 1)
+    val integer = padded.substring(0, at).trimStart('0').ifEmpty { "0" }
+    val decimals = padded.substring(at).trimEnd('0')
+    val text = if (decimals.isEmpty()) integer else "$integer.$decimals"
+    return if (text == "0") text else sign + text
+}
 
 private val IsoDate = Regex("""(\d{4})-(\d{2})-(\d{2})""")
 private val UtcInstant = Regex("""(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})\.\d{3}Z""")

@@ -17,7 +17,10 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /** The pending-adoption decoder against tests/fixtures/proposed/forms.json. */
 class ProposedFormWireTest {
@@ -165,5 +168,46 @@ class ProposedFormWireTest {
         val f = form("submitted")
         val wireAnswers = read("submitted").getValue("submission").jsonObject.getValue("answers").jsonObject
         assertEquals(wireAnswers, f.definition.encodeAnswers(f.submission!!.answers))
+    }
+
+    private fun numberRead(min: Double, max: Double, value: Double) = read("draft")
+        .edit("envelope.definition.fields.6.constraints", buildJsonObject { put("min", min); put("max", max); put("step", 0.0005) })
+        .edit("envelope.definition.fields.6.default", buildJsonObject { put("value", value); put("provenance", "suggested") })
+        .edit("draft.quantity", JsonPrimitive(value))
+
+    @Test
+    fun fractionalNumbersDecodeAsPlainDecimalsAndEncodeTheSameValue() {
+        val cases = listOf(
+            Triple(0.0, 1e9, 12345678.5 to "12345678.5"),
+            Triple(0.0, 1e9, 0.0005 to "0.0005"),
+            Triple(0.0, 1e9, 0.001 to "0.001"),
+            Triple(0.0, 1e9, 0.0015 to "0.0015"),
+            Triple(0.0, 1e9, 9999999.9995 to "9999999.9995"),
+            Triple(0.0, 1e9, 1e7 to "10000000"),
+            Triple(0.0, 1e9, 10000000.0005 to "10000000.0005"),
+            Triple(-1e9, 0.0, -0.0005 to "-0.0005"),
+            Triple(-1e9, 0.0, -0.001 to "-0.001"),
+            Triple(-1e9, 0.0, -12345678.5 to "-12345678.5"),
+            Triple(-1e9, 0.0, -1e7 to "-10000000"),
+        )
+        for ((min, max, case) in cases) {
+            val (value, text) = case
+            val form = assertIs<FormRead.Form>(wire.decode(numberRead(min, max, value)), "$value must not fail closed")
+            val quantity = form.definition.fields.first { it.id == "quantity" }
+            assertEquals(Answer.Number(text), quantity.default, "default $value")
+            assertEquals(Answer.Number(text), form.draft?.get("quantity"), "draft $value")
+            assertEquals(value, form.definition.encodeAnswers(form.draft!!).getValue("quantity").jsonPrimitive.double)
+        }
+    }
+
+    @Test
+    fun plainNeverUsesExponentNotation() {
+        val cases = mapOf(
+            12345678.5 to "12345678.5", 0.0005 to "0.0005", 0.001 to "0.001", 1e7 to "10000000", 1e9 to "1000000000",
+            100.0 to "100", 0.0 to "0", -0.0 to "0", -0.0005 to "-0.0005", 1e-7 to "0.0000001", 1.5e21 to "1500000000000000000000",
+        )
+        for ((d, text) in cases) assertEquals(text, plain(d), "$d")
+        assertEquals("0.0005", plainDecimal("5e-4"))
+        assertNull(plainDecimal("NaN"))
     }
 }
