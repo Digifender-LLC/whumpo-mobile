@@ -52,12 +52,19 @@ baselines), and requests both app unit-test tasks. If an app unit task reports
 `NO-SOURCE`, record that result without counting it as test coverage.
 
 Instrumentation needs an already available disposable emulator; the script
-accepts only API 28 or 36 and an `emulator-*` serial:
+accepts only API 28 or 36 and one numeric `emulator-<digits>` serial:
 
 ```sh
 bash android/scripts/ci-instrumented.sh 28
 bash android/scripts/ci-instrumented.sh 36
 ```
+
+The script preserves `ANDROID_SERIAL`, which pinned AGP consumes to select the
+connected target, and checks that exact emulator's actual API with a bounded
+`getprop ro.build.version.sdk` call before Gradle. A missing/unresponsive target,
+API mismatch, malformed serial or comma-separated device list fails before tests.
+This is a selected-device preflight under job ownership, not atomic device
+attestation across the entire run.
 
 Each run invokes only `connectedLocalDebugAndroidTest` and
 `connectedDeployedDebugAndroidTest`, with `WorkerJourneyTest` excluded. The
@@ -68,7 +75,51 @@ deployed flavor uses an in-process test engine and never contacts its configured
 website origin. Neither transport replaces the onboarding gate in production.
 The script captures bounded, allowlisted device/tree/ANR diagnostics without hiding
 the Gradle exit status. The shell regression exercises both API values, invalid
-API and physical serial rejection, and diagnostic-command failures. Do not run
+API and physical serial rejection, missing/empty/failing JUnit results, and
+diagnostic-command failures. Before Gradle runs, the script removes preceding
+connected-test results; a successful Gradle exit also requires fresh JUnit matching
+`android/scripts/instrumented-test-inventory.json` for **the selected emulator and each flavor**,
+with exactly one report per flavor and no missing, duplicate, unknown or failing cases.
+The validator also requires the selected serial explicitly and exactly one matching
+`device` property on every XML container directly owning testcases. Both nested
+`testsuites` and supported flat `testsuite`/`testsuites` reports are checked;
+missing, duplicate, wrong or mixed device metadata fails. Report filenames do not
+attest serial or API. The current AGP reports contain serial metadata but no API
+property, so the API preflight supplies that check. This is a reviewed inventory
+of full JUnit class/method identities, not a count inferred from that run or a
+regex count of annotations. WorkerJourneyTest is explicitly excluded. Current
+client classes use AndroidJUnit4, have no inherited test methods or parameterized
+runners. When tests change, review and update the inventory: inherited tests use
+the concrete reporting class, and every parameterized description (including its
+parameter suffix) must be listed separately. Never strip parameter suffixes or
+accept a partial parameter set. Synthetic regressions cover these identities.
+
+API36 requires actual execution of `composerIsNotCoveredByTheKeyboard` in both
+flavors; a missing keyboard fails. API28 alone permits that case to skip for the
+exact keyboard-absence assumption. This is conditional suite completion **without
+keyboard coverage**, not equivalent keyboard acceptance. The existing deployed
+loopback-credential assumption and named missing-local-backup-transport assumption
+are also explicitly allowlisted per API/flavor in the inventory. All other skips
+are rejected; accepted skips print their identities and missing-coverage warning.
+
+The keyboard assertion samples three stable **rendered frames**, identified by
+vsync timestamps in OnDraw, with no active IME animation. Callback-generation
+changes reset the evidence, including animations between polls. Callback
+availability is logged, not required: distinct stable frames provide evidence on
+APIs without callbacks. A stable covered composer still fails the original 1px
+geometry assertion. Synthetic Java regressions exercise repeated-frame rejection,
+movement, animation and absence resets, and stable-but-covered geometry.
+
+Direct instrumentation is diagnostic evidence, not a replacement for this Gradle
+gate.
+`AccountStateTest` uses the pinned Compose JUnit4 v2 rule's standard composition
+dispatcher. Its settings sign-out case registers an account-state observer before
+confirmation, observes off-main session erasure, and waits for a subsequent real
+AuthGate layout. Thread facts are captured in callbacks and asserted on the test
+thread; callback cleanup and activity closure run in `finally`. This retains the
+same test identity, inventory and skip policy. Compilation alone does not establish
+that the rule change fixes the hosted runtime failure.
+Do not run
 the private `android/scripts/test-worker-journey.sh` from this public repository.
 It requires private website Worker source and dependencies; public CI does not
 replace that separate integration.
