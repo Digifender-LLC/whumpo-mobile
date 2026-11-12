@@ -123,6 +123,11 @@ class KeyboardInsetsTest {
         fun Rect.validComposerBounds(): Boolean = !isEmpty && bottom > 0f &&
             left.isFinite() && top.isFinite() && right.isFinite() && bottom.isFinite()
 
+        data class OverlapObservation(val composerBottom: Float, val keyboardTop: Int) {
+            val message: String
+                get() = "composer bottom $composerBottom must be above keyboard top $keyboardTop"
+        }
+        var overlap: OverlapObservation? = null
         val samples = ConcurrentLinkedQueue<ComposerDraw>()
         val stability = KeyboardGeometryStability()
         var composerNode: SemanticsNode? = null
@@ -193,12 +198,10 @@ class KeyboardInsetsTest {
                         imeAnimations.isEmpty() && draw.frame.animationGeneration == animationGeneration
                     stable = stable && matchesDraw
                     if (stable) {
-                        // Assert in the same main-thread observation as the fresh-node
-                        // validation. A stable covered composer fails immediately.
-                        assertTrue(
-                            "composer bottom ${bounds.bottom} must be above keyboard top ${root.height - bottom}",
-                            bounds.bottom <= root.height - bottom + 1f,
-                        )
+                        // Record the exact fresh-node observation here, but assert on
+                        // the test thread so a failure is reported as a JUnit assertion.
+                        // Stability ends the wait even when this observation is covered.
+                        overlap = OverlapObservation(bounds.bottom, root.height - bottom)
                     } else {
                         if (!matchesDraw) {
                             stability.reset()
@@ -210,6 +213,9 @@ class KeyboardInsetsTest {
                 }
                 stable
             }
+            val observed = checkNotNull(overlap)
+            Log.i("KeyboardInsetsTest", observed.message)
+            assertTrue(observed.message, observed.composerBottom <= observed.keyboardTop + 1f)
         } finally {
             scenario.onActivity {
                 root.viewTreeObserver.removeOnDrawListener(drawListener)
