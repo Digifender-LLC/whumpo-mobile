@@ -18,8 +18,6 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.tryPerformAccessibilityChecks
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.whumpo.android.ui.chat.forms.Answer
@@ -35,7 +33,6 @@ import com.whumpo.android.ui.chat.forms.JavaZoneTime
 import com.whumpo.android.ui.theme.WhumpoTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -110,7 +107,7 @@ class FormDeviceTest {
         scenario.onActivity { activity ->
             activity.setContent {
                 val base = LocalDensity.current
-            CompositionLocalProvider(LocalDensity provides Density(base.density, fontScale)) {
+                CompositionLocalProvider(LocalDensity provides Density(base.density, fontScale)) {
                     WhumpoTheme { FormScreen(FormScreenState(form, actions.answers), JavaZoneTime, actions) }
                 }
             }
@@ -144,31 +141,6 @@ class FormDeviceTest {
     @Test
     fun theActionBarStaysAboveTheSoftKeyboard() {
         show()
-        compose.onNodeWithTag("form-field-name").performClick()
-
-        var imeBottom = 0
-        var windowHeight = 0
-        val shown = runCatching {
-            compose.waitUntil(10_000) {
-                var visible = false
-                scenario.onActivity { activity ->
-                    val root = activity.window.decorView
-                    val insets = ViewCompat.getRootWindowInsets(root)
-                    visible = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
-                    imeBottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
-                    windowHeight = root.height
-                }
-                visible && imeBottom > 0
-            }
-        }.isSuccess
-        // Some headless emulator images never show a soft keyboard; record that as skipped.
-        assumeTrue("Soft keyboard did not appear on this device", shown)
-
-        compose.waitForIdle()
-        val barBottom = compose.onNodeWithTag("form-actions").fetchSemanticsNode().boundsInWindow.bottom
-        assertTrue(
-            "action bar bottom $barBottom must be above keyboard top ${windowHeight - imeBottom}",
-            barBottom <= windowHeight - imeBottom + 1f,
-        )
+        assertAboveKeyboard(compose, scenario, "form-field-name", "form-actions")
     }
 }

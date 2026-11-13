@@ -42,6 +42,8 @@ data class FormField(
 /** One field's answer. Dates and times are their wire strings; a number keeps the text as typed. */
 sealed interface Answer {
     data class Text(val value: String) : Answer
+    /** Incomplete wall-clock input stays in the memory-owned answers; it is never a wire value. */
+    data class DateTimeDraft(val date: String, val time: String) : Answer
     data class Flag(val value: Boolean) : Answer
     data class Number(val text: String) : Answer
     data class One(val id: String) : Answer
@@ -66,6 +68,7 @@ fun FormDefinition.visibleFields(answers: Map<String, Answer>): List<FormField> 
 
 internal fun Answer.isEmpty(): Boolean = when (this) {
     is Answer.Text -> value.isEmpty()
+    is Answer.DateTimeDraft -> date.isEmpty() && time.isEmpty()
     is Answer.Number -> text.isBlank()
     is Answer.Many -> ids.isEmpty()
     is Answer.Flag, is Answer.One -> false
@@ -193,6 +196,7 @@ fun FormDefinition.encodeAnswers(answers: Map<String, Answer>): JsonObject = Jso
 
 private fun encode(a: Answer): JsonElement = when (a) {
     is Answer.Text -> JsonPrimitive(a.value)
+    is Answer.DateTimeDraft -> throw IllegalArgumentException("Incomplete date and time cannot be sent")
     is Answer.Flag -> JsonPrimitive(a.value)
     is Answer.One -> JsonPrimitive(a.id)
     is Answer.Many -> JsonArray(a.ids.map { JsonPrimitive(it) })

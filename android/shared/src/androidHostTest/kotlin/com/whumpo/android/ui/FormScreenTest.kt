@@ -121,6 +121,17 @@ class FormScreenTest : RobolectricUiTest() {
     }
 
     @Test
+    fun aRequiredResourceWithoutLoadedProjectsCanReceiveValidationFocus() {
+        val field = open.definition.fields.first { it.id == "project" }.copy(required = true)
+        val form = open.copy(definition = open.definition.copy(fields = listOf(field)))
+        val state = FormScreenState(form, errors = mapOf(field.id to "Choose a project."), focusFirstError = 1)
+        launch(Screen.Compact) { FormScreen(state, JavaZoneTime, Recorder()) }.use {
+            compose.onNodeWithText("No projects loaded yet.").assertIsFocused()
+            compose.onNodeWithText("Choose a project.").assertIsDisplayed()
+        }
+    }
+
+    @Test
     fun sentIsStatusTextAndNothingCanBeSentAgain() {
         val send = FormSendState(attempt = committed(), status = Notice(1, "Sent"))
         launch(Screen.Compact) { FormScreen(openState(send), JavaZoneTime, Recorder()) }.use {
@@ -236,7 +247,21 @@ class FormScreenTest : RobolectricUiTest() {
             compose.onNodeWithTag("form-field-datetime-date").performTextReplacement("2031-05-0")
             shows("form-field-datetime-date", "2031-05-0")
             shows("form-field-datetime-time", "09:00")
-            compose.runOnIdle { assertEquals(Answer.Text("2031-05-0 09:00"), owner.state.answers["datetime"]) }
+            compose.runOnIdle { assertEquals(Answer.DateTimeDraft("2031-05-0", "09:00"), owner.state.answers["datetime"]) }
+        }
+    }
+
+    @Test
+    fun partialDateTimeSurvivesFormRemountWithoutSavedInstanceState() {
+        val owner = Owner(FormScreenState(open, mapOf("datetime" to Answer.Text("2031-05-06T09:00:00.000Z"))))
+        var visible by mutableStateOf(true)
+        launch(Screen.Compact) { if (visible) FormScreen(owner.state, JavaZoneTime, owner) }.use {
+            compose.onNodeWithTag("form-field-datetime-date").performScrollTo().performTextReplacement("2031-05-0")
+            compose.runOnIdle { visible = false }
+            compose.onNodeWithTag("form-screen").assertDoesNotExist()
+            compose.runOnIdle { visible = true }
+            shows("form-field-datetime-date", "2031-05-0")
+            shows("form-field-datetime-time", "09:00")
         }
     }
 

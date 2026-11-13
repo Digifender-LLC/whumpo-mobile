@@ -1,6 +1,7 @@
 package com.whumpo.android.ui.chat.forms
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -298,7 +299,7 @@ private fun FieldControl(
         FieldKind.Date -> TextInput(
             label = labelOf(field), value = (answer as? Answer.Text)?.value.orEmpty(), error = error, enabled = enabled,
             focus = focus, modifier = tag, help = listOf(help, "Use YYYY-MM-DD.").filter { it.isNotEmpty() }.joinToString(" "),
-            keyboard = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+            keyboard = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
         ) { actions.onAnswer(field.id, if (it.isEmpty()) null else Answer.Text(it)) }
         is FieldKind.DateTime -> DateTimeInput(formKey, field, kind, answer, error, help, enabled, zones, focus, actions)
         is FieldKind.Choice -> Options(
@@ -394,17 +395,12 @@ private fun DateTimeInput(
     actions: FormActions,
 ) {
     fun shown(a: Answer?) = (a as? Answer.Text)?.value?.let { zones.fromUtc(it, kind.zone) }
-    // The typed text belongs to this form's field. It follows [answer] only when the answer is not the one this
-    // field last produced (a reread, another device, another form), so in-progress input is never overwritten.
-    var date by rememberSaveable(formKey, field.id) { mutableStateOf(shown(answer)?.date.orEmpty()) }
-    var time by rememberSaveable(formKey, field.id) { mutableStateOf(shown(answer)?.time.orEmpty()) }
-    var produced by remember(formKey, field.id) { mutableStateOf(answer) }
-    if (answer != produced) {
-        val replaced = shown(answer)
-        date = replaced?.date.orEmpty()
-        time = replaced?.time.orEmpty()
-        produced = answer
-    }
+    // The controller owns even incomplete input. No answers enter SavedInstanceState,
+    // and closing/reopening or hiding a conditional field cannot erase typed text.
+    val pending = answer as? Answer.DateTimeDraft
+    val exact = shown(answer)
+    val date = pending?.date ?: exact?.date.orEmpty()
+    val time = pending?.time ?: exact?.time.orEmpty()
     val local = if (date.isEmpty() && time.isEmpty()) null else zones.toUtc(date, time, kind.zone)
     val offset = (local as? ZoneTime.Local.Exact)?.offset
     val zoneNote = "Time zone: ${kind.zone}" + (offset?.let { " ($it)" } ?: "") + "."
@@ -414,27 +410,24 @@ private fun DateTimeInput(
         else -> null
     }
     fun update(d: String, t: String) {
-        date = d
-        time = t
         val next = if (d.isEmpty() && t.isEmpty()) null else zones.toUtc(d, t, kind.zone)
         val out = when (next) {
             null -> null
             is ZoneTime.Local.Exact -> Answer.Text(next.utc)
             // Kept as an invalid value so validation reports it instead of silently dropping it.
-            else -> Answer.Text("$d $t")
+            else -> Answer.DateTimeDraft(d, t)
         }
-        produced = out
         actions.onAnswer(field.id, out)
     }
     Column(Modifier.fillMaxWidth().testTag("form-field-${field.id}"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(labelOf(field), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
         TextInput(
             "Date", date, null, "Use YYYY-MM-DD.", enabled, focus, Modifier.testTag("form-field-${field.id}-date"),
-            KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+            KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
         ) { update(it, time) }
         TextInput(
             "Time", time, null, "Use 24-hour HH:MM.", enabled, remember { FocusRequester() }, Modifier.testTag("form-field-${field.id}-time"),
-            KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+            KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
         ) { update(date, it) }
         Text(zoneNote, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Support(localProblem ?: error, help)
@@ -457,7 +450,10 @@ private fun Options(
     Column(Modifier.fillMaxWidth().selectableGroup().testTag("form-field-${field.id}")) {
         Text(labelOf(field), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
         if (options.isEmpty()) {
-            Text("No projects loaded yet.", style = MaterialTheme.typography.bodyMedium, color = WhumpoTheme.colors.inkMuted)
+            Text(
+                "No projects loaded yet.", style = MaterialTheme.typography.bodyMedium, color = WhumpoTheme.colors.inkMuted,
+                modifier = Modifier.focusRequester(focus).focusable(),
+            )
         }
         options.forEachIndexed { i, option ->
             val on = selected(option.id)
@@ -496,6 +492,7 @@ private fun SubmittedAnswers(definition: FormDefinition, answers: Map<String, An
 }
 
 private fun display(kind: FieldKind, a: Answer, names: Map<String, String>, zones: ZoneTime): String = when (a) {
+    is Answer.DateTimeDraft -> "${a.date} ${a.time}"
     is Answer.Flag -> if (a.value) "Yes" else "No"
     is Answer.Number -> a.text
     is Answer.Text -> if (kind is FieldKind.DateTime) {
