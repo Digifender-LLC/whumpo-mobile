@@ -7,6 +7,7 @@ import androidx.compose.ui.test.performScrollTo
 import com.whumpo.android.ui.chat.InteractionCard
 import com.whumpo.android.ui.chat.forms.FormCardSummary
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.github.takahirom.roborazzi.RoborazziOptions
 import com.whumpo.android.ui.chat.forms.FormContinuationPhase
 import com.whumpo.android.ui.chat.forms.FormContinuationState
 import com.whumpo.android.ui.chat.forms.Answer
@@ -70,9 +71,7 @@ class FormScreenshotTest : RobolectricUiTest() {
     @Test
     fun dateAndTimeDialogs() {
         val form = ProposedFormsFixture.form()
-        // Material's hour angle is exactly zero at 03:00. Keep the synthetic hand on that
-        // cardinal axis to avoid platform sin/cos raster-edge differences; behavior tests use 07:08.
-        val state = FormScreenState(form.copy(definition = form.definition.copy(fields = form.definition.fields.filter { it.id == "datetime" })), answers = mapOf("datetime" to Answer.Text("2031-05-06T03:08:00.000Z")))
+        val state = FormScreenState(form.copy(definition = form.definition.copy(fields = form.definition.fields.filter { it.id == "datetime" })), answers = mapOf("datetime" to Answer.Text("2031-05-06T07:08:00.000Z")))
         for ((dark, scale) in listOf(false to 1f, true to 1f, false to 2f)) {
             val theme = (if (dark) "dark" else "light") + if (scale == 2f) "-font2" else ""
             RuntimeEnvironment.setFontScale(scale)
@@ -80,8 +79,12 @@ class FormScreenshotTest : RobolectricUiTest() {
                 compose.onNodeWithText("2031-05-06").performScrollTo().performClick()
                 compose.onNodeWithTag("form-date-dialog").captureRoboImage("src/androidHostTest/screenshots/form-date-picker-compact-$theme.png")
                 compose.onNodeWithTag("form-date-dismiss").performClick()
-                compose.onNodeWithText("03:08").performScrollTo().performClick()
-                compose.onNodeWithTag("form-time-dialog").captureRoboImage("src/androidHostTest/screenshots/form-time-picker-compact-$theme.png")
+                compose.onNodeWithText("07:08").performScrollTo().performClick()
+                val options = if (scale == 1f) RoborazziOptions(compareOptions = RoborazziOptions.CompareOptions(
+                    imageComparator = TimePickerImageComparator,
+                    resultValidator = { it.pixelDifferences == 0 },
+                )) else RoborazziOptions()
+                compose.onNodeWithTag("form-time-dialog").captureRoboImage("src/androidHostTest/screenshots/form-time-picker-compact-$theme.png", roborazziOptions = options)
                 compose.onNodeWithTag("form-time-dismiss").performClick()
             }
             RuntimeEnvironment.setFontScale(1f)
