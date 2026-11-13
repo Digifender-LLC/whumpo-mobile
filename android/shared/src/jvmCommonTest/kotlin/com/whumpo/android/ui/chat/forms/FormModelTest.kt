@@ -125,4 +125,14 @@ class FormModelTest {
         assertEquals("Enter a date and time.", definition.validate(answers, draft = true)["datetime"])
         assertFailsWith<IllegalArgumentException> { definition.encodeAnswers(answers) }
     }
+
+    @Test
+    fun numbersBetweenStepsAreRejectedAtLargeMagnitudes() {
+        val def = FormDefinition("Synthetic", "", listOf(FormField("n", "Synthetic number", "", true, FieldKind.Number(0.0, 1e9, 0.0005))))
+        fun problem(text: String) = def.validate(mapOf("n" to Answer.Number(text)), draft = false)["n"]
+        for (bad in listOf("1000000.00025", "0.00025", "12345678.50025", "999999999.99975")) assertTrue(problem(bad) != null, bad)
+        for (good in listOf("1000000.0005", "0.0005", "12345678.5", "10000000.0005", "999999999.9995", "1000000000")) {
+            assertEquals(null, problem(good), good)
+        }
+    }
 }

@@ -137,7 +137,9 @@ private fun numberProblem(kind: FieldKind.Number, text: String): String? {
     if (v == null || !v.isFinite() || v < kind.min || v > kind.max) return range
     val steps = (v - kind.min) / kind.step
     val r = kotlin.math.round(steps)
-    if (kotlin.math.abs(steps - r) > 1e-9 * maxOf(1.0, kotlin.math.abs(steps))) {
+    // Allow only floating-point error, which grows with the magnitudes involved, never a fraction of a step.
+    val tolerance = (kotlin.math.abs(v) + kotlin.math.abs(kind.min)) * 1e-15 / kind.step + 1e-9
+    if (kotlin.math.abs(steps - r) > tolerance) {
         return "Use steps of ${plain(kind.step)}, starting at ${plain(kind.min)}."
     }
     return null
