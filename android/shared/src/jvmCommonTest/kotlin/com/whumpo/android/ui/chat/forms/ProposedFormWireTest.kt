@@ -78,7 +78,9 @@ class ProposedFormWireTest {
         assertEquals(Answer.Number("25"), submitted.answers["quantity"])
         assertEquals(Answer.Text("2030-03-04T15:30:00.000Z"), submitted.answers["datetime"])
         assertNull(submitted.continuation)
-        assertIs<JsonObject>(form("submittedWithContinuation").submission!!.continuation)
+        val continuation = form("submittedWithContinuation").submission!!.continuation!!
+        assertEquals("pending", continuation.state)
+        assertEquals("99999999-9999-4999-8999-000000000001", continuation.id)
         assertEquals("66666666-6666-4666-8666-000000000030", form("replaced").replacementInteractionId)
         assertNull(form("superseded").replacementInteractionId)
     }

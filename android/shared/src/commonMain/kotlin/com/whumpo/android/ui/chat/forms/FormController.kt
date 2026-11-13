@@ -15,7 +15,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 
 /** [FormApi] plus `interaction.resources` paging. */
-interface FormPagesApi : FormApi {
+interface FormPagesApi : FormApi, FormContinuationApi {
     suspend fun resources(interactionId: String, definitionDigest: String, fieldId: String, before: JsonElement?): JsonObject
 }
 

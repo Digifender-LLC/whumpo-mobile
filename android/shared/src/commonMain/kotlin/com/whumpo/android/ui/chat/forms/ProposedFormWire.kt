@@ -1,6 +1,7 @@
 package com.whumpo.android.ui.chat.forms
 
 import com.whumpo.core.api.InteractionMutateRequest
+import com.whumpo.core.api.Continuation
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -28,8 +29,8 @@ sealed interface FormRead {
 
 enum class FormState(val wire: String) { Open("open"), Submitted("submitted"), Canceled("canceled"), Expired("expired"), Superseded("superseded") }
 
-/** Submitted answers, shown read-only to their owner. The continuation is passed through, never rendered here. */
-data class Submission(val id: String, val answers: Map<String, Answer>, val continuation: JsonObject?)
+/** Submitted answers and the server's continuation status, retained only for the signed-in account. */
+data class Submission(val id: String, val answers: Map<String, Answer>, val continuation: Continuation?)
 
 /**
  * Decodes the native forms `interaction.read` adopted in docs/mobile-api-v1.md (first reviewed as
@@ -97,7 +98,7 @@ class ProposedFormWire(private val zones: ZoneTime) {
         val raw = d["fields"].arr().also { check(it.size in 1..12) }
         val fields = mutableListOf<FormField>()
         for (f in raw) fields += field(f.obj(), fields)
-        return FormDefinition(title, summary, fields)
+        return FormDefinition(title, summary, fields, d["continuationBinding"].let { if (it.isNull()) null else it.str() })
     }
 
     private fun field(f: JsonObject, earlier: List<FormField>): FormField {
@@ -193,7 +194,16 @@ class ProposedFormWire(private val zones: ZoneTime) {
 
     private fun submission(definition: FormDefinition, s: JsonObject): Submission {
         check(s.keys == setOf("id", "answers", "continuation"))
-        val continuation = s["continuation"].let { if (it.isNull()) null else it.obj() }
+        val continuation = s["continuation"].let { value ->
+            if (value.isNull()) null else value.obj().let { c ->
+                check(c.keys == setOf("id", "state", "resultTurnId", "reason"))
+                Continuation(
+                    c["id"].uuid(), c["state"].str(),
+                    c["resultTurnId"].let { if (it.isNull()) null else it.uuid() },
+                    c["reason"].let { if (it.isNull()) null else it.str() },
+                )
+            }
+        }
         return Submission(s["id"].uuid(), answers(definition, s["answers"].obj()), continuation)
     }
 

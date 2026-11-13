@@ -9,7 +9,12 @@ import kotlinx.serialization.json.JsonPrimitive
  * A native form as the app renders it (docs/android/chat-forms.md). Built only by [ProposedFormWire] from a decoded
  * definition; nothing here reads the network or guesses a field.
  */
-data class FormDefinition(val title: String, val summary: String, val fields: List<FormField>)
+data class FormDefinition(
+    val title: String,
+    val summary: String,
+    val fields: List<FormField>,
+    val continuationBinding: String? = null,
+)
 
 data class FormOption(val id: String, val label: String)
 

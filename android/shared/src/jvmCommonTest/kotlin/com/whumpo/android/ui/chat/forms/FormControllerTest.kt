@@ -6,6 +6,7 @@ import com.whumpo.core.api.FrozenMutation
 import com.whumpo.core.api.InteractionMutateRequest
 import com.whumpo.core.api.InteractionReceipt
 import com.whumpo.core.api.MobileApiException
+import com.whumpo.core.api.ContinuationResponse
 import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -69,6 +70,11 @@ class FormControllerTest {
             readGate?.await()
             return onRead(interactionId)
         }
+
+        override suspend fun continueSubmission(submissionId: String, expectedChatRevision: Int): ContinuationResponse =
+            error("Unexpected continuation")
+        override suspend fun stopSubmission(submissionId: String): ContinuationResponse = error("Unexpected stop")
+        override suspend fun reconcileSubmission(submissionId: String): ContinuationResponse = error("Unexpected reconciliation")
 
         override suspend fun resources(interactionId: String, definitionDigest: String, fieldId: String, before: JsonElement?): JsonObject {
             pages += fieldId to before
