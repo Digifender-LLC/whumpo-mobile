@@ -34,6 +34,19 @@ jobs:
       - name: Assemble, lint and run unit and host tests
         working-directory: android
         run: ./gradlew assembleLocalDebug assembleDeployedDebug assembleLocalDebugAndroidTest assembleDeployedDebugAndroidTest lintLocalDebug lintDeployedDebug :shared:jvmTest :shared:compileKotlinJvm :shared:testAndroidHostTest testLocalDebugUnitTest testDeployedDebugUnitTest
+      - name: Prepare local debug APK evidence
+        run: python3 android/scripts/export-debug-apks.py
+      - name: Upload local debug APK evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-local-debug-apks
+          path: |
+            android/androidApp/build/outputs/debug-artifacts/android-local-debug.apk
+            android/androidApp/build/outputs/debug-artifacts/android-local-debug-androidTest.apk
+            android/androidApp/build/outputs/debug-artifacts/manifest.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
       - name: Upload synthetic build and test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

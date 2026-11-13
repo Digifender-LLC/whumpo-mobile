@@ -27,6 +27,7 @@ node tests/policy.mjs
 node tools/check-policy.mjs
 node tests/merge-controller.mjs
 node tests/secret-scan-metadata.mjs
+python3 android/scripts/test-export-debug-apks.py
 bash android/scripts/test-ci-instrumented.sh
 bash android/scripts/test-setup-emulator.sh
 bash android/scripts/test-ci-install-sdk.sh
@@ -136,7 +137,7 @@ The separate trusted-main merge controller is not client CI and never checks
 out a PR revision. Its synthetic boundary tests run in `Mobile policy`; see the
 [merge policy](agent-merge-policy.md) for event, permission and bootstrap limits.
 
-Artifacts are retained for seven days and limited to synthetic JUnit/build/
+Report artifacts are retained for seven days and limited to synthetic JUnit/build/
 Roborazzi reports and the allowlisted instrumentation files: ANR summaries,
 device state, Gradle exit status and tree diagnostics. Raw logcat, workspaces,
 `.gradle`, `.android`, signing files and private Worker outputs are not uploaded.
@@ -146,6 +147,34 @@ each upload's paths; a resulting hosted artifact inventory must also confirm the
 exclusion and retention of the required reports and allowlisted diagnostics.
 The secret-scan artifact contains sanitized rule/commit/hashed-filename/line
 metadata only; raw Gitleaks reports and logs are temporary and deleted.
+
+After the build job succeeds, `export-debug-apks.py` prepares the separate
+`android-local-debug-apks` artifact. It contains exactly `android-local-debug.apk`,
+`android-local-debug-androidTest.apk` and `manifest.json`, retained for **one day**,
+with a combined uncompressed size limit of **64 MiB**, including the manifest.
+This bounded export still consumes artifact storage; it does not change billing
+or overage settings. The two report uploads and their logcat exclusions remain
+separate and unchanged. No release APK, signing key, log or screenshot is included
+in the debug APK artifact.
+
+The exporter requires a clean checkout and observes Java, Gradle and APK-inspection
+tool versions. It verifies the final staged APK signatures, expected local package
+and instrumentation target/runner, debuggable flags and matching Android debug
+certificates, then records their byte sizes and SHA-256 hashes. Symlink inputs,
+unexpected or existing export directories, missing files, size violations and
+source/byte changes during inspection fail the export. The upload runs only after
+successful validation and treats missing files as an error.
+
+Manifest schema 1 distinguishes the actual checkout commit/tree from PR head/base
+and head repository. PR builds must match the expected synthetic merge parents;
+main pushes record their actual checkout with no PR base. CI run/attempt and event
+identify the producing job. Local execution records `event: local` with no CI
+identity. This is ordinary unsigned build evidence, **not a signed attestation**,
+release identity, reproducibility guarantee or proof these exact APK bytes ran
+instrumentation: the device jobs build separately. Consumers must verify the
+downloaded artifact's run/revision association, exact three-file inventory,
+manifest hashes and matching APK signatures before use. Hosted ZIP inspection is
+required evidence in addition to synthetic exporter and source-policy tests.
 
 Local or CI test results do not establish live Worker/API availability, provider
 behavior, official signing, Play publication, physical-device acceptance,
