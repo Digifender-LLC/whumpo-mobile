@@ -80,6 +80,11 @@ class FormDeviceTest {
         override fun onKeepMyAnswers() { calls += "keep-mine" }
         override fun onClose() { calls += "close" }
         override fun onUpdate() { calls += "update" }
+        override fun onCancel() { calls += "cancel" }
+        override fun onFieldBlur(fieldId: String) { calls += "blur:$fieldId" }
+        override fun onContinue() { calls += "continue" }
+        override fun onCheckContinuation() { calls += "continuation-check" }
+        override fun onStopContinuation() { calls += "continuation-stop" }
     }
 
     private val fieldIds = listOf("name", "notes", "ready")

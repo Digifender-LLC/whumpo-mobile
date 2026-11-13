@@ -69,6 +69,11 @@ interface FormActions {
     fun onKeepMyAnswers()
     fun onClose()
     fun onUpdate()
+    fun onCancel()
+    fun onFieldBlur(fieldId: String)
+    fun onContinue()
+    fun onCheckContinuation()
+    fun onStopContinuation()
 }
 
 /** Everything the form screen shows. The caller owns answers, runs [FormDefinition.validate] and loads resources. */
@@ -85,6 +90,10 @@ data class FormScreenState(
     val send: FormSendState = FormSendState(),
     /** Newer saved answers held back for the owner's choice; Send and Save draft wait for it. */
     val review: FormReview? = null,
+    /** Explicit next-step state; unknown outcomes never offer another Continue. */
+    val continuation: FormContinuationState? = null,
+    val resourceLoading: Set<String> = emptySet(),
+    val resourceFailures: Set<String> = emptySet(),
 )
 
 /**

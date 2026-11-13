@@ -67,6 +67,11 @@ class FormScreenTest : RobolectricUiTest() {
         override fun onKeepMyAnswers() { calls += "keep-mine" }
         override fun onClose() { calls += "close" }
         override fun onUpdate() { calls += "update" }
+        override fun onCancel() { calls += "cancel" }
+        override fun onFieldBlur(fieldId: String) { calls += "blur:$fieldId" }
+        override fun onContinue() { calls += "continue" }
+        override fun onCheckContinuation() { calls += "continuation-check" }
+        override fun onStopContinuation() { calls += "continuation-stop" }
     }
 
     private val open = ProposedFormsFixture.form()
@@ -227,6 +232,11 @@ class FormScreenTest : RobolectricUiTest() {
         override fun onKeepMyAnswers() {}
         override fun onClose() {}
         override fun onUpdate() {}
+        override fun onCancel() {}
+        override fun onFieldBlur(fieldId: String) {}
+        override fun onContinue() {}
+        override fun onCheckContinuation() {}
+        override fun onStopContinuation() {}
     }
 
     private fun shows(tag: String, text: String) =
