@@ -45,6 +45,7 @@ jobs:
             android/shared/build/reports/**
             android/shared/build/test-results/**
             android/shared/build/outputs/roborazzi/**
+            !android/**/logcat*
           if-no-files-found: ignore
           retention-days: 7
 
@@ -99,5 +100,6 @@ jobs:
             android/androidApp/build/outputs/instrumented-diagnostics/device-state.txt
             android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt
             android/androidApp/build/outputs/instrumented-diagnostics/test-exit-code.txt
+            !android/**/logcat*
           if-no-files-found: ignore
           retention-days: 7
