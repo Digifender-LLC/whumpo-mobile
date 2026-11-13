@@ -44,8 +44,9 @@ The repository now defines credential-free public CI for pull requests and pushe
 to `main`. The five checks are `Mobile policy`, `Secret scan`,
 `Assemble, lint and unit tests`, `Instrumented tests (API 28)` and
 `Instrumented tests (API 36)`. Workflow definitions are source, not evidence that
-GitHub has run them or that branch protections require them. No merge controller,
-repository-settings change or website-ownership cutover is included; see
+GitHub has run them or that branch protections require them. The trusted-main merge
+controller checks current PR head and base revisions, required CI, resolved review
+threads and branch protections before merging eligible pull requests. See
 [verification](docs/android-verification.md),
 [merge policy](docs/agent-merge-policy.md) and [migration notes](docs/migration.md).
 
