@@ -10,17 +10,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /** Only states with published client semantics expose actions. Other server states remain read-only. */
-enum class FormContinuationPhase { Ready, Pending, Unknown, Failed, Unavailable }
+enum class FormContinuationPhase { NotStarted, Pending, Succeeded, Unknown, Failed, Unavailable }
 
 data class FormContinuationState(
     val phase: FormContinuationPhase,
     val busy: Boolean = false,
     val message: String? = null,
     val resultTurnId: String? = null,
+    val eligible: Boolean = true,
 ) {
-    val canContinue: Boolean get() = !busy && phase == FormContinuationPhase.Ready
+    val canContinue: Boolean get() = !busy && eligible && phase == FormContinuationPhase.NotStarted
     val canCheck: Boolean get() = !busy && phase in setOf(FormContinuationPhase.Pending, FormContinuationPhase.Unknown)
-    val canStop: Boolean get() = !busy && phase == FormContinuationPhase.Pending
+    val canStop: Boolean get() = !busy && phase == FormContinuationPhase.NotStarted
 }
 
 interface FormContinuationApi {
@@ -39,19 +40,26 @@ class FormContinuation(
     private val scope: CoroutineScope,
     private val interactionId: String,
     private val submissionId: String,
-    initial: Continuation?,
+    initial: Continuation,
     private val currentChatRevision: () -> Int?,
+    private val canStart: () -> Boolean = { true },
 ) {
-    private val mutable = MutableStateFlow(initial?.toState() ?: FormContinuationState(FormContinuationPhase.Ready))
+    private val mutable = MutableStateFlow(initial.toState())
     val state: StateFlow<FormContinuationState> = mutable.asStateFlow()
     private var generation = 0
+    var revision: Int = 0
+        private set
 
     fun observe(continuation: Continuation?) {
-        if (!mutable.value.busy && continuation != null) mutable.value = continuation.toState()
+        if (!mutable.value.busy && continuation != null) {
+            revision += 1
+            mutable.value = continuation.toState()
+        }
     }
 
     fun continueNow() {
         if (!mutable.value.canContinue) return
+        if (!checkEligibility()) return
         val revision = currentChatRevision()?.takeIf { it >= 0 }
         if (revision == null) {
             mutable.value = mutable.value.copy(message = "Refresh Chat before continuing.")
@@ -64,6 +72,12 @@ class FormContinuation(
         if (mutable.value.canStop) request { api.stopSubmission(submissionId) }
     }
 
+    private fun checkEligibility(): Boolean {
+        if (canStart()) return true
+        mutable.value = mutable.value.copy(eligible = false, message = "This form is no longer current. Reload it before continuing.")
+        return false
+    }
+
     fun check() {
         val before = mutable.value
         if (!before.canCheck) return
@@ -72,6 +86,7 @@ class FormContinuation(
             return
         }
         val g = generation
+        revision += 1
         mutable.value = before.copy(busy = true, message = null)
         scope.launch {
             if (g != generation) return@launch
@@ -85,23 +100,30 @@ class FormContinuation(
             } catch (_: Exception) {
                 before.copy(busy = false, message = "Couldn't load the next step. Check again.")
             }
-            if (g == generation) mutable.value = next
+            if (g == generation) {
+                revision += 1
+                mutable.value = next
+            }
         }
     }
 
     fun reset() {
         generation += 1
+        revision += 1
         mutable.value = FormContinuationState(FormContinuationPhase.Unavailable)
     }
 
     private fun request(call: suspend () -> ContinuationResponse) {
         val g = generation
+        revision += 1
         mutable.value = mutable.value.copy(busy = true, message = null)
         scope.launch {
             if (g != generation) return@launch
             val next = try {
                 val response = call()
-                if (response.version == 1 && response.submissionId == submissionId && isUuid(response.continuation.id)) {
+                if (response.version == 1 && response.submissionId == submissionId &&
+                    response.continuation.id == submissionId &&
+                    (response.continuation.resultTurnId == null || isUuid(response.continuation.resultTurnId))) {
                     response.continuation.toState()
                 } else {
                     unknown()
@@ -111,7 +133,10 @@ class FormContinuation(
             } catch (_: Exception) {
                 unknown()
             }
-            if (g == generation) mutable.value = next
+            if (g == generation) {
+                revision += 1
+                mutable.value = next
+            }
         }
     }
 
@@ -119,14 +144,22 @@ class FormContinuation(
         FormContinuationPhase.Unknown, message = "Couldn't confirm the next step. Check before continuing.",
     )
 
-    private fun Continuation.toState() = FormContinuationState(
+    private fun Continuation.toState(): FormContinuationState {
+        if (id != submissionId || !isUuid(id) || resultTurnId?.let { !isUuid(it) } == true) {
+            return FormContinuationState(FormContinuationPhase.Unavailable)
+        }
+        return FormContinuationState(
         when (state) {
+            "not-started" -> FormContinuationPhase.NotStarted
             "pending" -> FormContinuationPhase.Pending
+            "succeeded" -> FormContinuationPhase.Succeeded
             "unknown" -> FormContinuationPhase.Unknown
             "failed" -> FormContinuationPhase.Failed
             else -> FormContinuationPhase.Unavailable
         },
         message = reason,
         resultTurnId = resultTurnId,
+        eligible = canStart(),
     )
+    }
 }

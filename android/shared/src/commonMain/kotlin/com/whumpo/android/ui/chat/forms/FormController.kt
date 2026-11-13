@@ -13,6 +13,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlin.time.Clock
+import kotlin.time.Instant
 
 /** [FormApi] plus `interaction.resources` paging. */
 interface FormPagesApi : FormApi, FormContinuationApi {
@@ -39,10 +41,15 @@ class FormController(
     private val api: FormPagesApi,
     private val wire: ProposedFormWire,
     private val scope: CoroutineScope,
+    private val currentChatRevision: () -> Int? = { null },
+    private val onResultRequested: (String) -> Unit = {},
+    private val now: () -> Instant = { Clock.System.now() },
     private val newId: () -> String = ::newRequestId,
 ) : FormActions {
     private val _pane = MutableStateFlow<FormPane?>(null)
     val pane: StateFlow<FormPane?> = _pane.asStateFlow()
+    private val mutableCards = MutableStateFlow<Map<String, FormCardSummary>>(emptyMap())
+    val cards: StateFlow<Map<String, FormCardSummary>> = mutableCards.asStateFlow()
 
     private var generation = 0
     private var submitter: FormSubmitter? = null
@@ -53,6 +60,10 @@ class FormController(
     private var keptAnswers: KeptAnswers? = null
     private var seenReread: FormRead? = null
     private val kept = mutableMapOf<String, Kept>()
+    private val continuations = mutableMapOf<String, FormContinuation>()
+    private var activeContinuation: FormContinuation? = null
+    private var continuationWatch: Job? = null
+    private var reloadContinuationRevisions: Map<String, Int>? = null
 
     /** Unsent answers, the read they were made against and their [baseline] at [revision], reconciled on reopen. */
     private class KeptAnswers(
@@ -78,6 +89,7 @@ class FormController(
     fun open(interactionId: String) {
         close()
         val g = generation
+        val continuationRevisions = continuations.mapValues { it.value.revision }
         val retained = kept.remove(interactionId)
         val sub = retained?.submitter ?: FormSubmitter(api, wire, scope, newId)
         submitter = sub
@@ -108,7 +120,7 @@ class FormController(
                 return@launch
             }
             val (answers, review) = (read as? FormRead.Form)?.let(::starting) ?: (emptyMap<String, Answer>() to null)
-            show(interactionId, read, answers, review)
+            show(interactionId, read, answers, review, continuationRevisions)
             if (read is FormRead.Form) loadFirstPages(read)
         }
     }
@@ -118,6 +130,10 @@ class FormController(
         generation += 1
         watch?.cancel()
         watch = null
+        continuationWatch?.cancel()
+        continuationWatch = null
+        activeContinuation = null
+        reloadContinuationRevisions = null
         val id = visitId
         val sub = submitter
         if (id != null && sub != null) keep(id, sub)
@@ -135,6 +151,9 @@ class FormController(
         kept.values.forEach { it.submitter?.reset() }
         kept.clear()
         saves.clear()
+        continuations.values.forEach { it.reset() }
+        continuations.clear()
+        mutableCards.value = emptyMap()
     }
 
     private fun keep(interactionId: String, sub: FormSubmitter) {
@@ -234,14 +253,18 @@ class FormController(
 
     private fun shown(): FormPane.Shown? = _pane.value as? FormPane.Shown
 
-    private fun show(interactionId: String, read: FormRead, answers: Map<String, Answer>, review: FormReview?) {
+    private fun show(interactionId: String, read: FormRead, answers: Map<String, Answer>, review: FormReview?, continuationRevisions: Map<String, Int>) {
         val send = submitter?.state?.value ?: FormSendState()
         _pane.value = FormPane.Shown(interactionId, decorate(FormScreenState(read, answers, send = send, review = review)))
+        if (read is FormRead.Form) recordCard(read, send)
+        bindContinuation(read, continuationRevisions)
     }
 
     private fun decorate(screen: FormScreenState) = screen.copy(
         resourceNames = pages.values.fold(emptyMap()) { all, field -> all + field.names },
         moreResources = pages.filterValues { it.canLoadMore }.keys,
+        resourceLoading = pages.filterValues { it.loading }.keys,
+        resourceFailures = pages.filterValues { it.failed }.keys,
     )
 
     private fun onSend(send: FormSendState) {
@@ -251,7 +274,8 @@ class FormController(
         val reread = send.reread
         val form = screen.read as? FormRead.Form
         var newDigest: FormRead.Form? = null
-        if (reread != null && reread !== seenReread && !send.unresolved && reread != screen.read) {
+        val freshRead = reread != null && reread !== seenReread && !send.unresolved
+        if (freshRead) {
             seenReread = reread
             when {
                 reread is FormRead.UpdateRequired -> screen = FormScreenState(FormRead.UpdateRequired, send = send)
@@ -280,7 +304,75 @@ class FormController(
             }
         }
         _pane.value = current.copy(screen = decorate(screen))
+        (screen.read as? FormRead.Form)?.let { recordCard(it, send) }
+        if (attempt?.outcome == SendOutcome.Committed && attempt.request.operation == "cancel" && form != null) {
+            _pane.value = current.copy(screen = decorate(screen.copy(
+                read = form.copy(state = FormState.Canceled, draft = null), answers = emptyMap(), errors = emptyMap(), review = null,
+            )))
+        }
+        if (freshRead || attempt?.outcome == SendOutcome.Committed && attempt.request.operation == "cancel") {
+            bindContinuation(shown()?.screen?.read ?: return, reloadContinuationRevisions.orEmpty())
+            reloadContinuationRevisions = null
+        }
         newDigest?.let(::loadFirstPages)
+    }
+
+    private fun bindContinuation(read: FormRead, observedRevisions: Map<String, Int>) {
+        val form = read as? FormRead.Form
+        val submission = form?.submission
+        val continuation = submission?.continuation
+        if (form == null || submission == null || continuation == null || form.definition.continuationBinding == null) {
+            continuationWatch?.cancel()
+            continuationWatch = null
+            activeContinuation = null
+            shown()?.let { _pane.value = it.copy(screen = it.screen.copy(continuation = null)) }
+            return
+        }
+        val existing = continuations[submission.id]
+        val flow = continuations.getOrPut(submission.id) {
+            FormContinuation(api, wire, scope, form.interactionId, submission.id, continuation, currentChatRevision) {
+                val latest = shown()?.screen?.read as? FormRead.Form
+                latest?.submission?.id == submission.id && latest.replacementInteractionId == null &&
+                    latest.expiresAt?.let { it > now() } == true
+            }
+        }
+        // Only this new authoritative read may replace the cached status. An action
+        // that started or settled after the read began makes its reply obsolete.
+        if (existing != null && observedRevisions[submission.id] == flow.revision) flow.observe(continuation)
+        if (flow === activeContinuation) return
+        continuationWatch?.cancel()
+        activeContinuation = flow
+        val g = generation
+        continuationWatch = scope.launch {
+            flow.state.collect { continuation ->
+                if (g == generation) {
+                    val current = shown()
+                    if ((current?.screen?.read as? FormRead.Form)?.submission?.id == submission.id) {
+                        _pane.value = current.copy(screen = current.screen.copy(continuation = continuation))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun recordCard(form: FormRead.Form, send: FormSendState) {
+        val committed = send.attempt?.takeIf { it.outcome == SendOutcome.Committed }
+        val state = when (committed?.request?.operation) {
+            "submit" -> "submitted"
+            "cancel" -> "canceled"
+            else -> form.state.wire
+        }
+        mutableCards.update { it + (form.interactionId to FormCardSummary(
+            form.definition.title, state, state == "open" && (form.draft != null || committed?.request?.operation == "save-draft"),
+        )) }
+    }
+
+    override fun onOpenContinuationResult() {
+        val state = activeContinuation?.state?.value ?: return
+        val turnId = state.resultTurnId?.takeIf(::isUuid) ?: return
+        if (state.phase != FormContinuationPhase.Succeeded || state.busy) return
+        close()
+        onResultRequested(turnId)
     }
 
     private fun editable(): Pair<FormPane.Shown, FormRead.Form>? {
@@ -291,10 +383,31 @@ class FormController(
     }
 
     override fun onAnswer(fieldId: String, answer: Answer?) {
-        val (current, _) = editable() ?: return
+        val (current, form) = editable() ?: return
         val answers = if (answer == null) current.screen.answers - fieldId else current.screen.answers + (fieldId to answer)
-        _pane.value = current.copy(screen = current.screen.copy(answers = answers, errors = current.screen.errors - fieldId))
+        val visible = form.definition.visibleFields(answers).map { it.id }.toSet()
+        _pane.value = current.copy(screen = current.screen.copy(
+            answers = answers, errors = (current.screen.errors - fieldId).filterKeys { it in visible },
+        ))
     }
+
+    override fun onFieldBlur(fieldId: String) {
+        val (current, form) = editable() ?: return
+        val error = form.definition.validate(current.screen.answers, draft = false)[fieldId]
+        _pane.value = current.copy(screen = current.screen.copy(
+            errors = if (error == null) current.screen.errors - fieldId else current.screen.errors + (fieldId to error),
+        ))
+    }
+
+    /** Called only by the confirmed cancel control; invalid/partial answers are intentionally absent. */
+    override fun onCancel() {
+        val (_, form) = editable() ?: return
+        submitter?.start(form, "cancel", null)
+    }
+
+    override fun onContinue() { if (submitter?.state?.value?.reading != true) activeContinuation?.continueNow() }
+    override fun onCheckContinuation() { if (submitter?.state?.value?.reading != true) activeContinuation?.check() }
+    override fun onStopContinuation() { if (submitter?.state?.value?.reading != true) activeContinuation?.stop() }
 
     override fun onUseNewerAnswers() {
         val (current, form) = editable() ?: return
@@ -341,6 +454,8 @@ class FormController(
     }
 
     override fun onReload() {
+        if (activeContinuation?.state?.value?.busy == true) return
+        reloadContinuationRevisions = continuations.mapValues { it.value.revision }
         when (val pane = _pane.value) {
             is FormPane.Failed -> open(pane.interactionId)
             is FormPane.Shown -> submitter?.reload(pane.interactionId)

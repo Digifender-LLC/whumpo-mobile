@@ -133,6 +133,54 @@ class FormControllerTest {
     }
 
     @Test
+    fun confirmedCancelSendsNoAnswersAndClosesEvenAnInvalidDraft() = test { api ->
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("datetime", Answer.DateTimeDraft("2031-05-0", "09:00"))
+        c.onCancel()
+        val request = api.sent.single().request
+        assertEquals("cancel", request.operation)
+        assertNull(request.answers)
+        assertEquals(FormState.Canceled, (c.screen().read as FormRead.Form).state)
+        assertTrue(c.screen().answers.isEmpty())
+        c.onSubmit()
+        c.onCancel()
+        assertEquals(1, api.sent.size)
+    }
+
+    @Test
+    fun uncertainCancelIsReceiptGatedAndRetryKeepsTheSameBytes() = test { api ->
+        api.onMutate = { throw lost }
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onCancel()
+        val original = api.sent.single()
+        c.onCancel()
+        c.onSubmit()
+        assertEquals(1, api.sent.size)
+        c.onCheckAgain()
+        c.onSendAgain()
+        assertEquals(2, api.sent.size)
+        assertSame(original, api.sent.last())
+        assertTrue(original.bytes().contentEquals(api.sent.last().bytes()))
+        assertEquals(listOf(original.request.requestId), api.receipts)
+        assertNull(api.sent.last().request.answers)
+    }
+
+    @Test
+    fun blurValidatesOnlyTheVisitedFieldAndHiddenErrorsAreRemoved() = test { api ->
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("details", Answer.Text("x".repeat(201)))
+        assertTrue(c.screen().errors.isEmpty())
+        c.onFieldBlur("details")
+        assertEquals(setOf("details"), c.screen().errors.keys)
+        c.onAnswer("include-details", Answer.Flag(false))
+        assertTrue(c.screen().errors.isEmpty())
+        assertTrue(api.sent.isEmpty())
+    }
+
+    @Test
     fun pagingEchoesTheOpaqueCursorUnchanged() = test { api ->
         val cursor = buildJsonObject { put("opaque", JsonArray(listOf(JsonPrimitive(3), JsonPrimitive("x")))) }
         api.onPage = { field, before -> if (before == null) page(field, listOf(PROJECT_ONE), cursor) else page(field, listOf(PROJECT_TWO), JsonNull) }

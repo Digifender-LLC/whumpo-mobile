@@ -52,13 +52,17 @@ class ChatViewModel(
     private val session = ChatSession(viewModelScope, client, clientInfo, reauth, onSendCommitted = { clearDraft() })
 
     // The open form and its answers are memory-only and dropped on sign-out or account change.
-    private val forms = FormController(ClientFormApi(client), ProposedFormWire(JavaZoneTime), viewModelScope)
+    private val forms = FormController(
+        ClientFormApi(client), ProposedFormWire(JavaZoneTime), viewModelScope,
+        currentChatRevision = { session.state.value.takeIf { it.phase == Phase.Ready && !it.offline }?.revision },
+        onResultRequested = { session.load() },
+    )
 
     val formActions: FormActions get() = forms
 
     /** What the screen draws: the draft state joined with the conversation and the open form. */
-    val screen: StateFlow<ChatScreenState> = combine(state, session.state, forms.pane) { draft, chat, form ->
-        ChatScreenState(signedIn = draft.owner != null, draft = draft.draft, composerEnabled = draft.composerEnabled, chat = chat, form = form)
+    val screen: StateFlow<ChatScreenState> = combine(state, session.state, forms.pane, forms.cards) { draft, chat, form, cards ->
+        ChatScreenState(signedIn = draft.owner != null, draft = draft.draft, composerEnabled = draft.composerEnabled, chat = chat, form = form, formCards = cards)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ChatScreenState())
 
     private var saveJob: Job? = null

@@ -2,6 +2,7 @@ package com.whumpo.android.ui.chat.forms
 
 import com.whumpo.core.api.InteractionMutateRequest
 import com.whumpo.core.api.Continuation
+import kotlin.time.Instant
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -24,6 +25,7 @@ sealed interface FormRead {
         val draft: Map<String, Answer>?,
         val replacementInteractionId: String?,
         val submission: Submission?,
+        val expiresAt: Instant? = null,
     ) : FormRead
 }
 
@@ -71,7 +73,7 @@ class ProposedFormWire(private val zones: ZoneTime) {
         val env = read["envelope"].obj()
         check(env["version"].int() == 1)
         val id = env["id"].uuid()
-        env["expiresAt"].str()
+        val expiresAt = try { Instant.parse(env["expiresAt"].str()) } catch (_: IllegalArgumentException) { fail() }
         val digest = env["definitionDigest"].str().also { check(it.isNotEmpty()) }
         val definition = definition(env["definition"].obj())
         val state = FormState.entries.firstOrNull { it.wire == read["state"].str() } ?: fail()
@@ -81,7 +83,8 @@ class ProposedFormWire(private val zones: ZoneTime) {
         val replacement = read["replacementInteractionId"].let { if (it.isNull()) null else it.uuid() }
         val submission = read["submission"].let { if (it.isNull()) null else submission(definition, it.obj()) }
         check((state == FormState.Submitted) == (submission != null))
-        return FormRead.Form(id, digest, definition, state, revision, draft, replacement, submission)
+        if (submission != null) check((definition.continuationBinding != null) == (submission.continuation != null))
+        return FormRead.Form(id, digest, definition, state, revision, draft, replacement, submission, expiresAt)
     }
 
     private fun definition(d: JsonObject): FormDefinition {
@@ -204,7 +207,9 @@ class ProposedFormWire(private val zones: ZoneTime) {
                 )
             }
         }
-        return Submission(s["id"].uuid(), answers(definition, s["answers"].obj()), continuation)
+        val id = s["id"].uuid()
+        check(continuation == null || continuation.id == id)
+        return Submission(id, answers(definition, s["answers"].obj()), continuation)
     }
 
     /** Checks a mutation's `answers` against the definition exactly as a reply's draft would be. */

@@ -80,9 +80,28 @@ class ProposedFormWireTest {
         assertNull(submitted.continuation)
         val continuation = form("submittedWithContinuation").submission!!.continuation!!
         assertEquals("pending", continuation.state)
-        assertEquals("99999999-9999-4999-8999-000000000001", continuation.id)
+        assertEquals(form("submittedWithContinuation").submission!!.id, continuation.id)
         assertEquals("66666666-6666-4666-8666-000000000030", form("replaced").replacementInteractionId)
         assertNull(form("superseded").replacementInteractionId)
+    }
+
+    @Test
+    fun continuationLifecycleAndIdentityFollowThePublishedContract() {
+        val base = read("submittedWithContinuation")
+        for (state in listOf("not-started", "pending", "succeeded", "failed", "unknown", "future-state")) {
+            val decoded = assertIs<FormRead.Form>(wire.decode(base.edit("submission.continuation.state", JsonPrimitive(state))))
+            assertEquals(state, decoded.submission!!.continuation!!.state)
+            assertEquals(decoded.submission.id, decoded.submission.continuation.id)
+        }
+        assertNull(form("submitted").definition.continuationBinding)
+        assertNull(form("submitted").submission!!.continuation)
+        for ((path, value) in listOf(
+            "submission.continuation.id" to JsonPrimitive("88888888-8888-4888-8888-000000000099"),
+            "submission.continuation.resultTurnId" to JsonPrimitive("not-a-turn-id"),
+            "submission.continuation" to kotlinx.serialization.json.JsonNull,
+            "envelope.definition.continuationBinding" to kotlinx.serialization.json.JsonNull,
+            "envelope.expiresAt" to JsonPrimitive("not-a-date"),
+        )) assertEquals(FormRead.UpdateRequired, wire.decode(base.edit(path, value)), path)
     }
 
     @Test

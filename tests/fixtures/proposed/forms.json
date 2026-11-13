@@ -1321,7 +1321,7 @@
           ],
           "cards": [],
           "submitBinding": "interaction.answers@1",
-          "continuationBinding": null
+          "continuationBinding": "agent.task-continue@1"
         },
         "definitionDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       },
@@ -1350,7 +1350,7 @@
           ]
         },
         "continuation": {
-          "id": "99999999-9999-4999-8999-000000000001",
+          "id": "88888888-8888-4888-8888-000000000002",
           "state": "pending",
           "resultTurnId": null,
           "reason": null
@@ -1534,7 +1534,7 @@
           ],
           "cards": [],
           "submitBinding": "interaction.answers@1",
-          "continuationBinding": null
+          "continuationBinding": "agent.task-continue@1"
         },
         "definitionDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       },
@@ -1563,7 +1563,7 @@
           ]
         },
         "continuation": {
-          "id": "99999999-9999-4999-8999-000000000002",
+          "id": "88888888-8888-4888-8888-000000000003",
           "state": "failed",
           "resultTurnId": null,
           "reason": "Synthetic terminal example."
