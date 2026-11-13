@@ -74,6 +74,7 @@ interface FormActions {
     fun onContinue()
     fun onCheckContinuation()
     fun onStopContinuation()
+    fun onOpenContinuationResult()
 }
 
 /** Everything the form screen shows. The caller owns answers, runs [FormDefinition.validate] and loads resources. */

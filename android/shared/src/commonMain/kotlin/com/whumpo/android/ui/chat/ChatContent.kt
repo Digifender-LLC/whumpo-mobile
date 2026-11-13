@@ -61,6 +61,7 @@ import com.whumpo.android.ui.state.OfflineBanner
 import com.whumpo.android.ui.state.Skeleton
 import com.whumpo.android.ui.state.UpdateRequiredScreen
 import com.whumpo.android.ui.chat.forms.FormPane
+import com.whumpo.android.ui.chat.forms.FormCardSummary
 import com.whumpo.android.ui.state.WhumpoIcons
 import com.whumpo.android.ui.state.WhumpoMascot
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
@@ -98,6 +99,7 @@ data class ChatScreenState(
     val chat: ChatState = ChatState(),
     /** The open form, if any; memory-only. */
     val form: FormPane? = null,
+    val formCards: Map<String, FormCardSummary> = emptyMap(),
     /** For relative times. The ViewModel refreshes it with every state change; tests pin it. */
     val now: Instant = Clock.System.now(),
 ) {

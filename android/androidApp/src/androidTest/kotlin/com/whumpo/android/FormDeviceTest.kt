@@ -85,6 +85,7 @@ class FormDeviceTest {
         override fun onContinue() { calls += "continue" }
         override fun onCheckContinuation() { calls += "continuation-check" }
         override fun onStopContinuation() { calls += "continuation-stop" }
+        override fun onOpenContinuationResult() { calls += "continuation-result" }
     }
 
     private val fieldIds = listOf("name", "notes", "ready")

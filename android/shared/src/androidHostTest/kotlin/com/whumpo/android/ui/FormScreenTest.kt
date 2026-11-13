@@ -72,6 +72,7 @@ class FormScreenTest : RobolectricUiTest() {
         override fun onContinue() { calls += "continue" }
         override fun onCheckContinuation() { calls += "continuation-check" }
         override fun onStopContinuation() { calls += "continuation-stop" }
+        override fun onOpenContinuationResult() { calls += "continuation-result" }
     }
 
     private val open = ProposedFormsFixture.form()
@@ -237,6 +238,7 @@ class FormScreenTest : RobolectricUiTest() {
         override fun onContinue() {}
         override fun onCheckContinuation() {}
         override fun onStopContinuation() {}
+        override fun onOpenContinuationResult() {}
     }
 
     private fun shows(tag: String, text: String) =
