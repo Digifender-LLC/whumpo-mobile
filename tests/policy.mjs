@@ -84,6 +84,62 @@ rejects({ci: inputs.ci.replace('          bash android/scripts/test-ci-install-s
   'policy command bash android/scripts/test-ci-install-sdk.sh',
   'SDK installer regression must remain in the policy job');
 
+// The exclusion must be attached to each upload, not merely mentioned somewhere in the workflow.
+const logcatExclusion = '            !android/**/logcat*\n';
+assert.equal(inputs.android.split(logcatExclusion).length - 1, 2);
+for (const index of [inputs.android.indexOf(logcatExclusion), inputs.android.lastIndexOf(logcatExclusion)]) {
+  const without = inputs.android.slice(0, index) + inputs.android.slice(index + logcatExclusion.length);
+  rejects({android: without}, 'Android artifact upload paths', 'each upload must exclude per-test logcat');
+}
+const lastExclusion = inputs.android.lastIndexOf(logcatExclusion);
+const misplacedExclusion = (inputs.android.slice(0, lastExclusion) + inputs.android.slice(lastExclusion + logcatExclusion.length))
+  .replace(logcatExclusion, logcatExclusion.repeat(2));
+assert.equal(misplacedExclusion.split(logcatExclusion).length - 1, 2);
+rejects({android: misplacedExclusion}, 'Android artifact upload paths', 'two exclusions in one upload must not protect the other');
+for (const [before, after, label] of [
+  [logcatExclusion, '            !android/**/unrelated*\n', 'an unrelated exclusion must not protect logcat'],
+  ['            android/androidApp/build/outputs/androidTest-results/**\n', '', 'JUnit outputs must remain uploaded'],
+  ['            android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt\n', '', 'allowlisted tree diagnostics must remain uploaded'],
+  ['            android/androidApp/build/outputs/androidTest-results/**\n', '            android/androidApp/build/outputs/**\n', 'a broader output path must fail'],
+  [logcatExclusion, `${logcatExclusion}            !android/**/*.xml\n`, 'a report-removing exclusion must fail'],
+  [logcatExclusion, `${logcatExclusion}            android/**/logcat*\n`, 'a new positive logcat path must fail'],
+]) {
+  assert.ok(inputs.android.includes(before), label);
+  rejects({android: inputs.android.replace(before, after)}, 'Android artifact upload paths', label);
+}
+rejects({android: inputs.android + `
+      - uses: actions/upload-artifact@${'b'.repeat(40)}
+        with:
+          name: extra-unfiltered-results
+          path: android/androidApp/build/outputs/androidTest-results/**
+`}, 'Android artifact upload paths', 'an extra unguarded artifact upload must fail');
+rejects({android: inputs.android + `
+  extra-artifact:
+    runs-on: ubuntu-24.04
+    steps:
+        - uses: actions/upload-artifact@${'b'.repeat(40)}
+          with:
+            name: extra-unfiltered-results
+            path: android/androidApp/build/outputs/androidTest-results/**
+`}, 'Android artifact upload paths', 'an extra upload with valid alternative indentation must fail');
+rejects({android: inputs.android + `
+  extra-artifact:
+    runs-on: ubuntu-24.04
+    steps:
+      - {uses: actions/upload-artifact@${'b'.repeat(40)}, with: {name: raw-results, path: android/androidApp/build/outputs/androidTest-results/**}}
+`}, 'Android artifact upload paths', 'an extra flow-style upload must fail');
+rejects({android: inputs.android.replace(
+  '      - name: Upload synthetic build and test reports',
+  '      - &reportUpload\n        name: Upload synthetic build and test reports') + `
+  extra-artifact:
+    runs-on: ubuntu-24.04
+    steps:
+      - <<: *reportUpload
+        with:
+          name: raw-results
+          path: android/androidApp/build/outputs/androidTest-results/**
+`}, 'Android artifact upload paths', 'an inherited upload with an unfiltered path override must fail');
+
 assert.deepEqual(checkTrackedPaths([
   'README.md',
   'android/build.gradle.kts',

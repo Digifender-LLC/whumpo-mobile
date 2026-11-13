@@ -62,6 +62,55 @@ function readTrackedIndex(rootPath) {
   });
 }
 
+// A reviewed source contract for each upload step, not a general YAML or glob evaluator.
+function androidArtifactPathsMatch(android) {
+  const expected = {
+    build: {
+      name: 'android-build-reports',
+      paths: [
+        'android/androidApp/build/reports/**',
+        'android/androidApp/build/test-results/**',
+        'android/shared/build/reports/**',
+        'android/shared/build/test-results/**',
+        'android/shared/build/outputs/roborazzi/**',
+        '!android/**/logcat*'
+      ]
+    },
+    instrumented: {
+      name: 'android-instrumented-api-${{ matrix.api-level }}',
+      paths: [
+        'android/androidApp/build/reports/androidTests/**',
+        'android/androidApp/build/outputs/androidTest-results/**',
+        'android/androidApp/build/outputs/instrumented-diagnostics/anr-before.json',
+        'android/androidApp/build/outputs/instrumented-diagnostics/anr-after.json',
+        'android/androidApp/build/outputs/instrumented-diagnostics/device-state.txt',
+        'android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt',
+        'android/androidApp/build/outputs/instrumented-diagnostics/test-exit-code.txt',
+        '!android/**/logcat*'
+      ]
+    }
+  };
+  const uploads = text => text.split(/^ {6}- /m).slice(1)
+    .filter(step => /^\s*uses: actions\/upload-artifact@/m.test(step));
+  // Count even noncanonical flow-style steps before mapping the two approved blocks.
+  const allUploads = [...android.matchAll(/actions\/upload-artifact@/gi)];
+  if (allUploads.length !== 2) return false;
+  // Aliases can inherit an upload and override its paths without another action identity.
+  // This canonical workflow does not admit YAML anchors, aliases or merge keys.
+  if (/(?:^|[\s[{,:])(?:&|\*)[^\s&*,{}\[\]]+|^\s*<<\s*:/m.test(android)) return false;
+  const sections = android.split(/^ {2}(?=[\w-]+:)/m);
+  return Object.entries(expected).every(([job, artifact]) => {
+    const section = sections.find(text => text.startsWith(`${job}:\n`));
+    if (!section) return false;
+    const steps = uploads(section);
+    if (steps.length !== 1) return false;
+    const name = /^ {10}name: (.+)$/m.exec(steps[0])?.[1];
+    const block = /^ {10}path: \|\n((?: {12}[^\n]+\n)+)/m.exec(steps[0])?.[1];
+    const paths = block?.trim().split('\n').map(line => line.trim());
+    return name === artifact.name && JSON.stringify(paths) === JSON.stringify(artifact.paths);
+  });
+}
+
 export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependabot}) {
   const errors = [];
   const require = (condition, label) => {
@@ -126,6 +175,7 @@ export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependa
   require(android.includes('assembleLocalDebug assembleDeployedDebug assembleLocalDebugAndroidTest assembleDeployedDebugAndroidTest lintLocalDebug lintDeployedDebug :shared:jvmTest :shared:compileKotlinJvm :shared:testAndroidHostTest testLocalDebugUnitTest testDeployedDebugUnitTest'), 'required Gradle tasks');
   require(!/record_screenshots|screenshots\.record|release_bundle|bundleDeployedRelease|UPLOAD_KEYSTORE|test-worker-journey|worker-journey|raw logcat/i.test(android), 'no recording, release or private Worker test');
   require(android.includes('retention-days: 7') && !/android\/(?:\.gradle|\.android)\/|logcat -d/i.test(android), 'bounded allowlisted artifacts');
+  require(androidArtifactPathsMatch(android), 'Android artifact upload paths retain reports and exclude per-test logcat');
   require((android.match(/actions\/setup-java@/g) || []).length === 2
     && !/cache: gradle|actions\/cache@/i.test(android), 'no shared Gradle cache');
   require(sdkInstaller.includes('commandlinetools-linux-13114758_latest.zip')
