@@ -255,6 +255,16 @@ class ProposedFormWireTest {
     }
 
     @Test
+    fun canonicalFloatingPointArtifactsStillDecodeAndRoundTrip() {
+        for (value in listOf(0.3, 0.30000000000000004)) {
+            val source = numberRead(0.1, 1.0, value).edit("envelope.definition.fields.6.constraints.step", JsonPrimitive(0.2))
+            val form = assertIs<FormRead.Form>(wire.decode(source))
+            assertEquals(Answer.Number(plain(value)), form.draft?.get("quantity"))
+            assertEquals(value, form.definition.encodeAnswers(form.draft!!).getValue("quantity").jsonPrimitive.double)
+        }
+    }
+
+    @Test
     fun plainNeverUsesExponentNotation() {
         val cases = mapOf(
             12345678.5 to "12345678.5", 0.0005 to "0.0005", 0.001 to "0.001", 1e7 to "10000000", 1e9 to "1000000000",

@@ -132,17 +132,14 @@ private val NumberText = Regex("""-?(0|[1-9][0-9]*)(\.[0-9]+)?""")
 
 private fun numberProblem(kind: FieldKind.Number, text: String): String? {
     val t = normalizedNumberInput(text)
-    val v = if (NumberText.matches(t)) t.toDoubleOrNull() else null
     val range = "Enter a number from ${plain(kind.min)} to ${plain(kind.max)}."
-    if (v == null || !v.isFinite() || v < kind.min || v > kind.max) return range
-    val steps = (v - kind.min) / kind.step
-    val r = kotlin.math.round(steps)
-    // Allow only floating-point error, which grows with the magnitudes involved, never a fraction of a step.
-    val tolerance = (kotlin.math.abs(v) + kotlin.math.abs(kind.min)) * 1e-15 / kind.step + 1e-9
-    if (kotlin.math.abs(steps - r) > tolerance) {
-        return "Use steps of ${plain(kind.step)}, starting at ${plain(kind.min)}."
+    if (!NumberText.matches(t)) return range
+    return when (decimalNumberProblem(t, kind)) {
+        DecimalNumberProblem.Range -> range
+        DecimalNumberProblem.Precision -> "Use fewer decimal places."
+        DecimalNumberProblem.Step -> "Use steps of ${plain(kind.step)}, starting at ${plain(kind.min)}."
+        null -> null
     }
-    return null
 }
 
 /** [d] as plain decimal text, never exponent notation: `1.23456785E7` is `12345678.5`, `100.0` is `100`. */

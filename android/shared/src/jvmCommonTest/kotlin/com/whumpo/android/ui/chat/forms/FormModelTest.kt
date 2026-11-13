@@ -135,4 +135,53 @@ class FormModelTest {
             assertEquals(null, problem(good), good)
         }
     }
+
+    @Test
+    fun tinyStepsAtLargeOffsetsKeepTheirExactDecimalGrid() {
+        for ((min, max, good, bad) in listOf(
+            listOf("999999999", "1000000000", "999999999.000001", "999999999.0000005"),
+            listOf("-1000000000", "-999999999", "-999999999.999999", "-999999999.9999995"),
+        )) {
+            val def = FormDefinition("Synthetic", "", listOf(FormField("n", "Number", "", true,
+                FieldKind.Number(min.toDouble(), max.toDouble(), 0.000001))))
+            fun problem(text: String) = def.validate(mapOf("n" to Answer.Number(text)), draft = false)["n"]
+            assertEquals(null, problem(good), good)
+            assertTrue(problem(bad)?.startsWith("Use steps") == true, bad)
+        }
+    }
+
+    @Test
+    fun decimalGridAllowsOnlyATinyFixedFractionOfAStepForCanonicalRounding() {
+        val def = FormDefinition("Synthetic", "", listOf(FormField("n", "Number", "", true,
+            FieldKind.Number(0.1, 1.0, 0.2))))
+        for (text in listOf("0.3", "0.30000000000000004", "0.3000000001", "0.2999999999")) {
+            assertTrue(def.validate(mapOf("n" to Answer.Number(text)), draft = false).isEmpty(), text)
+        }
+        for (text in listOf("0.300000001", "0.299999999", "0.4")) {
+            assertTrue(def.validate(mapOf("n" to Answer.Number(text)), draft = false).isNotEmpty(), text)
+        }
+    }
+
+    @Test
+    fun aDecimalOutsideTheRangeCannotRoundBackInside() {
+        val def = FormDefinition("Synthetic", "", listOf(FormField("n", "Number", "", true,
+            FieldKind.Number(-1e9, 1e9, 0.00000001))))
+        for (text in listOf("1000000000.00000001", "-1000000000.00000001")) {
+            assertTrue(def.validate(mapOf("n" to Answer.Number(text)), draft = false)["n"]?.startsWith("Enter a number from") == true, text)
+        }
+    }
+
+    @Test
+    fun typedPrecisionCannotBeSilentlyLostByTheNumberWireFormat() {
+        val def = FormDefinition("Synthetic", "", listOf(FormField("n", "Number", "", true,
+            FieldKind.Number(999999999.0, 1e9, 0.00000001))))
+        for (text in listOf("999999999.00000001", "999999999.00000012")) {
+            assertEquals("Use fewer decimal places.", def.validate(mapOf("n" to Answer.Number(text)), draft = false)["n"], text)
+        }
+        for (text in listOf("999999999", "999999999.0000001", "999999999.000001", "999999999.0000010")) {
+            val answers = mapOf("n" to Answer.Number(text))
+            assertTrue(def.validate(answers, draft = false).isEmpty(), text)
+            assertTrue(ProposedFormsFixture.wire.answersFit(def, def.encodeAnswers(answers), draft = false), text)
+        }
+    }
 }
