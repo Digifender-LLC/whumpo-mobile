@@ -184,7 +184,7 @@ export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependa
 
   require(ci.includes('name: Mobile policy') && ci.includes('name: Secret scan'), 'CI check names');
   for (const command of [
-    'node tests/policy.mjs', 'node tools/check-policy.mjs', 'node tests/secret-scan-metadata.mjs',
+    'node tests/policy.mjs', 'node tests/number-decimal-fixtures.mjs', 'node tools/check-policy.mjs', 'node tests/secret-scan-metadata.mjs',
     'bash android/scripts/test-ci-instrumented.sh', 'bash android/scripts/test-setup-emulator.sh',
     'bash android/scripts/test-ci-install-sdk.sh'
   ]) require(ci.includes(command), `policy command ${command}`);

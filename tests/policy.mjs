@@ -83,6 +83,9 @@ rejects({instrumentation: inputs.instrumentation.replace(
 rejects({ci: inputs.ci.replace('          bash android/scripts/test-ci-install-sdk.sh\n', '')},
   'policy command bash android/scripts/test-ci-install-sdk.sh',
   'SDK installer regression must remain in the policy job');
+rejects({ci: inputs.ci.replace('          node tests/number-decimal-fixtures.mjs\n', '')},
+  'policy command node tests/number-decimal-fixtures.mjs',
+  'the independent numeric corpus check must remain in the policy job');
 
 // The exclusion must be attached to each upload, not merely mentioned somewhere in the workflow.
 const logcatExclusion = '            !android/**/logcat*\n';

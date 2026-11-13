@@ -143,7 +143,7 @@ private fun numberProblem(kind: FieldKind.Number, text: String): String? {
 }
 
 /** [d] as plain decimal text, never exponent notation: `1.23456785E7` is `12345678.5`, `100.0` is `100`. */
-internal fun plain(d: Double): String = plainDecimal(d.toString()) ?: d.toString()
+internal fun plain(d: Double): String = canonicalNumberDecimal(d)
 
 private val DecimalLiteral = Regex("""(-?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]{1,3}))?""")
 
