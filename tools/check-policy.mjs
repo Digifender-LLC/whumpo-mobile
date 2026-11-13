@@ -65,7 +65,15 @@ function readTrackedIndex(rootPath) {
 // A reviewed source contract for each upload step, not a general YAML or glob evaluator.
 function androidArtifactPathsMatch(android) {
   const expected = {
-    build: {
+    build: [{
+      name: 'android-local-debug-apks',
+      paths: [
+        'android/androidApp/build/outputs/debug-artifacts/android-local-debug.apk',
+        'android/androidApp/build/outputs/debug-artifacts/android-local-debug-androidTest.apk',
+        'android/androidApp/build/outputs/debug-artifacts/manifest.json'
+      ],
+      retention: '1', missing: 'error', condition: undefined, compression: '0'
+    }, {
       name: 'android-build-reports',
       paths: [
         'android/androidApp/build/reports/**',
@@ -74,9 +82,10 @@ function androidArtifactPathsMatch(android) {
         'android/shared/build/test-results/**',
         'android/shared/build/outputs/roborazzi/**',
         '!android/**/logcat*'
-      ]
-    },
-    instrumented: {
+      ],
+      retention: '7', missing: 'ignore', condition: 'always()', compression: undefined
+    }],
+    instrumented: [{
       name: 'android-instrumented-api-${{ matrix.api-level }}',
       paths: [
         'android/androidApp/build/reports/androidTests/**',
@@ -87,27 +96,39 @@ function androidArtifactPathsMatch(android) {
         'android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt',
         'android/androidApp/build/outputs/instrumented-diagnostics/test-exit-code.txt',
         '!android/**/logcat*'
-      ]
-    }
+      ],
+      retention: '7', missing: 'ignore', condition: 'always()', compression: undefined
+    }]
   };
   const uploads = text => text.split(/^ {6}- /m).slice(1)
     .filter(step => /^\s*uses: actions\/upload-artifact@/m.test(step));
-  // Count even noncanonical flow-style steps before mapping the two approved blocks.
+  // Count even noncanonical flow-style steps before mapping the three exact uploads.
   const allUploads = [...android.matchAll(/actions\/upload-artifact@/gi)];
-  if (allUploads.length !== 2) return false;
+  if (allUploads.length !== 3) return false;
   // Aliases can inherit an upload and override its paths without another action identity.
   // This canonical workflow does not admit YAML anchors, aliases or merge keys.
   if (/(?:^|[\s[{,:])(?:&|\*)[^\s&*,{}\[\]]+|^\s*<<\s*:/m.test(android)) return false;
   const sections = android.split(/^ {2}(?=[\w-]+:)/m);
-  return Object.entries(expected).every(([job, artifact]) => {
+  return Object.entries(expected).every(([job, artifacts]) => {
     const section = sections.find(text => text.startsWith(`${job}:\n`));
     if (!section) return false;
     const steps = uploads(section);
-    if (steps.length !== 1) return false;
-    const name = /^ {10}name: (.+)$/m.exec(steps[0])?.[1];
-    const block = /^ {10}path: \|\n((?: {12}[^\n]+\n)+)/m.exec(steps[0])?.[1];
-    const paths = block?.trim().split('\n').map(line => line.trim());
-    return name === artifact.name && JSON.stringify(paths) === JSON.stringify(artifact.paths);
+    if (steps.length !== artifacts.length) return false;
+    return artifacts.every((artifact, index) => {
+      const step = steps[index];
+      const values = (key, indent = 10) => [...step.matchAll(new RegExp(`^ {${indent}}${key}: (.+)$`, 'gm'))].map(match => match[1]);
+      const matches = (key, expected, indent = 10) => JSON.stringify(values(key, indent))
+        === JSON.stringify(expected === undefined ? [] : [expected]);
+      const block = /^ {10}path: \|\n((?: {12}[^\n]+\n)+)/m.exec(step)?.[1];
+      const paths = block?.trim().split('\n').map(line => line.trim());
+      return matches('name', artifact.name) && matches('path', '|')
+        && JSON.stringify(paths) === JSON.stringify(artifact.paths)
+        && matches('retention-days', artifact.retention)
+        && matches('if-no-files-found', artifact.missing)
+        && matches('if', artifact.condition, 8)
+        && matches('compression-level', artifact.compression)
+        && matches('continue-on-error', undefined, 8);
+    });
   });
 }
 
@@ -176,6 +197,12 @@ export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependa
   require(!/record_screenshots|screenshots\.record|release_bundle|bundleDeployedRelease|UPLOAD_KEYSTORE|test-worker-journey|worker-journey|raw logcat/i.test(android), 'no recording, release or private Worker test');
   require(android.includes('retention-days: 7') && !/android\/(?:\.gradle|\.android)\/|logcat -d/i.test(android), 'bounded allowlisted artifacts');
   require(androidArtifactPathsMatch(android), 'Android artifact upload paths retain reports and exclude per-test logcat');
+  const prepare = '      - name: Prepare local debug APK evidence\n        run: python3 android/scripts/export-debug-apks.py\n';
+  const prepareSteps = android.split(/^ {6}- /m).filter(step => step.startsWith('name: Prepare local debug APK evidence\n'));
+  require(prepareSteps.length === 1 && prepareSteps[0].trimEnd() === prepare.slice(8).trimEnd()
+    && android.indexOf(prepare) > android.indexOf('run: ./gradlew assembleLocalDebug')
+    && android.indexOf(prepare) < android.indexOf('      - name: Upload local debug APK evidence'),
+  'debug APK export follows the build before upload');
   require((android.match(/actions\/setup-java@/g) || []).length === 2
     && !/cache: gradle|actions\/cache@/i.test(android), 'no shared Gradle cache');
   require(sdkInstaller.includes('commandlinetools-linux-13114758_latest.zip')
@@ -183,8 +210,12 @@ export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependa
     && !sdkInstaller.includes('system-images;'), 'pinned SDK tools and no build-job system image');
 
   require(ci.includes('name: Mobile policy') && ci.includes('name: Secret scan'), 'CI check names');
+  const mobilePolicy = ci.split(/^  secret-scan:/m)[0];
+  require(/      - uses: actions\/setup-java@[a-f0-9]{40}[^\n]*\n        with:\n          distribution: temurin\n          java-version: "21\.0\.13\+9"\n      - name: Run shell regressions and policy contracts\n/.test(mobilePolicy),
+    'policy SDK properties tests use pinned JDK 21');
   for (const command of [
     'node tests/policy.mjs', 'node tests/number-decimal-fixtures.mjs', 'node tools/check-policy.mjs', 'node tests/secret-scan-metadata.mjs',
+    'python3 android/scripts/test-export-debug-apks.py',
     'bash android/scripts/test-ci-instrumented.sh', 'bash android/scripts/test-setup-emulator.sh',
     'bash android/scripts/test-ci-install-sdk.sh'
   ]) require(ci.includes(command), `policy command ${command}`);
