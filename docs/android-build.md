@@ -2,7 +2,7 @@
 
 Use JDK 21 and the Android SDK with platform 37 installed and its terms accepted.
 Set `ANDROID_HOME`, or set `sdk.dir` in an untracked `android/local.properties`.
-The wrapper pins Gradle 9.8.2; `android/gradle/libs.versions.toml` pins AGP 9.5.1,
+The wrapper pins Gradle 9.9.0; `android/gradle/libs.versions.toml` pins AGP 9.5.1,
 Kotlin 2.4.21 and Compose Multiplatform 1.12.2. Do not upgrade them independently.
 
 The public build uses Temurin 21.0.13+9, Android platform `android-37.0`, and
