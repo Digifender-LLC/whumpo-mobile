@@ -1,4 +1,4 @@
-# Native chat forms (design)
+# Native chat forms
 
 Status: implemented against the adopted contract in
 [mobile API v1](../mobile-api-v1.md) and `tests/fixtures/mobile-v1/`, and wired
@@ -6,8 +6,9 @@ into the chat. The model, decoder, send recovery, resources paging, controller
 and Compose screen live in
 `android/shared/src/commonMain/kotlin/com/whumpo/android/ui/chat/forms/`; the
 synthetic catalog in `tests/fixtures/proposed/forms.json` drives the tests.
-Verified only by synthetic JVM and host tests in client CI: no live Worker,
-physical device, TalkBack, release build or customer acceptance.
+Verification uses synthetic JVM, host UI, screenshot and API 28/36 emulator
+checks. These checks do not establish live Worker compatibility, physical-device/
+TalkBack, signed-release or customer acceptance.
 
 ## Goal
 
@@ -21,8 +22,10 @@ simplified form, text projection or browser downgrade.
 ## Placement
 
 - **Chat card.** Each turn with an interaction shows a card under the reply:
-  form title, a one-line status (`Needs your answers`, `Draft saved`,
-  `Sent`, `No longer open`) and one action (`Answer`, `Continue`, `View`).
+  a known form title, a one-line status (`Needs your answers`, `Draft saved`,
+  `Sent`, `No longer open`) and one action (`Answer`, `Continue`, `View`). The
+  compact Chat reference has no title or draft flag: a generic title is shown
+  until an explicit form read supplies metadata, retained only in account memory.
   The card is one accessible node with a merged description.
 - **Form surface.** `Answer` opens the form full height on compact widths
   (a dialog-style screen with a top bar: close, title, step-free scroll) and
@@ -43,9 +46,12 @@ simplified form, text projection or browser downgrade.
 | `multi-choice` | Checkbox group | Selected count is announced; limits shown as helper text |
 | `boolean` | Switch row with the label as the row text | `toggleable` row; state read as on/off |
 | `number` | Text field with numeric keyboard | Locale-aware entry; range and step in helper text |
-| `date` | Read-only field opening the Material date picker | Bounds disable out-of-range days |
+| `date` | Read-only field opening the Material date picker | The admitted contract permits years 1–9999 and has no additional date bounds |
 | `datetime` | Date picker then time picker | Shows the time zone the answer is sent in |
 | `resource` | Picker over `interactions/resources` pages | Search, paging with `before`, empty and error states |
+
+At large text sizes, date and time pickers use their Material input modes so
+calendar and clock labels stay readable. Both require an explicit confirmation.
 
 ## Accessibility and input
 
@@ -76,12 +82,14 @@ Uses the existing `interactions/mutate`, `receipt`, `continue`, `stop` and
 - One `requestId` per submit attempt is created once and reused for every retry
   of that attempt, like chat sends.
 - **Sending** disables the button and shows progress.
-- **Accepted** (`receipt` with the new `answerRevision`): the form closes to the
-  card, which reads "Sent", and the live region says so once.
-- **Lost reply** (outcome unknown): the form says "Didn't hear back yet.
-  Checking." and reads `interactions/receipt` for the same `requestId`. It never
-  re-sends on its own. If the receipt shows the answer, it is treated as
-  accepted; if it shows nothing was committed, `Send again` reuses the same ID
+- **Accepted** (`receipt` with the new `answerRevision`): the card records "Sent"
+  and the form keeps the receipt/read-only answers visible until Close or Back.
+  This keeps explicit next-step choices reachable instead of hiding a required
+  Continue, Stop or Check action behind an automatic dismissal.
+- **Lost reply** (outcome unknown): the form explains that arrival is unconfirmed
+  and offers Check again, which reads `interactions/receipt` for the same
+  `requestId` only on a tap. It never re-sends on its own. If the receipt
+  confirms the mutation was recorded, it is treated as accepted; if it shows nothing was committed, `Send again` reuses the same ID
   and answers; otherwise `Check again` stays available.
 - **Stale definition or answer revision:** re-read the interaction, keep typed
   values for fields whose id and type are unchanged, mark the rest as changed
@@ -90,12 +98,16 @@ Uses the existing `interactions/mutate`, `receipt`, `continue`, `stop` and
   for removed or retyped fields are taken out and listed, and Send and Save
   draft wait for the choice. Choosing sends nothing; unedited answers simply
   follow the newer read.
-- **Continuation `unknown`:** resolved with `reconcile`, never by a new
-  `continue`.
+- **Continuations:** follow the [published lifecycle](../mobile-api-v1.md#native-form-continuation-lifecycle). Only `not-started` exposes Continue/confirmed Stop;
+  `pending` offers an explicit status check, `unknown` reconciles the same submission,
+  and succeeded/failed are terminal. Unsupported states expose no mutation.
+  A successful result can refresh Chat; prepared changes still need ordinary review.
 - **Save draft** uses `save-draft` with the same guarantees. **Cancel form** is
   explicit, confirmed, and sends no answers.
-- **Signed out / proof required / offline:** answers stay on the device for this
-  session; nothing is sent until the owner acts again.
+- **Offline or proof required:** answers stay only in account memory; nothing is
+  sent until the owner acts again. Sign-out/account change clears all form answers,
+  retained requests, continuation state and card metadata. No form answers enter
+  SavedInstanceState, including Material picker/input state.
 
 ## Update required
 
@@ -148,9 +160,9 @@ Whumpo to answer this form." with the update action. No field is rendered.
   typed input sends nothing until Send; every field and action is reachable at
   200% text, with 48dp actions and Accessibility Test Framework checks; the
   action bar stays above the soft keyboard in the app window.
-- Not yet covered: Roborazzi goldens for the form (none recorded), physical
-  TalkBack, live Worker, physical devices, release builds and customer
-  acceptance.
+- Form and card screenshot baselines cover compact/wide, light/dark, large text,
+  validation and continuation states. Physical TalkBack, live Worker, physical
+  devices, signed releases and customer acceptance remain separate.
 
 ## Wiring
 

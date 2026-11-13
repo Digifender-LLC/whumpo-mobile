@@ -22,7 +22,7 @@ import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
-/** The pending-adoption decoder against tests/fixtures/proposed/forms.json. */
+/** The adopted native form decoder against tests/fixtures/proposed/forms.json. */
 class ProposedFormWireTest {
     private val clientJson = Json { encodeDefaults = true; explicitNulls = true }
 

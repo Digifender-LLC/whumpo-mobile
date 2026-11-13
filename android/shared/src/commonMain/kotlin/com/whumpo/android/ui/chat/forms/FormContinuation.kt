@@ -32,7 +32,7 @@ interface FormContinuationApi {
 
 /**
  * One submission's explicit next-step actions. No polling or automatic continue/retry. An uncertain response
- * remains reconciliation-only across pane dismissal; only reset on account change discards that knowledge.
+ * retains uncertainty across pane dismissal until an authoritative read or reconciliation resolves it.
  */
 class FormContinuation(
     private val api: FormPagesApi,
@@ -60,12 +60,12 @@ class FormContinuation(
     fun continueNow() {
         if (!mutable.value.canContinue) return
         if (!checkEligibility()) return
-        val revision = currentChatRevision()?.takeIf { it >= 0 }
-        if (revision == null) {
+        val expectedRevision = currentChatRevision()?.takeIf { it >= 0 }
+        if (expectedRevision == null) {
             mutable.value = mutable.value.copy(message = "Refresh Chat before continuing.")
             return
         }
-        request { api.continueSubmission(submissionId, revision) }
+        request { api.continueSubmission(submissionId, expectedRevision) }
     }
 
     fun stop() {
@@ -149,22 +149,22 @@ class FormContinuation(
             return FormContinuationState(FormContinuationPhase.Unavailable)
         }
         return FormContinuationState(
-        when (state) {
-            "not-started" -> FormContinuationPhase.NotStarted
-            "pending" -> FormContinuationPhase.Pending
-            "succeeded" -> FormContinuationPhase.Succeeded
-            "unknown" -> FormContinuationPhase.Unknown
-            "failed" -> FormContinuationPhase.Failed
-            else -> FormContinuationPhase.Unavailable
-        },
-        message = if (state == "failed") when (reason) {
-            "stopped" -> "The next step was stopped."
-            "changed" -> "The conversation changed before this next step could run."
-            "unavailable" -> "This next step is unavailable."
-            else -> "This next step couldn't finish."
-        } else null,
-        resultTurnId = resultTurnId,
-        eligible = canStart(),
-    )
+            when (state) {
+                "not-started" -> FormContinuationPhase.NotStarted
+                "pending" -> FormContinuationPhase.Pending
+                "succeeded" -> FormContinuationPhase.Succeeded
+                "unknown" -> FormContinuationPhase.Unknown
+                "failed" -> FormContinuationPhase.Failed
+                else -> FormContinuationPhase.Unavailable
+            },
+            message = if (state == "failed") when (reason) {
+                "stopped" -> "The next step was stopped."
+                "changed" -> "The conversation changed before this next step could run."
+                "unavailable" -> "This next step is unavailable."
+                else -> "This next step couldn't finish."
+            } else null,
+            resultTurnId = resultTurnId,
+            eligible = canStart(),
+        )
     }
 }

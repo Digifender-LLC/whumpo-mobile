@@ -31,6 +31,8 @@
       "anActivityLinkOpensActivityWhenSignedIn"
     ],
     "com.whumpo.android.FormDeviceTest": [
+      "dateAndTimeInputConfirmAboveKeyboardAtActualDoubleText",
+      "dateAndTimePickersRequireConfirmationWithoutSubmitting",
       "everyFieldAndActionIsReachableAtDoubleTextAndPassesAccessibilityChecks",
       "theActionBarStaysAboveTheSoftKeyboard",
       "typedAnswersSendNothingUntilSend"

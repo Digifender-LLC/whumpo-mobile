@@ -3,6 +3,7 @@ package com.whumpo.android.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.whumpo.android.ui.chat.forms.ClientFormApi
+import com.whumpo.android.ui.chat.forms.Answer
 import com.whumpo.android.ui.chat.forms.FormActions
 import com.whumpo.android.ui.chat.forms.FormController
 import com.whumpo.android.ui.chat.forms.JavaZoneTime
@@ -58,7 +59,32 @@ class ChatViewModel(
         onResultRequested = { session.load() },
     )
 
-    val formActions: FormActions get() = forms
+    // Capture the owner when the screen obtains its callbacks. A callback retained by an old
+    // composition cannot send its answers with the new account's token or edit the new account's form.
+    val formActions: FormActions
+        get() {
+            val owner = mutableState.value.owner
+            return object : FormActions {
+                private fun current(action: () -> Unit) = withCurrentSession(owner, action)
+                override fun onAnswer(fieldId: String, answer: Answer?) = current { forms.onAnswer(fieldId, answer) }
+                override fun onSubmit() = current { forms.onSubmit() }
+                override fun onSaveDraft() = current { forms.onSaveDraft() }
+                override fun onCheckAgain() = current { forms.onCheckAgain() }
+                override fun onSendAgain() = current { forms.onSendAgain() }
+                override fun onReload() = current { forms.onReload() }
+                override fun onLoadMoreResources(fieldId: String) = current { forms.onLoadMoreResources(fieldId) }
+                override fun onUseNewerAnswers() = current { forms.onUseNewerAnswers() }
+                override fun onKeepMyAnswers() = current { forms.onKeepMyAnswers() }
+                override fun onClose() = current { forms.onClose() }
+                override fun onUpdate() = current { forms.onUpdate() }
+                override fun onCancel() = current { forms.onCancel() }
+                override fun onFieldBlur(fieldId: String) = current { forms.onFieldBlur(fieldId) }
+                override fun onContinue() = current { forms.onContinue() }
+                override fun onCheckContinuation() = current { forms.onCheckContinuation() }
+                override fun onStopContinuation() = current { forms.onStopContinuation() }
+                override fun onOpenContinuationResult() = current { forms.onOpenContinuationResult() }
+            }
+        }
 
     /** What the screen draws: the draft state joined with the conversation and the open form. */
     val screen: StateFlow<ChatScreenState> = combine(state, session.state, forms.pane, forms.cards) { draft, chat, form, cards ->
@@ -141,8 +167,8 @@ class ChatViewModel(
     }
 
     // A stale UI callback can arrive before the account collector has reset the session.
-    private fun withCurrentSession(action: () -> Unit) {
-        val owner = mutableState.value.owner ?: return
+    private fun withCurrentSession(owner: AccountScope? = mutableState.value.owner, action: () -> Unit) {
+        if (owner == null) return
         viewModelScope.launch {
             if (account.activeAccount.firstOrNull() == owner && mutableState.value.owner == owner) action()
         }
