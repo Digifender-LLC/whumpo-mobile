@@ -1,6 +1,9 @@
 package com.whumpo.android
 
 import android.os.ParcelFileDescriptor
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.view.KeyEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.platform.app.InstrumentationRegistry
 
 import androidx.activity.compose.setContent
@@ -9,6 +12,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.node.RootForTest
+import androidx.core.view.allViews
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasSetTextAction
@@ -35,8 +45,19 @@ import com.whumpo.android.ui.chat.forms.FormScreen
 import com.whumpo.android.ui.chat.forms.FormScreenState
 import com.whumpo.android.ui.chat.forms.FormState
 import com.whumpo.android.ui.chat.forms.JavaZoneTime
+import com.whumpo.android.ui.chat.ChatActions
+import com.whumpo.android.ui.chat.ChatLayout
+import com.whumpo.android.ui.chat.ChatScreenState
+import com.whumpo.android.ui.chat.ChatState
+import com.whumpo.android.ui.chat.Phase
+import com.whumpo.android.ui.chat.forms.FormPane
+import com.whumpo.android.ui.shell.WidthClass
 import com.whumpo.android.ui.theme.WhumpoTheme
+import com.whumpo.core.api.ChatTurn
+import com.whumpo.core.api.InteractionRef
+import kotlin.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -136,6 +157,90 @@ class FormDeviceTest {
         assertTrue(actions.calls.isEmpty())
         compose.onNodeWithTag("form-send").performClick()
         assertEquals(listOf("submit"), actions.calls.filterNot { it.startsWith("blur:") })
+    }
+
+    @Test
+    fun compactFormRemovesCoveredChatFromPlatformTreeAndKeyboardTraversal() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val automation = instrumentation.uiAutomation
+        val flags = automation.serviceInfo.flags
+        var roots = emptyList<RootForTest>()
+        val transcript = "Covered synthetic transcript"
+        val draft = "Protected synthetic chat draft"
+        val turn = ChatTurn("55555555-5555-4555-8555-0000000000d1", 1, "completed", "guided",
+            "2030-01-01T00:00:00.000Z", transcript, null, null, InteractionRef(form.interactionId, "open"))
+        var state by mutableStateOf(ChatScreenState(signedIn = true, draft = draft, composerEnabled = true,
+            chat = ChatState(phase = Phase.Ready, turns = listOf(turn)), now = Instant.parse("2030-01-01T00:01:00Z")))
+        val actions = Actions()
+        val formActions = object : FormActions by actions {
+            override fun onClose() { state = state.copy(form = null) }
+        }
+        val chatActions = object : ChatActions {
+            override fun onOpenForm(interactionId: String) {
+                state = state.copy(form = FormPane.Loading(form.interactionId))
+            }
+        }
+        fun treeText(): List<String> {
+            val root = automation.windows.mapNotNull { it.root }.firstOrNull { it.packageName == Fixtures.app.packageName }
+                ?: automation.rootInActiveWindow?.takeIf { it.packageName == Fixtures.app.packageName }
+                ?: return emptyList()
+            val text = mutableListOf<String>()
+            fun visit(node: AccessibilityNodeInfo) {
+                text += listOfNotNull(node.text, node.contentDescription, node.hintText).joinToString(" ")
+                for (index in 0 until node.childCount) node.getChild(index)?.let(::visit)
+            }
+            visit(root)
+            return text
+        }
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply { this.flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS }
+            scenario.onActivity { activity ->
+                activity.setContent { WhumpoTheme { ChatLayout(state, WidthClass.Compact, chatActions, animated = false, formActions = formActions, zones = JavaZoneTime) } }
+            }
+            compose.waitForIdle()
+            scenario.onActivity { activity ->
+                roots = activity.window.decorView.allViews.filterIsInstance<RootForTest>().toList()
+                assertTrue("Compose accessibility roots exist", roots.isNotEmpty())
+                roots.forEach { it.forceAccessibilityForTesting(true) }
+            }
+            compose.waitUntil(10_000) { treeText().any { transcript in it } && treeText().any { draft in it } }
+            compose.onNodeWithTag("interaction-open").performClick()
+            // Exercise the first real Tab after a touch-opened loading pane.
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_TAB)
+            compose.waitForIdle()
+            compose.onNodeWithTag("form-close").assertIsFocused()
+            compose.runOnIdle { state = state.copy(form = FormPane.Shown(form.interactionId, FormScreenState(form))) }
+            compose.onNode(isFocused()).assert(hasAnyAncestor(hasTestTag("form-screen")))
+            compose.onNodeWithTag("chat-composer", useUnmergedTree = true).assertDoesNotExist()
+            compose.waitUntil(10_000) {
+                val tree = treeText()
+                tree.any { "Synthetic form" in it } && tree.none { transcript in it || draft in it }
+            }
+            repeat(2) {
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_TAB)
+                compose.waitForIdle()
+                compose.onNode(isFocused()).assert(hasAnyAncestor(hasTestTag("form-screen")))
+            }
+            compose.onNodeWithTag("form-close").performClick()
+            compose.onNodeWithTag("form-screen", useUnmergedTree = true).assertDoesNotExist()
+            val returned = compose.onNode(isFocused()).assertIsDisplayed()
+                .assert(hasTestTag("interaction-open") or hasTestTag("chat-composer"))
+            val returnedId = returned.fetchSemanticsNode().id
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_TAB)
+            compose.waitForIdle()
+            val next = compose.onNode(isFocused()).assertIsDisplayed()
+                .assert(hasTestTag("interaction-open") or hasTestTag("chat-composer") or hasTestTag("chat-send"))
+            assertNotEquals(returnedId, next.fetchSemanticsNode().id)
+            compose.waitUntil(10_000) { treeText().any { transcript in it } && treeText().any { draft in it } }
+            assertEquals(draft, state.draft)
+            assertTrue(actions.calls.none { it == "submit" })
+        } finally {
+            try {
+                scenario.onActivity { roots.forEach { it.forceAccessibilityForTesting(false) } }
+            } finally {
+                automation.serviceInfo = automation.serviceInfo.apply { this.flags = flags }
+            }
+        }
     }
 
     @Test

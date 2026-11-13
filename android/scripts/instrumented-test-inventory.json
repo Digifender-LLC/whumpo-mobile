@@ -31,6 +31,7 @@
       "anActivityLinkOpensActivityWhenSignedIn"
     ],
     "com.whumpo.android.FormDeviceTest": [
+      "compactFormRemovesCoveredChatFromPlatformTreeAndKeyboardTraversal",
       "dateAndTimeInputConfirmAboveKeyboardAtActualDoubleText",
       "dateAndTimePickersRequireConfirmationWithoutSubmitting",
       "everyFieldAndActionIsReachableAtDoubleTextAndPassesAccessibilityChecks",

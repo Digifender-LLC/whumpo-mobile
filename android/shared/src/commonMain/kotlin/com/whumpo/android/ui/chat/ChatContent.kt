@@ -19,8 +19,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
@@ -31,12 +31,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -44,7 +42,6 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -130,9 +127,9 @@ fun ChatPane(
     onOpenPreview: (PreviewRef) -> Unit = {},
     onUpdateApp: () -> Unit = {},
     onHelp: () -> Unit = {},
+    paneState: ChatPaneState = rememberChatPaneState(screen.chat),
 ) {
     val chat = screen.chat
-    HapticCueEffect(chat.haptic)
     Column(modifier.fillMaxSize().imePadding()) {
         Text(
             "Chat",
@@ -149,7 +146,7 @@ fun ChatPane(
                 phase is Phase.Failed && chat.reviewChecks.isEmpty() -> ErrorCard(phase.what, phase.safe, actions::onRetry, Modifier.padding(horizontal = 20.dp))
                 phase is Phase.UpdateRequired -> UpdateRequiredScreen(onUpdate = onUpdateApp, onHelp = onHelp)
                 chat.turns.isEmpty() && chat.outbound == null && chat.reviewChecks.isEmpty() -> EmptyConversation(actions)
-                else -> Transcript(chat, screen.now, actions, animated, onOpenPreview, screen.formCards)
+                else -> Transcript(chat, screen.now, actions, animated, onOpenPreview, screen.formCards, paneState.list)
             }
         }
         chat.notice?.let {
@@ -171,18 +168,6 @@ fun ChatPane(
                     contentDescription = chat.announcement
                 },
             )
-        }
-    }
-}
-
-@Composable
-private fun HapticCueEffect(cue: HapticCue?) {
-    val haptics = LocalHapticFeedback.current
-    LaunchedEffect(cue?.seq) {
-        when (cue?.kind) {
-            HapticKind.Confirm -> haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-            HapticKind.Reject -> haptics.performHapticFeedback(HapticFeedbackType.Reject)
-            null -> Unit
         }
     }
 }
@@ -221,15 +206,9 @@ private fun EmptyConversation(actions: ChatActions) {
 }
 
 @Composable
-private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, animated: Boolean, onOpenPreview: (PreviewRef) -> Unit, formCards: Map<String, FormCardSummary>) {
-    val listState = rememberLazyListState()
+private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, animated: Boolean, onOpenPreview: (PreviewRef) -> Unit, formCards: Map<String, FormCardSummary>, listState: LazyListState) {
     val missingChecks = chat.reviewChecks.filter { check -> chat.turns.none { it.id == check.turnId } }
     val failure = chat.transcriptFailure ?: (chat.phase as? Phase.Failed)
-    val extras = missingChecks.size + (if (failure != null) 1 else 0) + (if (chat.outbound != null) 1 else 0) + (if (chat.typing) 1 else 0)
-    val count = chat.turns.size + extras
-    LaunchedEffect(count, failure) { if (failure == null && count > 0) listState.scrollToItem(count - 1) }
-    // A new read failure must expose its retry. Later list changes must not pull the owner away from a retained check.
-    LaunchedEffect(failure) { if (failure != null) listState.scrollToItem(0) }
     LazyColumn(
         Modifier.fillMaxSize().testTag("chat-transcript"),
         state = listState,
