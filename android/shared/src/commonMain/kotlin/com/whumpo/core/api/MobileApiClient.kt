@@ -48,6 +48,13 @@ interface SessionProvider {
 @OptIn(ExperimentalUuidApi::class)
 fun newRequestId(): String = Uuid.random().toString()
 
+/** A form mutation encoded once by [MobileApiClient.freezeMutation]. Every send and retry uses these exact bytes. */
+class FrozenMutation internal constructor(val request: InteractionMutateRequest, bytes: ByteArray) {
+    private val body = bytes.copyOf()
+
+    fun bytes(): ByteArray = body.copyOf()
+}
+
 /**
  * Typed client for `/api/mobile/v1` (docs/mobile-api-v1.md). One method per operation.
  *
@@ -188,14 +195,21 @@ class MobileApiClient(
         )
     }
 
-    suspend fun interactionMutate(request: InteractionMutateRequest): InteractionReceipt {
+    /** Validates and encodes [request] once. Send the result, and every retry of it, with [interactionMutate]. */
+    fun freezeMutation(request: InteractionMutateRequest): FrozenMutation {
         require(request.operation in setOf("save-draft", "submit", "cancel")) { "unknown operation" }
         require((request.operation == "cancel") == (request.answers == null)) { "cancel carries no answers; save-draft and submit require them" }
         require(DIGEST.matches(request.definitionDigest)) { "definitionDigest must be 64 lowercase hex" }
         uuid(request.requestId)
         uuid(request.interactionId)
-        return post(InteractionReceipt.serializer(), "/interactions/mutate", InteractionMutateRequest.serializer(), request, write = true)
+        return FrozenMutation(request, wire.encodeToString(InteractionMutateRequest.serializer(), request).encodeToByteArray())
     }
+
+    suspend fun interactionMutate(request: InteractionMutateRequest): InteractionReceipt = interactionMutate(freezeMutation(request))
+
+    /** Sends the frozen bytes unchanged, so a retry after a conclusive receipt `404` is byte-identical. */
+    suspend fun interactionMutate(mutation: FrozenMutation): InteractionReceipt =
+        send(InteractionReceipt.serializer(), HttpMethod.Post, "/interactions/mutate", body = ByteArrayContent(mutation.bytes(), JSON_UTF8), write = true)
 
     /** Readback for a lost [interactionMutate] reply. */
     suspend fun interactionReceipt(requestId: String): InteractionReceipt =
@@ -404,6 +418,7 @@ class MobileApiClient(
         if (response.status.value != 200) {
             val error = MobileApiException.fromResponse(
                 response.status.value, bytes.decodeToString(), response.headers[HttpHeaders.RetryAfter],
+                fieldProblems = path.startsWith("/interactions/"),
             )
             // identity_changed is reported by [exec], which may retry it first.
             if (token != null && error is MobileApiException.ProofRequired && error.proof == MobileApiException.ProofRequired.Proof.SIGN_IN) {

@@ -51,7 +51,7 @@ class ApiFixtures {
 
     private fun MockRequestHandleScope.fixtureReply(request: HttpRequestData): HttpResponseData {
         val case = routes["${request.method.value} ${template(request.url.encodedPath)}"]
-            ?: return reply(500, """{"version":1,"error":{"code":"unavailable","message":"no fixture for ${request.method.value} ${request.url.encodedPath}"}}""")
+            ?: return reply(503, """{"version":1,"error":{"code":"unavailable","message":"no fixture for ${request.method.value} ${request.url.encodedPath}"}}""")
         val response = case["response"]!!.jsonObject
         return reply(response["status"]!!.jsonPrimitive.content.toInt(), response["body"]!!.toString())
     }

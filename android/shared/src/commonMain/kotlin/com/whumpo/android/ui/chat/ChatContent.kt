@@ -19,8 +19,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
@@ -31,12 +31,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -44,7 +42,6 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -60,6 +57,8 @@ import com.whumpo.android.ui.state.ErrorCard
 import com.whumpo.android.ui.state.OfflineBanner
 import com.whumpo.android.ui.state.Skeleton
 import com.whumpo.android.ui.state.UpdateRequiredScreen
+import com.whumpo.android.ui.chat.forms.FormPane
+import com.whumpo.android.ui.chat.forms.FormCardSummary
 import com.whumpo.android.ui.state.WhumpoIcons
 import com.whumpo.android.ui.state.WhumpoMascot
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
@@ -67,6 +66,7 @@ import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.android.ui.theme.WhumpoSecondaryButton
 import com.whumpo.android.ui.theme.WhumpoTheme
 import com.whumpo.core.api.ChatTurn
+import com.whumpo.core.api.InteractionRef
 import com.whumpo.core.api.PreviewRef
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -83,6 +83,7 @@ interface ChatActions {
     fun onConfirmReview() {}
     fun onCheckReview(requestId: String) {}
     fun onDismissReview() {}
+    fun onOpenForm(interactionId: String) {}
 }
 
 object NoChatActions : ChatActions
@@ -93,6 +94,9 @@ data class ChatScreenState(
     val draft: String = "",
     val composerEnabled: Boolean = false,
     val chat: ChatState = ChatState(),
+    /** The open form, if any; memory-only. */
+    val form: FormPane? = null,
+    val formCards: Map<String, FormCardSummary> = emptyMap(),
     /** For relative times. The ViewModel refreshes it with every state change; tests pin it. */
     val now: Instant = Clock.System.now(),
 ) {
@@ -123,9 +127,9 @@ fun ChatPane(
     onOpenPreview: (PreviewRef) -> Unit = {},
     onUpdateApp: () -> Unit = {},
     onHelp: () -> Unit = {},
+    paneState: ChatPaneState = rememberChatPaneState(screen.chat),
 ) {
     val chat = screen.chat
-    HapticCueEffect(chat.haptic)
     Column(modifier.fillMaxSize().imePadding()) {
         Text(
             "Chat",
@@ -142,7 +146,7 @@ fun ChatPane(
                 phase is Phase.Failed && chat.reviewChecks.isEmpty() -> ErrorCard(phase.what, phase.safe, actions::onRetry, Modifier.padding(horizontal = 20.dp))
                 phase is Phase.UpdateRequired -> UpdateRequiredScreen(onUpdate = onUpdateApp, onHelp = onHelp)
                 chat.turns.isEmpty() && chat.outbound == null && chat.reviewChecks.isEmpty() -> EmptyConversation(actions)
-                else -> Transcript(chat, screen.now, actions, animated, onOpenPreview)
+                else -> Transcript(chat, screen.now, actions, animated, onOpenPreview, screen.formCards, paneState.list)
             }
         }
         chat.notice?.let {
@@ -164,18 +168,6 @@ fun ChatPane(
                     contentDescription = chat.announcement
                 },
             )
-        }
-    }
-}
-
-@Composable
-private fun HapticCueEffect(cue: HapticCue?) {
-    val haptics = LocalHapticFeedback.current
-    LaunchedEffect(cue?.seq) {
-        when (cue?.kind) {
-            HapticKind.Confirm -> haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-            HapticKind.Reject -> haptics.performHapticFeedback(HapticFeedbackType.Reject)
-            null -> Unit
         }
     }
 }
@@ -214,15 +206,9 @@ private fun EmptyConversation(actions: ChatActions) {
 }
 
 @Composable
-private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, animated: Boolean, onOpenPreview: (PreviewRef) -> Unit) {
-    val listState = rememberLazyListState()
+private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, animated: Boolean, onOpenPreview: (PreviewRef) -> Unit, formCards: Map<String, FormCardSummary>, listState: LazyListState) {
     val missingChecks = chat.reviewChecks.filter { check -> chat.turns.none { it.id == check.turnId } }
     val failure = chat.transcriptFailure ?: (chat.phase as? Phase.Failed)
-    val extras = missingChecks.size + (if (failure != null) 1 else 0) + (if (chat.outbound != null) 1 else 0) + (if (chat.typing) 1 else 0)
-    val count = chat.turns.size + extras
-    LaunchedEffect(count, failure) { if (failure == null && count > 0) listState.scrollToItem(count - 1) }
-    // A new read failure must expose its retry. Later list changes must not pull the owner away from a retained check.
-    LaunchedEffect(failure) { if (failure != null) listState.scrollToItem(0) }
     LazyColumn(
         Modifier.fillMaxSize().testTag("chat-transcript"),
         state = listState,
@@ -231,7 +217,7 @@ private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, anim
     ) {
         failure?.let { item(key = "transcript-error") { ErrorCard(it.what, it.safe, actions::onRetry) } }
         items(chat.turns, key = { it.id }) { turn ->
-            TurnItem(turn, now, actions, onOpenPreview, chat.reviewChecks.lastOrNull { it.turnId == turn.id })
+            TurnItem(turn, now, actions, onOpenPreview, chat.reviewChecks.lastOrNull { it.turnId == turn.id }, turn.interaction?.let { formCards[it.interactionId] })
         }
         items(missingChecks, key = { "review-check-${it.requestId}" }) { check -> ReviewCheckCard(check, actions, onOpenPreview) }
         chat.outbound?.let { out -> item(key = "outbound") { OutboundItem(out, actions) } }
@@ -240,7 +226,7 @@ private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, anim
 }
 
 @Composable
-private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit, reviewCheck: ReviewFlow?) {
+private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit, reviewCheck: ReviewFlow?, formCard: FormCardSummary?) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Bubble(turn.userText, mine = true)
         // Relative like Projects and Activity; TalkBack reads the absolute UTC time too.
@@ -260,7 +246,7 @@ private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenP
             }
         }
         if (turn.review != null || reviewCheck != null) ReviewCard(turn, actions, onOpenPreview, retained = reviewCheck)
-        turn.interaction?.let { InteractionCard(it.state) }
+        turn.interaction?.let { InteractionCard(it, actions::onOpenForm, summary = formCard) }
     }
 }
 
@@ -380,22 +366,43 @@ private fun Composer(screen: ChatScreenState, actions: ChatActions) {
     }
 }
 
-/** An interaction whose payload is still raw JSON (WH-105). Nothing from it is rendered or sent. */
+/** A form in the conversation. It opens natively; its read decides what can be shown or sent. */
 @Composable
-fun InteractionCard(state: String, modifier: Modifier = Modifier) {
+fun InteractionCard(interaction: InteractionRef, onOpen: (String) -> Unit, modifier: Modifier = Modifier, summary: FormCardSummary? = null) {
+    val state = summary?.state ?: interaction.state
+    val title = summary?.title?.takeIf { it.isNotBlank() } ?: "Whumpo has a form for you"
+    val status = when {
+        state == "submitted" -> "Sent"
+        state != "open" -> "No longer open"
+        summary?.hasDraft == true -> "Draft saved"
+        else -> "Needs your answers"
+    }
+    val action = if (state != "open") "View" else if (summary?.hasDraft == true) "Continue" else "Answer"
     Card(
-        modifier.fillMaxWidth().padding(start = 36.dp).testTag("interaction-generic"),
+        onClick = { onOpen(interaction.interactionId) },
+        modifier = modifier.fillMaxWidth().padding(start = 36.dp).heightIn(min = 48.dp).testTag("interaction-open")
+            .semantics(mergeDescendants = true) { contentDescription = "$title. $status. $action form." },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(WhumpoIcons.Chat, contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Whumpo has a form for you", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+        Row(Modifier.padding(16.dp).clearAndSetSemantics {}, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(
+                WhumpoIcons.Chat,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Answering forms in the app is coming soon. Finish this one on the Whumpo website. Status: $state.",
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    status,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Text(action, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
         }
     }

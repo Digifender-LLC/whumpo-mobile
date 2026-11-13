@@ -11,6 +11,7 @@ HERE = Path(__file__).parent
 VERIFY = runpy.run_path(str(HERE / "verify-instrumented-results.py"))["verify"]
 INVENTORY = json.loads((HERE / "instrumented-test-inventory.json").read_text())
 COMPOSER = "composerIsNotCoveredByTheKeyboard"
+FORM_ACTIONS = "theActionBarStaysAboveTheSoftKeyboard"
 SERIAL = "emulator-5554"
 CREDENTIAL = "aSignedInSessionNeverReachesTheDeviceLogOrAPlainFile"
 
@@ -152,17 +153,19 @@ class EvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "inventory mismatch"):
             self.verify()
 
-    def test_api36_composer_must_execute_in_both_flavors(self):
+    def test_api36_keyboard_checks_must_execute_in_both_flavors(self):
         for flavor in ("local", "deployed"):
-            with self.subTest(flavor=flavor):
-                self.reset_reports()
-                self.skip(flavor, COMPOSER, "Soft keyboard did not appear on this device")
-                with self.assertRaisesRegex(ValueError, "disallowed skip"):
-                    self.verify()
+            for name in (COMPOSER, FORM_ACTIONS):
+                with self.subTest(flavor=flavor, name=name):
+                    self.reset_reports()
+                    self.skip(flavor, name, "Soft keyboard did not appear on this device")
+                    with self.assertRaisesRegex(ValueError, "disallowed skip"):
+                        self.verify()
 
     def test_api28_keyboard_absence_is_explicit_conditional_skip(self):
         for flavor in ("local", "deployed"):
-            self.skip(flavor, COMPOSER, "org.junit.AssumptionViolatedException: Soft keyboard did not appear on this device")
+            for name in (COMPOSER, FORM_ACTIONS):
+                self.skip(flavor, name, "org.junit.AssumptionViolatedException: Soft keyboard did not appear on this device")
         self.verify("28")
 
     def test_api28_other_composer_skip_is_rejected(self):

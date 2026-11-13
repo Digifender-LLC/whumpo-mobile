@@ -302,6 +302,50 @@ class MobileApiClientTest {
     }
 
     @Test
+    fun field422IsParsedOnlyOnInteractionRoutes() = runTest {
+        fun body(fieldId: String?) =
+            """{"version":1,"error":{"code":"example_problem","message":"Check this synthetic answer."${fieldId?.let { ",\"fieldId\":\"$it\"" } ?: ""}}}"""
+        val request = InteractionReceiptRequest("55555555-5555-4555-8555-000000000003")
+        for (fieldId in listOf("short-text", "not-a-field", null)) {
+            val c = client { reply(422, body(fieldId)) }
+            val e = assertFailsWith<MobileApiException.FieldProblem> { c.interactionReceipt(request.requestId) }
+            assertEquals(fieldId, e.fieldId)
+            assertEquals("example_problem", e.code)
+        }
+        // The same body on any other route is not a field problem.
+        val unrelated = client { reply(422, body("short-text")) }
+        assertEquals(422, assertFailsWith<MobileApiException.Unrecognized> { unrelated.getSession() }.status)
+        // A closed mobile code at 422 is never a field problem, even on an interaction route.
+        val closed = client { reply(422, """{"version":1,"error":{"code":"not_found","message":"x"}}""") }
+        assertIs<MobileApiException.Unrecognized>(assertFailsWith<MobileApiException> { closed.interactionReceipt(request.requestId) })
+    }
+
+    @Test
+    fun frozenMutationSendsIdenticalBytesOnEveryRetry() = runTest {
+        val sent = mutableListOf<ByteArray>()
+        val receipt = """{"version":1,"requestId":"55555555-5555-4555-8555-000000000003","interactionId":"66666666-6666-4666-8666-000000000001","operation":"submit","answerRevision":1}"""
+        val c = client { request ->
+            sent += request.body.toByteArray()
+            if (sent.size == 1) reply(503, """{"version":1,"error":{"code":"unavailable","message":"x"}}""") else reply(200, receipt)
+        }
+        val frozen = c.freezeMutation(
+            InteractionMutateRequest(
+                requestId = "55555555-5555-4555-8555-000000000003",
+                interactionId = "66666666-6666-4666-8666-000000000001",
+                definitionDigest = "a".repeat(64),
+                expectedAnswerRevision = 0,
+                operation = "submit",
+                answers = JsonObject(mapOf("short-text" to JsonPrimitive("Caf\u00e9 \u2028 \ud83d\ude00 \"quoted\""))),
+            ),
+        )
+        assertFailsWith<MobileApiException.Unavailable> { c.interactionMutate(frozen) }
+        assertEquals(1, c.interactionMutate(frozen).answerRevision)
+        assertEquals(2, sent.size)
+        assertTrue(sent[0].contentEquals(sent[1]))
+        assertTrue(sent[0].contentEquals(frozen.bytes()))
+    }
+
+    @Test
     fun nonContractFailuresAreUnrecognizedNotGuessed() = runTest {
         val html = client { respond("<html>Bad gateway</html>", HttpStatusCode.BadGateway) }
         assertEquals(502, assertFailsWith<MobileApiException.Unrecognized> { html.getSession() }.status)

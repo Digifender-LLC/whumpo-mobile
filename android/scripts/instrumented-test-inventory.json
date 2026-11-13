@@ -30,6 +30,14 @@
       "aProjectLinkOpensTheProjectWhenSignedIn",
       "anActivityLinkOpensActivityWhenSignedIn"
     ],
+    "com.whumpo.android.FormDeviceTest": [
+      "compactFormRemovesCoveredChatFromPlatformTreeAndKeyboardTraversal",
+      "dateAndTimeInputConfirmAboveKeyboardAtActualDoubleText",
+      "dateAndTimePickersRequireConfirmationWithoutSubmitting",
+      "everyFieldAndActionIsReachableAtDoubleTextAndPassesAccessibilityChecks",
+      "theActionBarStaysAboveTheSoftKeyboard",
+      "typedAnswersSendNothingUntilSend"
+    ],
     "com.whumpo.android.KeyboardInsetsTest": [
       "anAbsentKeyboardClosesTheActivityBeforeSkipping",
       "composerIsNotCoveredByTheKeyboard"
@@ -88,12 +96,14 @@
     "28": {
       "local": {
         "com.whumpo.android.KeyboardInsetsTest#composerIsNotCoveredByTheKeyboard": "Soft keyboard did not appear on this device",
-        "com.whumpo.android.CredentialHygieneTest#theBackupManagerRefusesThePackageWhileProtectedStateExists": "the image has no local backup transport"
+        "com.whumpo.android.CredentialHygieneTest#theBackupManagerRefusesThePackageWhileProtectedStateExists": "the image has no local backup transport",
+        "com.whumpo.android.FormDeviceTest#theActionBarStaysAboveTheSoftKeyboard": "Soft keyboard did not appear on this device"
       },
       "deployed": {
         "com.whumpo.android.KeyboardInsetsTest#composerIsNotCoveredByTheKeyboard": "Soft keyboard did not appear on this device",
         "com.whumpo.android.CredentialHygieneTest#aSignedInSessionNeverReachesTheDeviceLogOrAPlainFile": "AssumptionViolatedException",
-        "com.whumpo.android.CredentialHygieneTest#theBackupManagerRefusesThePackageWhileProtectedStateExists": "the image has no local backup transport"
+        "com.whumpo.android.CredentialHygieneTest#theBackupManagerRefusesThePackageWhileProtectedStateExists": "the image has no local backup transport",
+        "com.whumpo.android.FormDeviceTest#theActionBarStaysAboveTheSoftKeyboard": "Soft keyboard did not appear on this device"
       }
     },
     "36": {

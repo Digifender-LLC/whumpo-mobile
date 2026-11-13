@@ -261,7 +261,7 @@ The `definition` shape is `{version:1,kind,template,title,summary,presentation,f
 
 Every field has shape `{id,type,label,help,required,binding:"answer.value@1",constraints,default?,when?,group?,source?,questionId?}`. The field ID matches `^[a-z][a-z0-9-]{0,39}$`; the label is 1–80 UTF-16 code units, help is 0–240 UTF-16 code units and may be empty, and labels and help are plain text. `source` and `questionId` are opaque.
 
-An optional `default` has shape `{value,provenance}`, with allowed provenance values `saved`, `user`, and `suggested`. It prefills an answer, and a suggested value is shown as a suggestion. The optional `when` has shape `{fieldId,equals}`; it shows a field only while the earlier choice or boolean field equals `equals`, and answers for fields that are not shown are omitted. The optional `group` is an integer from 0 through 2 and is for visual grouping only. `default`, `when` and `group` are part of the adopted read shape and appear in its example; client prefill, suggestion display and conditional display are pending client work.
+An optional `default` has shape `{value,provenance}`, with allowed provenance values `saved`, `user`, and `suggested`. It prefills an answer, and a suggested value is shown as a suggestion. The optional `when` has shape `{fieldId,equals}`; it shows a field only while the earlier choice or boolean field equals `equals`, and answers for fields that are not shown are omitted. The optional `group` is an integer from 0 through 2 and is for visual grouping only. `default`, `when` and `group` are part of the adopted read shape and appear in its example; the native client implements prefill, suggestion display and conditional display.
 
 | Type | Constraints | Answer |
 | --- | --- | --- |
@@ -283,7 +283,7 @@ Unanswered fields are omitted, and drafts may omit required fields. Answers are 
 
 A field-level `422` response has `{version:1,error:{code,message,fieldId}}` for one field problem. It is passed through from the interaction vocabulary and is outside the closed mobile codes in `tests/fixtures/mobile-v1/errors.json`; its synthetic example is `errors.field422` in the forms fixture. The `code` set is open, and clients do not branch on unknown codes. A `400` response is a form-level shape or validation error. For an interaction-route `409` whose code is none of the mapped codes, the client rereads and classifies the result: a replacement means “form changed,” a terminal state means “no longer open,” and a greater `answerRevision` means “newer answers.” The mapped codes `onboarding_required`, `identity_changed`, `request_conflict`, `stale_revision`, `chat_busy`, and `review_unavailable` keep existing behavior. `request_conflict` means the same request ID was already used with a different payload; the original payload must be reused for a retry.
 
-Client 422 handling is **not implemented in the current client**: `MobileApiException.fromResponse` has no `fieldId`, has no 422 handling, and maps unknown codes to `Unrecognized`. Client work is separately owned and pending. Required client tests are: parse a 422 with a known `fieldId`; send unknown or absent `fieldId` to form level; a 422 without `fieldId` is handled at form level without crashing; do not branch on an unknown code; reread after an unmapped interaction-route 409; preserve mapped 409 behavior; every mapped 409 code keeps its existing handling; exercise every update-required case; ignore extra read and envelope metadata; fail closed on extra definition and field members; echo a cursor unchanged; and handle receipt 404.
+The native client handles interaction-route 422 responses as field problems, with unknown or absent field IDs shown at form level. It maps known mobile error codes only at their documented status; unknown codes remain unrecognized. Required client checks are: parse a 422 with a known `fieldId`; send unknown or absent `fieldId` to form level; a 422 without `fieldId` is handled at form level without crashing; do not branch on an unknown code; reread after an unmapped interaction-route 409; preserve mapped 409 behavior; every mapped 409 code keeps its existing handling; exercise every update-required case; ignore extra read and envelope metadata; fail closed on extra definition and field members; echo a cursor unchanged; and handle receipt 404.
 
 For `POST /interactions/receipt`, `404 not_found` means no mutation was recorded for that request ID.
 
@@ -310,3 +310,18 @@ This forms contract adds no fresh-passkey requirement. Review confirmation keeps
 Photo resources are deferred under WH-085. The digest remains opaque and is never computed by the client.
 
 Public references: `mobile-api-v1.md` lines 12, 25, 33–39, 85–104, 150, 153–166; `Models.kt` lines 403–410; `tests/fixtures/mobile-v1/operations.json` interaction response bodies.
+
+## D. Adopted continuation clarification
+
+The existing continuation shape is `{id,state,resultTurnId,reason}`. A submitted form has a continuation exactly when its definition has a continuation binding. Null means no followup, never permission to start one. Its ID equals both the enclosing submission ID and the requested `submissionId` in an action response. Non-null result turn IDs must be UUIDs. The earlier proposed pending/failed examples had inconsistent binding/ID values; those wholly synthetic examples are corrected without changing any route or wire shape.
+
+| State | Native behavior |
+| --- | --- |
+| `not-started` | Continue only on an explicit tap using this submission and the current Chat revision, while the form is unexpired/unreplaced/current. Confirmed Stop only stops never-started work; it remains available after expiry, subject to server ownership checks. |
+| `pending` | Already running: explicit status read/reconciliation only; no Continue or Stop. |
+| `unknown` | Explicit reconciliation of this submission only; never Continue. |
+| `succeeded` | Terminal result, no rerun. A non-null valid result turn can be refreshed/opened in Chat; null has no navigation. Existing action reviews still apply. |
+| `failed` | Terminal, including stopped/changed/unavailable. No retry-as-new authority. |
+| Future state | Read-only/update-required; no mutation. |
+
+Lost replies preserve submission identity and uncertainty. There is no automatic dispatch, polling or new submission. A fresh authoritative read may establish `not-started` again; stale/failed reads and status-only emissions may not. The server remains authoritative for identity, ownership, replacement, expiry and feature eligibility; these controls are not an authorization bypass.

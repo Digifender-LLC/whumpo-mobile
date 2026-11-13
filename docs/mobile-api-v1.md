@@ -103,7 +103,22 @@ The interaction operations are thin authenticated aliases for the frozen [WH-105
 - **Bindings:** `answer.value@1`, `interaction.answers@1`, `owned.projects@1`, `site.content@1`, `agent.task-continue@1`, `site.content-prepare@1`. Photo, display, view, connection, comparison and preview bindings are excluded.
 - A definition needing anything else returns `426 client_update_required`. There is no simplified form, text projection or browser downgrade. `canApprove` is always false for generic forms.
 
-**Forms read and resources (adopted shapes).** `interaction.read` returns `{version,envelope:{version,id,expiresAt,definition,definitionDigest},state,answerRevision,draft,replacementInteractionId,submission}` and `interaction.resources` returns `{version,interactionId,definitionDigest,fieldId,collection:"projects",items:[{id,name,photo:null}],nextBefore}`, as in the fixtures. `nextBefore` is opaque and echoed unchanged as the next `before`. Fixture values are synthetic: `template:"example@1"` and the placeholder digests are not server-valid. The client rules and synthetic case catalog are in [the forms snapshot](mobile-api-forms-proposal.md). Typed client parsing, form UI and `422` handling are not implemented yet. Photos stay deferred; submitted answers are read-only to their authorized owner.
+**Forms read and resources (adopted shapes).** `interaction.read` returns `{version,envelope:{version,id,expiresAt,definition,definitionDigest},state,answerRevision,draft,replacementInteractionId,submission}` and `interaction.resources` returns `{version,interactionId,definitionDigest,fieldId,collection:"projects",items:[{id,name,photo:null}],nextBefore}`, as in the fixtures. `nextBefore` is opaque and echoed unchanged as the next `before`. Fixture values are synthetic: `template:"example@1"` and the placeholder digests are not server-valid. The client rules and synthetic case catalog are in [the forms snapshot](mobile-api-forms-proposal.md). Typed client parsing, native form UI and interaction-route `422` field handling are implemented in the client; source and synthetic checks do not establish live compatibility. Photos stay deferred; submitted answers are read-only to their authorized owner.
+
+### Native form continuation lifecycle
+
+The continuation object keeps the existing shape `{id,state,resultTurnId,reason}`. In a submitted read, `submission.continuation` is non-null exactly when `definition.continuationBinding` is non-null. A null continuation means there is no followup; it never enables Continue. `continuation.id` equals the enclosing `submission.id`, and action responses must match both that ID and the requested `submissionId`. A non-null `resultTurnId` is a UUID. The reason is plain status text, never an instruction or a retry policy.
+
+| State | Native controls |
+| --- | --- |
+| `not-started` | Explicit Continue sends the same submission ID with the currently observed Chat revision; it requires a current, unexpired, unreplaced form. Confirmed Stop may stop only this never-started work, including after expiry; the server rechecks ownership and eligibility. |
+| `pending` | The next step is running. Explicit Check reads its current form/status or reconciles the existing submission. No Continue or Stop is offered. |
+| `unknown` | Explicit Check reconciles the same submission ID. Never issue another Continue for an unknown outcome. |
+| `succeeded` | Show the terminal result. A valid non-null result turn can be opened/refreshed in Chat; a null result remains terminal without navigation. Never rerun; prepared actions still require their ordinary review. |
+| `failed` | Terminal, including `stopped`, `changed` and `unavailable` reasons. No retry-as-new authority. |
+| Any future state | Read-only/update-required. No continuation mutation. |
+
+A lost continue, stop or reconcile reply retains the original submission and uncertain outcome. Only an explicit read/reconciliation checks it; there is no automatic dispatch or new submission. A fresh authoritative read proving `not-started` can enable a later explicit action, with the current Chat revision. Status-only UI updates, failed reads and reads overtaken by a newer action cannot clear uncertainty. These client controls do not replace current server identity, ownership, expiry, replacement or feature checks.
 
 ### Photos (WH-085)
 
@@ -168,7 +183,7 @@ Every error is `{version:1,error:{code,message,...}}` with the fixed status belo
 | `request_conflict`, `stale_revision`, `chat_busy`, `review_unavailable` | 409 | Replay with changed payload, stale conversation, a pending reply, or a stale/expired review. |
 | `payload_too_large` | 413 | Over the route bound. |
 | `unsupported_media_type` | 415 | Not a prepared JPEG. |
-| WH-105 field codes (open set) | 422 | Interaction-route field validation, passed through from the WH-105 vocabulary; it is outside the closed mobile codes, so `errors.json` has no case for it. The error adds `fieldId` when one field is at fault. Show it at that field, or at form level when `fieldId` is absent or unknown; never branch on the code. The synthetic example is `errors.field422` in the [forms catalog](../tests/fixtures/proposed/forms.json). Not yet handled by the client. |
+| WH-105 field codes (open set) | 422 | Interaction-route field validation, passed through from the WH-105 vocabulary; it is outside the closed mobile codes, so `errors.json` has no case for it. The error adds `fieldId` when one field is at fault. Show it at that field, or at form level when `fieldId` is absent or unknown; never branch on the code. The synthetic example is `errors.field422` in the [forms catalog](../tests/fixtures/proposed/forms.json). Handled by the native form field/form-level error presentation. |
 | `rate_limited` | 429 | Wait `retryAfterSeconds`. |
 | `unavailable` | 503 | Platform or provider unavailable; authentication and help stay reachable. |
 
