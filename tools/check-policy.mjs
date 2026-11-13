@@ -92,8 +92,12 @@ function androidArtifactPathsMatch(android) {
   };
   const uploads = text => text.split(/^ {6}- /m).slice(1)
     .filter(step => /^\s*uses: actions\/upload-artifact@/m.test(step));
-  const allUploads = [...android.matchAll(/^\s*(?:-\s*)?uses:\s*actions\/upload-artifact@/gm)];
+  // Count even noncanonical flow-style steps before mapping the two approved blocks.
+  const allUploads = [...android.matchAll(/actions\/upload-artifact@/gi)];
   if (allUploads.length !== 2) return false;
+  // Aliases can inherit an upload and override its paths without another action identity.
+  // This canonical workflow does not admit YAML anchors, aliases or merge keys.
+  if (/(?:^|[\s[{,:])(?:&|\*)[^\s&*,{}\[\]]+|^\s*<<\s*:/m.test(android)) return false;
   const sections = android.split(/^ {2}(?=[\w-]+:)/m);
   return Object.entries(expected).every(([job, artifact]) => {
     const section = sections.find(text => text.startsWith(`${job}:\n`));
