@@ -140,6 +140,10 @@ Artifacts are retained for seven days and limited to synthetic JUnit/build/
 Roborazzi reports and the allowlisted instrumentation files: ANR summaries,
 device state, Gradle exit status and tree diagnostics. Raw logcat, workspaces,
 `.gradle`, `.android`, signing files and private Worker outputs are not uploaded.
+Both Android artifact uploads explicitly exclude `android/**/logcat*`, including
+AGP's per-test files nested under `androidTest-results`. Policy regressions check
+each upload's paths; a resulting hosted artifact inventory must also confirm the
+exclusion and retention of the required reports and allowlisted diagnostics.
 The secret-scan artifact contains sanitized rule/commit/hashed-filename/line
 metadata only; raw Gitleaks reports and logs are temporary and deleted.
 
