@@ -37,6 +37,7 @@ class ExportTests(unittest.TestCase):
         self.runner = apk.RUNNER
         self.tool_calls = []
         self.mutate = None
+        self.badging_mutate = None
         for rel, _, _ in apk.INPUTS:
             path = self.root / "android/androidApp/build/outputs/apk" / rel
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,6 +64,8 @@ class ExportTests(unittest.TestCase):
             cert = self.test_cert if "androidTest" in require_stage.name else self.cert
             return f"Number of signers: {self.signers}\nSigner #1 certificate DN: {self.dn}\nSigner #1 certificate SHA-256 digest: {cert}\n"
         if args[2] == "badging":
+            if self.badging_mutate:
+                self.badging_mutate(Path(args[-1]))
             package = self.package or ("com.whumpo.android.local.test" if "androidTest" in args[-1] else "com.whumpo.android.local")
             return f"package: name='{package}' versionCode='1'\n" + ("application-debuggable\n" if self.debuggable else "")
         if args[2] == "xmltree":
@@ -280,6 +283,10 @@ class ExportTests(unittest.TestCase):
         self.mutate = lambda stage: (stage / "extra.log").write_text("not allowed")
         self.refused()
         self.mutate = lambda stage: (stage / "android-local-debug.apk").write_bytes(b"changed")
+        self.refused()
+
+    def test_apk_mutation_after_signature_check_before_first_metadata_hash_refused(self):
+        self.badging_mutate = lambda path: path.write_bytes(b"changed after signature verification")
         self.refused()
 
     def test_source_change_during_inspection_refused(self):

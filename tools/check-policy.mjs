@@ -116,15 +116,18 @@ function androidArtifactPathsMatch(android) {
     if (steps.length !== artifacts.length) return false;
     return artifacts.every((artifact, index) => {
       const step = steps[index];
-      const value = (key, indent = 10) => new RegExp(`^ {${indent}}${key}: (.+)$`, 'm').exec(step)?.[1];
+      const values = (key, indent = 10) => [...step.matchAll(new RegExp(`^ {${indent}}${key}: (.+)$`, 'gm'))].map(match => match[1]);
+      const matches = (key, expected, indent = 10) => JSON.stringify(values(key, indent))
+        === JSON.stringify(expected === undefined ? [] : [expected]);
       const block = /^ {10}path: \|\n((?: {12}[^\n]+\n)+)/m.exec(step)?.[1];
       const paths = block?.trim().split('\n').map(line => line.trim());
-      return value('name') === artifact.name
+      return matches('name', artifact.name) && matches('path', '|')
         && JSON.stringify(paths) === JSON.stringify(artifact.paths)
-        && value('retention-days') === artifact.retention
-        && value('if-no-files-found') === artifact.missing
-        && value('if', 8) === artifact.condition
-        && value('compression-level') === artifact.compression;
+        && matches('retention-days', artifact.retention)
+        && matches('if-no-files-found', artifact.missing)
+        && matches('if', artifact.condition, 8)
+        && matches('compression-level', artifact.compression)
+        && matches('continue-on-error', undefined, 8);
     });
   });
 }
@@ -195,7 +198,8 @@ export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependa
   require(android.includes('retention-days: 7') && !/android\/(?:\.gradle|\.android)\/|logcat -d/i.test(android), 'bounded allowlisted artifacts');
   require(androidArtifactPathsMatch(android), 'Android artifact upload paths retain reports and exclude per-test logcat');
   const prepare = '      - name: Prepare local debug APK evidence\n        run: python3 android/scripts/export-debug-apks.py\n';
-  require(android.includes(prepare)
+  const prepareSteps = android.split(/^ {6}- /m).filter(step => step.startsWith('name: Prepare local debug APK evidence\n'));
+  require(prepareSteps.length === 1 && prepareSteps[0].trimEnd() === prepare.slice(8).trimEnd()
     && android.indexOf(prepare) > android.indexOf('run: ./gradlew assembleLocalDebug')
     && android.indexOf(prepare) < android.indexOf('      - name: Upload local debug APK evidence'),
   'debug APK export follows the build before upload');

@@ -122,6 +122,7 @@ def observed_tools(root, sdk, run):
 
 
 def inspect_apk(path, package, tools, root, run):
+    before_size, before_sha = path.stat().st_size, digest(path)
     signed = run([tools / "apksigner", "verify", "--verbose", "--print-certs", path], root)
     certs = re.findall(r"^Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})$", signed, re.M)
     dns = re.findall(r"^Signer #1 certificate DN: (.+)$", signed, re.M)
@@ -133,7 +134,7 @@ def inspect_apk(path, package, tools, root, run):
     packages = re.findall(r"^package: name='([^']+)'", badging, re.M)
     require(packages == [package] and "application-debuggable" in badging.splitlines(),
             "APK must be the expected debuggable package")
-    entry = {"name": path.name, "bytes": path.stat().st_size, "sha256": digest(path),
+    entry = {"name": path.name, "bytes": before_size, "sha256": before_sha,
              "package": package, "debuggable": True, "certificateSha256": certs[0]}
     if package.endswith(".test"):
         tree = run([tools / "aapt", "dump", "xmltree", path, "AndroidManifest.xml"], root)
@@ -145,6 +146,8 @@ def inspect_apk(path, package, tools, root, run):
         require(target == ["com.whumpo.android.local"] and runner == [RUNNER],
                 "Unexpected instrumentation target or runner")
         entry.update(targetPackage=target[0], runner=runner[0])
+    require(path.stat().st_size == before_size and digest(path) == before_sha,
+            "Staged APK changed during inspection")
     return entry
 
 

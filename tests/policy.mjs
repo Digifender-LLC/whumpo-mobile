@@ -90,6 +90,9 @@ rejects({ci: inputs.ci.replace('          python3 android/scripts/test-export-de
   'policy command python3 android/scripts/test-export-debug-apks.py', 'APK export regressions must remain in policy');
 rejects({android: inputs.android.replace('        run: python3 android/scripts/export-debug-apks.py\n', '')},
   'debug APK export follows the build', 'upload must not omit APK validation');
+rejects({android: inputs.android.replace('        run: python3 android/scripts/export-debug-apks.py\n',
+  '        run: python3 android/scripts/export-debug-apks.py\n        continue-on-error: true\n')},
+  'debug APK export follows the build', 'export validation failures must stop the upload');
 for (const [before, after, label] of [
   ['            android/androidApp/build/outputs/debug-artifacts/manifest.json',
     '            android/androidApp/build/outputs/debug-artifacts/**', 'wildcard APK evidence upload'],
@@ -97,6 +100,8 @@ for (const [before, after, label] of [
     '            android/androidApp/build/outputs/apk/deployed/release/androidApp-deployed-release.apk', 'release APK upload'],
   ['          retention-days: 1\n', '          retention-days: 7\n', 'longer APK retention'],
   ['          if-no-files-found: error\n', '          if-no-files-found: ignore\n', 'missing APK evidence ignored'],
+  ['          retention-days: 1\n', '          retention-days: 1\n          retention-days: 90\n', 'duplicate artifact retention key'],
+  ['          compression-level: 0\n', '          compression-level: 0\n          path: android/**\n', 'duplicate broad artifact path key'],
   ['      - name: Upload local debug APK evidence\n', '      - name: Upload local debug APK evidence\n        if: always()\n', 'APK upload after failed validation'],
 ]) rejects({android: inputs.android.replace(before, after)}, 'Android artifact upload paths', label);
 
