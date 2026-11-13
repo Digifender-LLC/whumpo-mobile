@@ -131,7 +131,7 @@ internal fun answerProblem(kind: FieldKind, a: Answer): String? {
 private val NumberText = Regex("""-?(0|[1-9][0-9]*)(\.[0-9]+)?""")
 
 private fun numberProblem(kind: FieldKind.Number, text: String): String? {
-    val t = text.trim()
+    val t = normalizedNumberInput(text)
     val v = if (NumberText.matches(t)) t.toDoubleOrNull() else null
     val range = "Enter a number from ${plain(kind.min)} to ${plain(kind.max)}."
     if (v == null || !v.isFinite() || v < kind.min || v > kind.max) return range
@@ -206,7 +206,7 @@ private fun encode(a: Answer): JsonElement = when (a) {
     is Answer.One -> JsonPrimitive(a.id)
     is Answer.Many -> JsonArray(a.ids.map { JsonPrimitive(it) })
     is Answer.Number -> {
-        val t = a.text.trim()
+        val t = normalizedNumberInput(a.text)
         t.toLongOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(t.toDouble())
     }
 }

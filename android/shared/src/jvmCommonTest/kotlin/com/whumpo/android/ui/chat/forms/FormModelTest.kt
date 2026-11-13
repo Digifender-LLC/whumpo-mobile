@@ -5,6 +5,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
+import java.util.Locale
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -95,5 +97,32 @@ class FormModelTest {
     fun encodedAnswersAlwaysFitTheDecoder() {
         assertTrue(ProposedFormsFixture.wire.answersFit(definition, definition.encodeAnswers(complete), draft = false))
         assertFalse(ProposedFormsFixture.wire.answersFit(definition, JsonObject(mapOf("details" to JsonPrimitive("hidden"))), draft = true))
+    }
+
+    @Test
+    fun localDecimalsAndDigitsEncodeCanonicalNumbersWithoutAcceptingGrouping() {
+        val before = Locale.getDefault()
+        val number = FormDefinition("Synthetic", "", listOf(FormField("n", "Number", "", true, FieldKind.Number(-100.0, 100.0, 0.5))))
+        try {
+            for ((locale, text) in listOf(Locale.FRANCE to "12,5", Locale.forLanguageTag("ar-EG") to "١٢٫٥")) {
+                Locale.setDefault(locale)
+                val answers = mapOf("n" to Answer.Number(text))
+                assertTrue(number.validate(answers, draft = false).isEmpty())
+                assertEquals(JsonPrimitive(12.5), number.encodeAnswers(answers)["n"])
+                assertTrue(number.validate(mapOf("n" to Answer.Number("12.5")), draft = false).isEmpty())
+                assertTrue(number.validate(mapOf("n" to Answer.Number("1 234,5")), draft = false).isNotEmpty())
+            }
+            Locale.setDefault(Locale.US)
+            assertTrue(number.validate(mapOf("n" to Answer.Number("12,5")), draft = false).isNotEmpty())
+        } finally {
+            Locale.setDefault(before)
+        }
+    }
+
+    @Test
+    fun partialDateTimeCannotBeSavedOrEncodedAsAWireValue() {
+        val answers = mapOf("datetime" to Answer.DateTimeDraft("2031-05-0", "09:00"))
+        assertEquals("Enter a date and time.", definition.validate(answers, draft = true)["datetime"])
+        assertFailsWith<IllegalArgumentException> { definition.encodeAnswers(answers) }
     }
 }
