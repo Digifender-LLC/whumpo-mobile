@@ -157,7 +157,12 @@ class FormContinuation(
             "failed" -> FormContinuationPhase.Failed
             else -> FormContinuationPhase.Unavailable
         },
-        message = reason,
+        message = if (state == "failed") when (reason) {
+            "stopped" -> "The next step was stopped."
+            "changed" -> "The conversation changed before this next step could run."
+            "unavailable" -> "This next step is unavailable."
+            else -> "This next step couldn't finish."
+        } else null,
         resultTurnId = resultTurnId,
         eligible = canStart(),
     )

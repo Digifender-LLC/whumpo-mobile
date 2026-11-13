@@ -7,6 +7,8 @@ import com.whumpo.core.api.InteractionMutateRequest
 import com.whumpo.core.api.InteractionReceipt
 import com.whumpo.core.api.MobileApiException
 import com.whumpo.core.api.ContinuationResponse
+import com.whumpo.core.api.Continuation
+import kotlin.time.Instant
 import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -41,6 +43,10 @@ class FormControllerTest {
         val pages = mutableListOf<Pair<String, JsonElement?>>()
         val receipts = mutableListOf<String>()
         val digests = mutableListOf<String>()
+        val continued = mutableListOf<Pair<String, Int>>()
+        var continuationGate: CompletableDeferred<Unit>? = null
+        var snapshotReadBeforeGate = false
+        var onContinue: (String, Int) -> ContinuationResponse = { _, _ -> error("Unexpected continuation") }
         var readGate: CompletableDeferred<Unit>? = null
         var mutateGate: CompletableDeferred<Unit>? = null
         var onPageAt: ((String, String, JsonElement?) -> JsonObject)? = null
@@ -67,12 +73,16 @@ class FormControllerTest {
 
         override suspend fun read(interactionId: String): JsonObject {
             reads += interactionId
+            val captured = if (snapshotReadBeforeGate) onRead(interactionId) else null
             readGate?.await()
-            return onRead(interactionId)
+            return captured ?: onRead(interactionId)
         }
 
-        override suspend fun continueSubmission(submissionId: String, expectedChatRevision: Int): ContinuationResponse =
-            error("Unexpected continuation")
+        override suspend fun continueSubmission(submissionId: String, expectedChatRevision: Int): ContinuationResponse {
+            continued += submissionId to expectedChatRevision
+            continuationGate?.await()
+            return onContinue(submissionId, expectedChatRevision)
+        }
         override suspend fun stopSubmission(submissionId: String): ContinuationResponse = error("Unexpected stop")
         override suspend fun reconcileSubmission(submissionId: String): ContinuationResponse = error("Unexpected reconciliation")
 
@@ -109,9 +119,10 @@ class FormControllerTest {
 
     private val lost = MobileApiException.Transport(IOException("synthetic"), outcomeUnknown = true)
 
-    private fun TestScope.controller(api: FakeApi): FormController {
+    private fun TestScope.controller(api: FakeApi, onResult: (String) -> Unit = {}): FormController {
         var n = 0
-        return FormController(api, wire, backgroundScope) { "77777777-7777-4777-8777-%012d".format(++n) }
+        return FormController(api, wire, backgroundScope, currentChatRevision = { 4 }, onResultRequested = onResult,
+            now = { Instant.parse("2029-01-01T00:00:00Z") }) { "77777777-7777-4777-8777-%012d".format(++n) }
     }
 
     private fun test(body: suspend TestScope.(FakeApi) -> Unit) = runTest(UnconfinedTestDispatcher()) { body(FakeApi()) }
@@ -130,6 +141,104 @@ class FormControllerTest {
         assertEquals(draft.draft.orEmpty(), c.screen().answers)
         // The first page of each resource field loads; that is a read, never a write.
         assertEquals(listOf<Pair<String, JsonElement?>>("project" to null, "projects" to null), api.pages)
+    }
+
+    private val submittedRead get() = read("submittedWithContinuation").edit("submission.continuation.state", JsonPrimitive("not-started"))
+    private val submittedForm get() = wire.decode(submittedRead) as FormRead.Form
+
+    @Test
+    fun freshSameFormReloadUpdatesContinuationAndResultOnlyRefreshesExistingChat() = test { api ->
+        val result = "44444444-4444-4444-8444-000000000001"
+        api.onRead = { submittedRead }
+        val opened = mutableListOf<String>()
+        val c = controller(api, opened::add)
+        c.open(submittedForm.interactionId)
+        assertEquals(FormContinuationPhase.NotStarted, c.screen().continuation?.phase)
+        api.onRead = { submittedRead.edit("submission.continuation.state", JsonPrimitive("succeeded"))
+            .edit("submission.continuation.resultTurnId", JsonPrimitive(result)) }
+        c.onReload()
+        assertEquals(FormContinuationPhase.Succeeded, c.screen().continuation?.phase)
+        c.onContinue()
+        assertTrue(api.continued.isEmpty())
+        c.onOpenContinuationResult()
+        assertEquals(listOf(result), opened)
+        assertNull(c.pane.value)
+        assertTrue(api.sent.isEmpty())
+    }
+
+    @Test
+    fun lostContinueStaysUnknownThroughReloadStartAndFailureUntilFreshSameContentRead() = test { api ->
+        api.onRead = { submittedRead }
+        api.onContinue = { _, _ -> throw lost }
+        val c = controller(api)
+        c.open(submittedForm.interactionId)
+        c.onContinue()
+        assertEquals(FormContinuationPhase.Unknown, c.screen().continuation?.phase)
+        api.readGate = CompletableDeferred()
+        api.onRead = { throw lost }
+        c.onReload()
+        assertEquals(FormContinuationPhase.Unknown, c.screen().continuation?.phase)
+        api.readGate!!.complete(Unit)
+        assertEquals(FormContinuationPhase.Unknown, c.screen().continuation?.phase)
+        api.readGate = null
+        api.onRead = { submittedRead }
+        c.onReload()
+        assertEquals(FormContinuationPhase.NotStarted, c.screen().continuation?.phase)
+        assertEquals(1, api.continued.size, "a fresh status read never dispatches another continue")
+    }
+
+    @Test
+    fun reopenReadOvertakenByContinuationSettlementCannotRestoreNotStarted() = test { api ->
+        api.onRead = { submittedRead }
+        api.onContinue = { id, _ -> ContinuationResponse(1, id, Continuation(id, "pending", null, null)) }
+        api.continuationGate = CompletableDeferred()
+        val c = controller(api)
+        c.open(submittedForm.interactionId)
+        c.onContinue()
+        c.close()
+        api.snapshotReadBeforeGate = true
+        api.readGate = CompletableDeferred()
+        c.open(submittedForm.interactionId)
+        api.continuationGate!!.complete(Unit)
+        api.readGate!!.complete(Unit)
+        assertEquals(FormContinuationPhase.Pending, c.screen().continuation?.phase)
+        c.onContinue()
+        assertEquals(1, api.continued.size)
+    }
+
+    @Test
+    fun pendingFormReadBlocksContinuationAndRemovingFollowupClearsControls() = test { api ->
+        api.onRead = { submittedRead }
+        val c = controller(api)
+        c.open(submittedForm.interactionId)
+        api.readGate = CompletableDeferred()
+        c.onReload()
+        c.onContinue()
+        assertTrue(api.continued.isEmpty())
+        api.onRead = { submittedRead.edit("submission.continuation", JsonNull)
+            .edit("envelope.definition.continuationBinding", JsonNull) }
+        api.readGate!!.complete(Unit)
+        assertNull(c.screen().continuation)
+        c.onContinue()
+        c.onStopContinuation()
+        assertTrue(api.continued.isEmpty())
+    }
+
+    @Test
+    fun cardMetadataFollowsConfirmedReceiptsAndIsErasedOnAccountChange() = test { api ->
+        val open = ProposedFormsFixture.form()
+        api.onRead = { read("open") }
+        val c = controller(api)
+        c.open(open.interactionId)
+        assertEquals(false, c.cards.value[open.interactionId]?.hasDraft)
+        c.onSaveDraft()
+        assertEquals(true, c.cards.value[open.interactionId]?.hasDraft)
+        c.onCancel()
+        assertEquals("canceled", c.cards.value[open.interactionId]?.state)
+        c.close()
+        assertEquals(open.definition.title, c.cards.value[open.interactionId]?.title)
+        c.reset()
+        assertTrue(c.cards.value.isEmpty())
     }
 
     @Test
