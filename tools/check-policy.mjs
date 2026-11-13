@@ -92,7 +92,8 @@ function androidArtifactPathsMatch(android) {
   };
   const uploads = text => text.split(/^ {6}- /m).slice(1)
     .filter(step => /^\s*uses: actions\/upload-artifact@/m.test(step));
-  if (uploads(android).length !== 2) return false;
+  const allUploads = [...android.matchAll(/^\s*(?:-\s*)?uses:\s*actions\/upload-artifact@/gm)];
+  if (allUploads.length !== 2) return false;
   const sections = android.split(/^ {2}(?=[\w-]+:)/m);
   return Object.entries(expected).every(([job, artifact]) => {
     const section = sections.find(text => text.startsWith(`${job}:\n`));

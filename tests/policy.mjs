@@ -113,6 +113,15 @@ rejects({android: inputs.android + `
           name: extra-unfiltered-results
           path: android/androidApp/build/outputs/androidTest-results/**
 `}, 'Android artifact upload paths', 'an extra unguarded artifact upload must fail');
+rejects({android: inputs.android + `
+  extra-artifact:
+    runs-on: ubuntu-24.04
+    steps:
+        - uses: actions/upload-artifact@${'b'.repeat(40)}
+          with:
+            name: extra-unfiltered-results
+            path: android/androidApp/build/outputs/androidTest-results/**
+`}, 'Android artifact upload paths', 'an extra upload with valid alternative indentation must fail');
 
 assert.deepEqual(checkTrackedPaths([
   'README.md',
