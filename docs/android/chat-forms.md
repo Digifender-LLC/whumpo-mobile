@@ -31,7 +31,9 @@ simplified form, text projection or browser downgrade.
   (a dialog-style screen with a top bar: close, title, step-free scroll) and
   as the right-hand pane on expanded widths, matching the review sheet layout.
   Predictable back: back/close keeps typed answers on the device and sends
-  nothing.
+  nothing. On compact widths, the covered conversation leaves keyboard traversal
+  and the accessibility tree. Closing restores the conversation position and
+  draft without replaying an old confirmation haptic.
 - Existing theme only: `WhumpoTheme` colors and typography, Material 3 inputs,
   `WhumpoPrimaryButton`/`WhumpoSecondaryButton`/`WhumpoQuietButton`, state
   components for loading, error, offline and update-required.
@@ -74,6 +76,13 @@ and runs on blur and on submit, never on every keystroke for untouched fields.
 The server remains authoritative: its field errors are shown on the named
 fields; an unknown field id shows the form-level error.
 
+Number entry retains the finite JSON number format. Decimal range and step
+checks use a fixed, tiny fraction-of-step allowance for canonical floating-point
+values, without widening it at large magnitudes. Typed digits that would be lost
+by the wire conversion show a precision error. Date/time input that would convert
+outside UTC years 1–9999 remains editable and invalid. Submitted reads missing
+required visible answers fail closed.
+
 ## Submission and uncertain sends
 
 Uses the existing `interactions/mutate`, `receipt`, `continue`, `stop` and
@@ -98,6 +107,8 @@ Uses the existing `interactions/mutate`, `receipt`, `continue`, `stop` and
   for removed or retyped fields are taken out and listed, and Send and Save
   draft wait for the choice. Choosing sends nothing; unedited answers simply
   follow the newer read.
+  A late reopen read cannot replace answers already confirmed at a newer
+  revision; a submit follow-up arriving while the pane loads is retained.
 - **Continuations:** follow the [published lifecycle](../mobile-api-v1.md#native-form-continuation-lifecycle). Only `not-started` exposes Continue/confirmed Stop;
   `pending` offers an explicit status check, `unknown` reconciles the same submission,
   and succeeded/failed are terminal. Unsupported states expose no mutation.
@@ -159,7 +170,10 @@ Whumpo to answer this form." with the update action. No field is rendered.
 - Device (`androidTest/.../FormDeviceTest.kt`, API 28 and 36 emulators in CI):
   typed input sends nothing until Send; every field and action is reachable at
   200% text, with 48dp actions and Accessibility Test Framework checks; the
-  action bar stays above the soft keyboard in the app window.
+  action bar stays above the soft keyboard in the app window. Date/time popup
+  confirmations stay above the actual IME at 200% system text. Compact form
+  coverage inspects the platform accessibility tree and dispatches Tab keys;
+  it does not establish manual TalkBack navigation or announcement quality.
 - Form and card screenshot baselines cover compact/wide, light/dark, large text,
   validation and continuation states. Physical TalkBack, live Worker, physical
   devices, signed releases and customer acceptance remain separate.
