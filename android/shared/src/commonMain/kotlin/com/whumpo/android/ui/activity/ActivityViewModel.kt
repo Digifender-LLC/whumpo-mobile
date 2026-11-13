@@ -62,7 +62,7 @@ class ActivityViewModel(
         val cursor = current.nextCursor ?: return
         if (current.loadingMore) return
         _state.value = UiState.Content(current.copy(loadingMore = true, moreFailed = false))
-        viewModelScope.launch {
+        job = viewModelScope.launch {
             _state.value = try {
                 val page = fetchPage(cursor)
                 UiState.Content(ActivityList(current.rows + page.rows, page.nextCursor))
