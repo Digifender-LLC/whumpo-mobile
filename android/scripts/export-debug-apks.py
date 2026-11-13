@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Export one bounded debug APK pair with ordinary, unsigned build evidence."""
 
+import base64
 import hashlib
 import json
 import os
@@ -37,13 +38,14 @@ def command(args, cwd):
     return result.stdout
 
 
-def regular(path, root):
+def regular(path, root, allow_empty=False):
     require(path.is_relative_to(root), "Path is outside its expected root")
     require(all(not part.is_symlink() for part in (path, *path.parents)
                 if part.is_relative_to(root)), "Symlink input or output is not allowed")
     require(path.is_file(), "Expected a regular input file")
     size = path.stat().st_size
-    require(0 < size <= MAX_BYTES, "Input size is outside the export limit")
+    require((0 <= size if allow_empty else 0 < size) and size <= MAX_BYTES,
+            "Input size is outside the export limit")
     return size
 
 
@@ -97,6 +99,36 @@ def source_evidence(root, env, run):
         require(not env.get("GITHUB_ACTIONS") and not env.get("GITHUB_EVENT_NAME"),
                 "Incomplete CI context must not become local evidence")
     return source, build
+
+
+def sdk_directory(root, env, run):
+    project = root / "android"
+    properties = project / "local.properties"
+    def directory(value):
+        if not value:
+            return None
+        path = Path(value)
+        path = path if path.is_absolute() else project / path
+        return path.resolve() if path.is_dir() else None
+    if properties.exists() or properties.is_symlink():
+        require(regular(properties, root, allow_empty=True) <= 64 * 1024,
+                "Local properties exceed size limit")
+        helper = Path(__file__).with_name("ReadSdkProperties.java")
+        output = run(["java", helper, properties], root)
+        values = {}
+        for key in ("sdk.dir", "android.dir"):
+            found = re.findall(r"^" + re.escape(key) + r":(.*)$", output, re.M)
+            require(len(found) == 1, "Invalid SDK properties output")
+            values[key] = None if found[0] == "-" else base64.b64decode(found[0], validate=True).decode("utf-8")
+        selected = directory(values["sdk.dir"])
+        if selected:
+            return selected
+        require(values["android.dir"] is None, "Platform-source SDK configuration is not supported")
+    # Match regular-SDK precedence; do not silently inspect a different valid SDK.
+    home, legacy = (directory(env.get(key)) for key in ("ANDROID_HOME", "ANDROID_SDK_ROOT"))
+    require(not (home and legacy) or home.samefile(legacy), "Conflicting SDK environment directories")
+    require(home or legacy, "No valid regular Android SDK directory")
+    return home or legacy
 
 
 def observed_tools(root, sdk, run):
@@ -158,7 +190,7 @@ def export(root, env, run=command):
     require(all(not p.is_symlink() for p in target.parents if p.is_relative_to(root)),
             "Symlink output parent is not allowed")
     source, build = source_evidence(root, env, run)
-    sdk = Path(env["ANDROID_HOME"])
+    sdk = sdk_directory(root, env, run)
     tools, toolchain = observed_tools(root, sdk, run)
     inputs = [(root / "android/androidApp/build/outputs/apk" / rel, name, package)
               for rel, name, package in INPUTS]

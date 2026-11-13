@@ -49,8 +49,10 @@ private website repository; public client tests do not replace it.
 
 The Android workflow uses isolated `ubuntu-24.04` hosted runners, a disposable
 x86_64 Google APIs emulator at API 28 or 36, no secrets and no provider calls.
-It uploads only synthetic JUnit/build/Roborazzi reports and the allowlisted ANR,
-device-state and tree-diagnostic outputs for seven days; it does not upload raw
+It uploads synthetic JUnit/build/Roborazzi reports and the allowlisted ANR,
+device-state and tree-diagnostic outputs for seven days. A separate one-day artifact
+contains only the two local debug APKs and their build manifest, capped at 64 MiB;
+see [APK evidence](android-verification.md). It does not upload raw
 logcat or workspace/cache directories. `Mobile policy` covers shell regressions
 and source-contract tests. `Secret scan` covers full Git history, fetching all
 commits and tags; its report contains only rule, commit, hashed path and line

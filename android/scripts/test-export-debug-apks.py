@@ -53,6 +53,8 @@ class ExportTests(unittest.TestCase):
                 return "tree " + "b" * 40 + "\nparent " + "d" * 40 + "\nparent " + "c" * 40 + "\n\nSynthetic merge\n"
             return "b" * 40 if args[-1] == "HEAD^{tree}" else "a" * 40
         if args[0] == "java":
+            if args[1].endswith("ReadSdkProperties.java"):
+                return apk.command(args, cwd)
             return "    java.runtime.version = 21.0.13+9-LTS\n    java.vendor = Eclipse Adoptium\n"
         if args[0].endswith("gradlew"):
             return "Gradle 9.9.0\n"
@@ -125,6 +127,77 @@ class ExportTests(unittest.TestCase):
         result = self.export()
         self.assertIsNone(result["source"]["baseSha"])
         self.assertEqual(result["source"]["headSha"], result["source"]["checkoutSha"])
+
+    def test_local_properties_sdk_without_environment(self):
+        self.env.pop("ANDROID_HOME")
+        (self.root / "android/local.properties").write_text(f"sdk.dir={self.sdk}\n")
+        manifest = self.export()
+        self.assertEqual(manifest["toolchain"]["apkInspectionBuildTools"], "36.0.0")
+
+    def test_valid_properties_sdk_overrides_conflicting_environment(self):
+        (self.root / "android/local.properties").write_text(f"sdk.dir={self.sdk}\n")
+        other = self.root / "other-sdk"
+        other.mkdir()
+        self.env.update(ANDROID_HOME=str(other), ANDROID_SDK_ROOT=str(self.sdk))
+        self.assertEqual(apk.sdk_directory(self.root, self.env, self.run_tool), self.sdk)
+
+    def test_properties_grammar_uses_java_reader_and_relative_project_root(self):
+        moved = self.root / "android" / "SDK ü:back\\slash"
+        self.sdk.rename(moved)
+        # Duplicate-last, escaped key/space/colon/backslash/Unicode and CRLF continuation.
+        text = "# ignored\r\nsdk.dir=missing\r\nsdk\\.dir : SDK\\ \\\r\n  \\u00fc\\:back\\\\slash\r\n"
+        (self.root / "android/local.properties").write_bytes(text.encode("utf-8"))
+        self.env.clear()
+        self.assertEqual(apk.sdk_directory(self.root, self.env, self.run_tool), moved)
+        (self.root / "android/local.properties").write_text("sdk.dir=SDK ü\\:back\\\\slash\n")
+        self.assertEqual(apk.sdk_directory(self.root, self.env, self.run_tool), moved)
+
+    def test_properties_trailing_space_is_preserved(self):
+        moved = self.root / "android" / "SDK "
+        self.sdk.rename(moved)
+        (self.root / "android/local.properties").write_text("sdk.dir=SDK \n")
+        self.assertEqual(apk.sdk_directory(self.root, {}, self.run_tool), moved)
+
+    def test_invalid_or_empty_local_sdk_falls_back_to_environment(self):
+        properties = self.root / "android/local.properties"
+        for text in ("sdk.dir=missing\n", "sdk.dir=\n", "other=value\n", ""):
+            properties.write_text(text)
+            self.assertEqual(apk.sdk_directory(self.root, self.env, self.run_tool), self.sdk)
+
+    def test_malformed_properties_and_platform_source_refused(self):
+        properties = self.root / "android/local.properties"
+        properties.write_text("sdk.dir=\\u00ZZ\n")
+        with self.assertRaises(subprocess.SubprocessError):
+            apk.sdk_directory(self.root, self.env, self.run_tool)
+        properties.write_text("android.dir=platform\n")
+        with self.assertRaises(ValueError):
+            apk.sdk_directory(self.root, self.env, self.run_tool)
+
+    def test_missing_sdk_and_conflicting_valid_environment_refused(self):
+        with self.assertRaises(ValueError):
+            apk.sdk_directory(self.root, {}, self.run_tool)
+        other = self.root / "other-sdk"
+        other.mkdir()
+        self.env["ANDROID_SDK_ROOT"] = str(other)
+        with self.assertRaises(ValueError):
+            apk.sdk_directory(self.root, self.env, self.run_tool)
+        self.env["ANDROID_SDK_ROOT"] = str(self.sdk)
+        self.assertEqual(apk.sdk_directory(self.root, self.env, self.run_tool), self.sdk)
+        self.env.pop("ANDROID_HOME")
+        self.assertEqual(apk.sdk_directory(self.root, self.env, self.run_tool), self.sdk)
+
+    def test_local_properties_symlink_refused(self):
+        outside = self.root / "outside.properties"
+        outside.write_text(f"sdk.dir={self.sdk}\n")
+        (self.root / "android/local.properties").symlink_to(outside)
+        with self.assertRaises(ValueError):
+            apk.sdk_directory(self.root, self.env, self.run_tool)
+
+    def test_properties_size_limit_refused_before_java(self):
+        (self.root / "android/local.properties").write_text("#" * (64 * 1024 + 1))
+        with self.assertRaises(ValueError):
+            apk.sdk_directory(self.root, self.env, self.run_tool)
+        self.assertEqual(self.tool_calls, [])
 
     def test_actual_shallow_merge_retains_raw_parent_evidence(self):
         repo = self.root / "repository"

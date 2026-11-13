@@ -158,7 +158,16 @@ separate and unchanged. No release APK, signing key, log or screenshot is includ
 in the debug APK artifact.
 
 The exporter requires a clean checkout and observes Java, Gradle and APK-inspection
-tool versions. It verifies the final staged APK signatures, expected local package
+tool versions. Its regular SDK selection uses a valid `sdk.dir` from the untracked
+`android/local.properties` first, resolving relative paths against `android/`.
+The configured JDK reads that UTF-8 file with Java Properties Reader semantics,
+including escapes, continuations and duplicate keys. A missing, empty or invalid
+SDK directory falls back to `ANDROID_HOME`, then deprecated `ANDROID_SDK_ROOT`;
+two valid environment paths must name the same directory without a local override.
+Malformed, symlinked or larger-than-64-KiB properties files are refused. Platform-source
+`android.dir` mode, internal test SDKs and JVM-injected SDK selection are unsupported;
+use the regular SDK configurations above. SDK paths and properties are not exported.
+It verifies the final staged APK signatures, expected local package
 and instrumentation target/runner, debuggable flags and matching Android debug
 certificates, then records their byte sizes and SHA-256 hashes. Symlink inputs,
 unexpected or existing export directories, missing files, size violations and

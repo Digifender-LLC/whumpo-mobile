@@ -210,6 +210,9 @@ export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependa
     && !sdkInstaller.includes('system-images;'), 'pinned SDK tools and no build-job system image');
 
   require(ci.includes('name: Mobile policy') && ci.includes('name: Secret scan'), 'CI check names');
+  const mobilePolicy = ci.split(/^  secret-scan:/m)[0];
+  require(/      - uses: actions\/setup-java@[a-f0-9]{40}[^\n]*\n        with:\n          distribution: temurin\n          java-version: "21\.0\.13\+9"\n      - name: Run shell regressions and policy contracts\n/.test(mobilePolicy),
+    'policy SDK properties tests use pinned JDK 21');
   for (const command of [
     'node tests/policy.mjs', 'node tests/number-decimal-fixtures.mjs', 'node tools/check-policy.mjs', 'node tests/secret-scan-metadata.mjs',
     'python3 android/scripts/test-export-debug-apks.py',

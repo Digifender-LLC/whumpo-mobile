@@ -88,6 +88,8 @@ rejects({ci: inputs.ci.replace('          node tests/number-decimal-fixtures.mjs
   'the independent numeric corpus check must remain in the policy job');
 rejects({ci: inputs.ci.replace('          python3 android/scripts/test-export-debug-apks.py\n', '')},
   'policy command python3 android/scripts/test-export-debug-apks.py', 'APK export regressions must remain in policy');
+rejects({ci: inputs.ci.replace(/      - uses: actions\/setup-java@[^\n]+\n        with:\n          distribution: temurin\n          java-version: "21\.0\.13\+9"\n/, '')},
+  'policy SDK properties tests use pinned JDK 21', 'actual Java properties regressions require the configured JDK');
 rejects({android: inputs.android.replace('        run: python3 android/scripts/export-debug-apks.py\n', '')},
   'debug APK export follows the build', 'upload must not omit APK validation');
 rejects({android: inputs.android.replace('        run: python3 android/scripts/export-debug-apks.py\n',
