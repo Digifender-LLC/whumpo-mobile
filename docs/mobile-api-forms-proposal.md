@@ -275,6 +275,16 @@ An optional `default` has shape `{value,provenance}`, with allowed provenance va
 | `datetime` | `{zone}` using an IANA time-zone name | A UTC value in `YYYY-MM-DDTHH:MM:SS.sssZ` form. |
 | `resource` | `{collection:"projects",multiple,maxItems}`; `maxItems` is 1 for one value or 1–5 for multiple values | A UUID, or a unique UUID array when multiple values are allowed. |
 
+Numeric bounds are exact and inclusive. For finite JSON numbers, use their
+closest shortest decimal values (matching Node's `JSON.stringify`, including
+subnormals). The distance from the answer to the nearest grid point anchored at
+`min` must be strictly less than `step * 1e-7`; equality is rejected. This is a
+fraction of the step, independent of answer magnitude. The native client also
+rejects typed precision that would be lost during its existing Double wire
+conversion. For example, `0.300000001` fits `min=0.1, step=0.2`; with `min=0,
+step=1`, `0.00000009999999` fits and `0.0000001` does not. These rules do not
+introduce an arbitrary-precision wire format or establish live-service acceptance.
+
 Every field's `binding` is exactly `answer.value@1`. Within the native admission set, `submitBinding` is `interaction.answers@1`; any other value requires an update. `continuationBinding` is `null`, `agent.task-continue@1`, or `site.content-prepare@1`; which combinations a given template allows is server-side and not disclosed.
 
 Proposed: a build that renders a `resource` field with `collection:"projects"` declares `owned.projects@1` among its interaction capabilities; this declaration is not a field binding.

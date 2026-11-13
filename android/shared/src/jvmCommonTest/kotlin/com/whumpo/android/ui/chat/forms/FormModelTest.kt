@@ -154,10 +154,10 @@ class FormModelTest {
     fun decimalGridAllowsOnlyATinyFixedFractionOfAStepForCanonicalRounding() {
         val def = FormDefinition("Synthetic", "", listOf(FormField("n", "Number", "", true,
             FieldKind.Number(0.1, 1.0, 0.2))))
-        for (text in listOf("0.3", "0.30000000000000004", "0.3000000001", "0.2999999999")) {
+        for (text in listOf("0.3", "0.30000000000000004", "0.3000000001", "0.2999999999", "0.300000001", "0.299999999")) {
             assertTrue(def.validate(mapOf("n" to Answer.Number(text)), draft = false).isEmpty(), text)
         }
-        for (text in listOf("0.300000001", "0.299999999", "0.4")) {
+        for (text in listOf("0.30000002", "0.29999998", "0.4")) {
             assertTrue(def.validate(mapOf("n" to Answer.Number(text)), draft = false).isNotEmpty(), text)
         }
     }

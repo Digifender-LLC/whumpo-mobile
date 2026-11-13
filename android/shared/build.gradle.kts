@@ -80,6 +80,8 @@ kotlin {
 // the library reads these system properties. Default is verify; -Pscreenshots.record rewrites the goldens in
 // src/androidHostTest/screenshots (CI: the "Record screenshots" workflow input).
 tasks.withType<Test>().configureEach {
+    inputs.file(rootProject.file("../tests/fixtures/numbers/canonical-decimals.json"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     val record = providers.gradleProperty("screenshots.record").isPresent
     systemProperty(if (record) "roborazzi.test.record" else "roborazzi.test.verify", "true")
 }

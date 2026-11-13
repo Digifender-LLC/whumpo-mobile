@@ -76,9 +76,12 @@ and runs on blur and on submit, never on every keystroke for untouched fields.
 The server remains authoritative: its field errors are shown on the named
 fields; an unknown field id shows the form-level error.
 
-Number entry retains the finite JSON number format. Decimal range and step
-checks use a fixed, tiny fraction-of-step allowance for canonical floating-point
-values, without widening it at large magnitudes. Typed digits that would be lost
+Number entry retains the finite JSON number format. Range bounds are exact and
+inclusive. The canonical decimal distance to the nearest grid point must be
+strictly less than `step * 1e-7`, without widening it at large magnitudes. The
+client uses the closest shortest decimal matching Node's `JSON.stringify`,
+including subnormals; a deterministic Node-generated corpus checks JVM parity.
+Typed digits that would be lost
 by the wire conversion show a precision error. Date/time input that would convert
 outside UTC years 1–9999 remains editable and invalid. Submitted reads missing
 required visible answers fail closed.

@@ -256,11 +256,28 @@ class ProposedFormWireTest {
 
     @Test
     fun canonicalFloatingPointArtifactsStillDecodeAndRoundTrip() {
-        for (value in listOf(0.3, 0.30000000000000004)) {
+        for (value in listOf(0.3, 0.30000000000000004, 0.300000001)) {
             val source = numberRead(0.1, 1.0, value).edit("envelope.definition.fields.6.constraints.step", JsonPrimitive(0.2))
             val form = assertIs<FormRead.Form>(wire.decode(source))
             assertEquals(Answer.Number(plain(value)), form.draft?.get("quantity"))
             assertEquals(value, form.definition.encodeAnswers(form.draft!!).getValue("quantity").jsonPrimitive.double)
+        }
+    }
+
+    @Test
+    fun subnormalJsonNumbersDecodeCanonicallyAndKeepTheirBinaryWireValue() {
+        for ((literal, text) in listOf("5e-324" to "5e-324", "4.9e-324" to "5e-324", "1e-323" to "1e-323")) {
+            val value = literal.toDouble()
+            val source = numberRead(0.0, 1.0, value)
+                .edit("envelope.definition.fields.6.constraints.step", JsonPrimitive(Double.MIN_VALUE))
+                .edit("envelope.definition.fields.6.default.value", Json.parseToJsonElement(literal))
+                .edit("draft.quantity", Json.parseToJsonElement(literal))
+            assertEquals(literal, source.getValue("draft").jsonObject.getValue("quantity").jsonPrimitive.content)
+            val form = assertIs<FormRead.Form>(wire.decode(source))
+            val expected = Answer.Number(checkNotNull(plainDecimal(text)))
+            assertEquals(expected, form.draft?.get("quantity"))
+            assertEquals(expected, form.definition.fields.first { it.id == "quantity" }.default)
+            assertEquals(value.toBits(), form.definition.encodeAnswers(form.draft!!).getValue("quantity").jsonPrimitive.double.toBits())
         }
     }
 

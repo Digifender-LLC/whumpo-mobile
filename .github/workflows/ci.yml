@@ -29,6 +29,7 @@ jobs:
       - name: Run shell regressions and policy contracts
         run: |
           node tests/policy.mjs
+          node tests/number-decimal-fixtures.mjs
           node tools/check-policy.mjs
           node tests/merge-controller.mjs
           node tests/secret-scan-metadata.mjs

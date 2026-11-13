@@ -30,6 +30,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.tryPerformAccessibilityChecks
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -45,6 +46,8 @@ import com.whumpo.android.ui.chat.forms.FormScreen
 import com.whumpo.android.ui.chat.forms.FormScreenState
 import com.whumpo.android.ui.chat.forms.FormState
 import com.whumpo.android.ui.chat.forms.JavaZoneTime
+import com.whumpo.android.ui.chat.forms.encodeAnswers
+import com.whumpo.android.ui.chat.forms.validate
 import com.whumpo.android.ui.chat.ChatActions
 import com.whumpo.android.ui.chat.ChatLayout
 import com.whumpo.android.ui.chat.ChatScreenState
@@ -55,6 +58,9 @@ import com.whumpo.android.ui.shell.WidthClass
 import com.whumpo.android.ui.theme.WhumpoTheme
 import com.whumpo.core.api.ChatTurn
 import com.whumpo.core.api.InteractionRef
+import java.math.BigDecimal
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -157,6 +163,35 @@ class FormDeviceTest {
         assertTrue(actions.calls.isEmpty())
         compose.onNodeWithTag("form-send").performClick()
         assertEquals(listOf("submit"), actions.calls.filterNot { it.startsWith("blur:") })
+    }
+
+    @Test
+    fun numericAdmissionUsesCanonicalDecimalGridOnAndroid() {
+        fun definition(min: Double, step: Double) = FormDefinition("Synthetic number", "",
+            listOf(FormField("number", "Number", "", true, FieldKind.Number(min, 1.0, step))))
+        val fractional = definition(0.1, 0.2)
+        val actions = show(displayedForm = form.copy(definition = fractional))
+        compose.onNodeWithTag("form-field-number").performTextInput("0.300000001")
+        compose.waitForIdle()
+        assertEquals(Answer.Number("0.300000001"), actions.answers["number"])
+        assertTrue(fractional.validate(actions.answers, draft = false).isEmpty())
+        assertEquals(0.300000001, fractional.encodeAnswers(actions.answers).getValue("number").jsonPrimitive.double, 0.0)
+        compose.onNodeWithTag("form-field-number").performTextReplacement("0.30000002")
+        compose.waitForIdle()
+        assertTrue(fractional.validate(actions.answers, draft = false).isNotEmpty())
+        assertTrue(actions.calls.filterNot { it.startsWith("blur:") }.isEmpty())
+
+        val unit = definition(0.0, 1.0)
+        for ((text, valid) in listOf("0.00000009999999" to true, "0.0000001" to false,
+            "0.99999990000001" to true, "0.9999999" to false)) {
+            assertEquals(text, valid, unit.validate(mapOf("number" to Answer.Number(text)), draft = false).isEmpty())
+        }
+        val subnormal = definition(0.0, Double.MIN_VALUE)
+        for ((literal, valid) in listOf("5e-324" to true, "1e-323" to true, "4.9e-324" to false)) {
+            val answers = mapOf("number" to Answer.Number(BigDecimal(literal).toPlainString()))
+            assertEquals(literal, valid, subnormal.validate(answers, draft = false).isEmpty())
+            if (valid) assertEquals(literal.toDouble().toBits(), subnormal.encodeAnswers(answers).getValue("number").jsonPrimitive.double.toBits())
+        }
     }
 
     @Test
