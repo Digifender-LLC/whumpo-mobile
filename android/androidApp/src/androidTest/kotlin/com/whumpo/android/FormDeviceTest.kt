@@ -1,5 +1,8 @@
 package com.whumpo.android
 
+import android.os.ParcelFileDescriptor
+import androidx.test.platform.app.InstrumentationRegistry
+
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -8,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -172,4 +176,46 @@ class FormDeviceTest {
         assertEquals(initial, actions.answers)
         assertTrue(actions.calls.filterNot { it.startsWith("blur:") }.isEmpty())
     }
+
+    @Test
+    fun dateAndTimeInputConfirmAboveKeyboardAtActualDoubleText() {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        fun shell(command: String): String = ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command))
+            .bufferedReader().use { it.readText().trim() }
+        val original = shell("settings get system font_scale")
+        val restore = original.toFloatOrNull()?.let { "settings put system font_scale $it" } ?: "settings delete system font_scale"
+        try {
+            scenario.close()
+            shell("settings put system font_scale 2.0")
+            scenario = ActivityScenario.launch(MainActivity::class.java)
+            compose.waitUntil(10_000) {
+                var scale = 0f
+                scenario.onActivity { scale = it.resources.configuration.fontScale }
+                kotlin.math.abs(scale - 2f) < 0.01f
+            }
+            val dates = form.copy(definition = form.definition.copy(fields = listOf(
+                FormField("datetime", "Date and time", "", true, FieldKind.DateTime("UTC")),
+            )))
+            val initial = mapOf("datetime" to Answer.Text("2031-05-06T07:08:00.000Z"))
+            val actions = show(fontScale = 2f, displayedForm = dates, initialAnswers = initial)
+            compose.onNodeWithText("2031-05-06").performScrollTo().performClick()
+            assertDialogConfirmAboveKeyboard(compose, compose.onNode(hasSetTextAction()), "form-date-confirm")
+            compose.onNodeWithTag("form-date-confirm").performClick()
+            assertEquals(initial, actions.answers)
+            compose.onNodeWithText("07:08").performScrollTo().performClick()
+            assertDialogConfirmAboveKeyboard(compose, compose.onAllNodes(hasSetTextAction())[0], "form-time-confirm")
+            compose.onNodeWithTag("form-time-confirm").performClick()
+            assertEquals(initial, actions.answers)
+            assertTrue(actions.calls.filterNot { it.startsWith("blur:") }.isEmpty())
+        } finally {
+            try { scenario.close() } finally {
+                shell(restore)
+                val restoredScale = original.toFloatOrNull() ?: 1f
+                compose.waitUntil(10_000) {
+                    kotlin.math.abs(InstrumentationRegistry.getInstrumentation().targetContext.resources.configuration.fontScale - restoredScale) < 0.01f
+                }
+            }
+        }
+    }
+
 }
