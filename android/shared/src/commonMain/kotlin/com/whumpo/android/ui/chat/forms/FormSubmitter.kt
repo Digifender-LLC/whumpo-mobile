@@ -251,6 +251,8 @@ class FormSubmitter(
                 wire.decode(api.read(interactionId))
             } catch (e: CancellationException) {
                 throw e
+            } catch (_: MobileApiException.ClientUpdateRequired) {
+                FormRead.UpdateRequired
             } catch (_: Exception) {
                 null
             }

@@ -259,6 +259,18 @@ class FormSubmitterTest {
     }
 
     @Test
+    fun aRereadAskingForAnUpdateShowsUpdateRequired() = test { api ->
+        val s = submitter(api)
+        api.onRead = { throw MobileApiException.ClientUpdateRequired("Update.", null, null) }
+        s.start(open, "submit", answers)
+        assertEquals(FormRead.UpdateRequired, s.state.value.reread)
+        assertFalse(s.state.value.followUpFailed)
+        s.reload(open.interactionId)
+        assertEquals(FormRead.UpdateRequired, s.state.value.reread)
+        assertEquals(1, api.mutations.size)
+    }
+
+    @Test
     fun followUpReadWithoutASubmissionIsNotTheNextStep() = test { api ->
         val s = submitter(api)
         api.onRead = { ProposedFormsFixture.read("open") }
