@@ -54,7 +54,10 @@ object JavaZoneTime : ZoneTime {
     private fun exact(instant: Instant, id: ZoneId): ZoneTime.Local.Exact? {
         val z = instant.atZone(id)
         if (z.year !in 1..9999) return null
+        val utc = wire.format(instant)
+        // An admitted local year can cross the UTC wire-year boundary after applying its offset.
+        if (!isUtcInstant(utc)) return null
         val offset = z.offset.let { if (it == ZoneOffset.UTC) "UTC" else "UTC${it.id}" }
-        return ZoneTime.Local.Exact(wire.format(instant), z.toLocalDate().toString(), hm.format(z), offset)
+        return ZoneTime.Local.Exact(utc, z.toLocalDate().toString(), hm.format(z), offset)
     }
 }

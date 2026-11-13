@@ -209,7 +209,9 @@ class ProposedFormWire(private val zones: ZoneTime) {
         }
         val id = s["id"].uuid()
         check(continuation == null || continuation.id == id)
-        return Submission(id, answers(definition, s["answers"].obj()), continuation)
+        val submittedAnswers = answers(definition, s["answers"].obj())
+        check(definition.validate(submittedAnswers, draft = false).isEmpty())
+        return Submission(id, submittedAnswers, continuation)
     }
 
     /** Checks a mutation's `answers` against the definition exactly as a reply's draft would be. */

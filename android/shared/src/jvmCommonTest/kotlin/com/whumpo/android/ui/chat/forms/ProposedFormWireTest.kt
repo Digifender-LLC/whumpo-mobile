@@ -86,6 +86,39 @@ class ProposedFormWireTest {
     }
 
     @Test
+    fun submittedAnswersCannotOmitOrEmptyVisibleRequiredFields() {
+        val submitted = read("submitted")
+        val required = form("submitted").definition.fields.filter { it.required && it.showWhen == null }
+        for (field in required) {
+            assertEquals(FormRead.UpdateRequired, wire.decode(submitted.edit("submission.answers.${field.id}", null)), field.id)
+        }
+        for ((path, value) in listOf(
+            "submission.answers" to JsonObject(emptyMap()),
+            "submission.answers.short-text" to JsonPrimitive(""),
+            "submission.answers.multi-choice" to JsonArray(emptyList()),
+        )) {
+            assertEquals(FormRead.UpdateRequired, wire.decode(submitted.edit(path, value)), path)
+        }
+        // Partial and explicitly empty drafts remain valid.
+        assertIs<FormRead.Form>(wire.decode(read("draft")))
+        assertIs<FormRead.Form>(wire.decode(read("emptyDraft")))
+    }
+
+    @Test
+    fun submittedConditionalRequiredAnswersAreCheckedOnlyWhenVisible() {
+        val submitted = read("submitted").edit("envelope.definition.fields.5.required", JsonPrimitive(true))
+        assertIs<FormRead.Form>(wire.decode(submitted))
+        assertEquals(
+            FormRead.UpdateRequired,
+            wire.decode(submitted.edit("submission.answers.include-details", JsonPrimitive(true))),
+        )
+        assertIs<FormRead.Form>(wire.decode(
+            submitted.edit("submission.answers.include-details", JsonPrimitive(true))
+                .edit("submission.answers.details", JsonPrimitive("Synthetic required detail")),
+        ))
+    }
+
+    @Test
     fun continuationLifecycleAndIdentityFollowThePublishedContract() {
         val base = read("submittedWithContinuation")
         for (state in listOf("not-started", "pending", "succeeded", "failed", "unknown", "future-state")) {

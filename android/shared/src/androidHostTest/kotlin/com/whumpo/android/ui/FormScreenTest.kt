@@ -303,6 +303,27 @@ class FormScreenTest : RobolectricUiTest() {
     }
 
     @Test
+    fun confirmingAnOutOfRangeUtcTimePreservesBothLocalInputs() {
+        val cases = listOf(
+            Triple("0001-01-01", "00:00", "Etc/GMT-1"),
+            Triple("9999-12-31", "23:59", "America/Chicago"),
+        )
+        for ((date, time, zone) in cases) {
+            val field = open.definition.fields.single { it.id == "datetime" }.copy(kind = FieldKind.DateTime(zone))
+            val form = open.copy(definition = open.definition.copy(fields = listOf(field)))
+            val draft = Answer.DateTimeDraft(date, time)
+            val owner = Owner(FormScreenState(form, mapOf(field.id to draft)))
+            launch(Screen.Compact) { FormScreen(owner.state, JavaZoneTime, owner) }.use {
+                compose.onNodeWithText(time).performClick()
+                compose.onNodeWithTag("form-time-confirm").performClick()
+                compose.runOnIdle { assertEquals(draft, owner.state.answers[field.id]) }
+                shows("form-field-datetime-date", date)
+                shows("form-field-datetime-time", time)
+            }
+        }
+    }
+
+    @Test
     fun sameFieldIdInAnotherFormShowsThatFormsAnswer() {
         val other = ProposedFormsFixture.wire.decode(
             ProposedFormsFixture.read("open").edit("envelope.id", JsonPrimitive("66666666-6666-4666-8666-000000000099")),
