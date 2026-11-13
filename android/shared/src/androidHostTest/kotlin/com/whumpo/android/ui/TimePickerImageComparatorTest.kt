@@ -16,7 +16,7 @@ class TimePickerImageComparatorTest {
         }
     }
 
-    private fun compare(left: Image, right: Image) = TimePickerImageComparator.compare(left, right, null).pixelDifferences
+    private fun compare(left: Image, right: Image, comparator: TimePickerImageComparator = TimePickerImageComparator.Light) = comparator.compare(left, right, null).pixelDifferences
     private fun image(value: Int) = Pixels(2, 2, IntArray(4) { value })
 
     @Test
@@ -33,11 +33,27 @@ class TimePickerImageComparatorTest {
     }
 
     @Test
+    fun measuredDarkEdgePassesOnlyDarkAndBeyondBoundaryStillFails() {
+        val dark = TimePickerImageComparator.Dark
+        val observedExpected = image(0xbc315179.toInt())
+        val observedActual = image(0xbc35547a.toInt())
+        assertEquals(0, compare(observedExpected, observedActual, dark))
+        assertTrue(compare(observedExpected, observedActual) > 0)
+        assertTrue(compare(image(0xff646464.toInt()), image(0xff686464.toInt()), dark) > 0)
+        val original = image(0x80646464.toInt())
+        assertEquals(0, compare(original, image(0x81686767.toInt()), dark))
+        for ((channel, beyond) in listOf(16 to 5, 8 to 4, 0 to 4, 24 to 2)) {
+            assertTrue(compare(original, image(0x80646464.toInt() + (beyond shl channel)), dark) > 0)
+            assertTrue(compare(original, image(0x80646464.toInt() - (beyond shl channel)), dark) > 0)
+        }
+    }
+
+    @Test
     fun oneBadPixelFailsAndIsMarkedInTheDiagnosticMask() {
         val original = image(0xff646464.toInt())
         val changed = Pixels(2, 2, intArrayOf(0xff646464.toInt(), 0xff646464.toInt(), 0xff646468.toInt(), 0xff646464.toInt()))
         val mask = Mask(2, 2)
-        val result = TimePickerImageComparator.compare(original, changed, mask)
+        val result = TimePickerImageComparator.Light.compare(original, changed, mask)
         assertEquals(1, result.pixelDifferences)
         assertEquals(1f, mask.getValue(0, 1))
         assertEquals(0f, mask.getValue(1, 1))
@@ -45,15 +61,19 @@ class TimePickerImageComparatorTest {
 
     @Test
     fun dimensionsAndOnePixelShiftCannotPass() {
-        assertTrue(compare(image(0xff646464.toInt()), Pixels(1, 4, IntArray(4) { 0xff646464.toInt() })) > 0)
-        val before = Pixels(3, 2, intArrayOf(0, -1, 0, 0, -1, -1))
-        val shifted = Pixels(3, 2, intArrayOf(0, 0, -1, 0, 0, -1))
-        assertTrue(compare(before, shifted) > 0)
+        for (comparator in listOf(TimePickerImageComparator.Light, TimePickerImageComparator.Dark)) {
+            assertTrue(compare(image(0xff646464.toInt()), Pixels(1, 4, IntArray(4) { 0xff646464.toInt() }), comparator) > 0)
+            val before = Pixels(3, 2, intArrayOf(0, -1, 0, 0, -1, -1))
+            val shifted = Pixels(3, 2, intArrayOf(0, 0, -1, 0, 0, -1))
+            assertTrue(compare(before, shifted, comparator) > 0)
+        }
     }
 
     @Test
     fun missingGlyphCannotPass() {
         val before = Pixels(3, 2, intArrayOf(0, -1, 0, 0, -1, -1))
-        assertTrue(compare(before, Pixels(3, 2, IntArray(6))) > 0)
+        for (comparator in listOf(TimePickerImageComparator.Light, TimePickerImageComparator.Dark)) {
+            assertTrue(compare(before, Pixels(3, 2, IntArray(6)), comparator) > 0)
+        }
     }
 }

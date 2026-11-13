@@ -69,24 +69,33 @@ class FormScreenshotTest : RobolectricUiTest() {
     }
 
     @Test
-    fun dateAndTimeDialogs() {
+    fun dateAndTimeDialogsLight() = captureDateAndTimeDialogs(dark = false, scale = 1f)
+
+    @Test
+    fun dateAndTimeDialogsDark() = captureDateAndTimeDialogs(dark = true, scale = 1f)
+
+    @Test
+    fun dateAndTimeDialogsAtDoubleText() = captureDateAndTimeDialogs(dark = false, scale = 2f)
+
+    private fun captureDateAndTimeDialogs(dark: Boolean, scale: Float) {
         val form = ProposedFormsFixture.form()
         val state = FormScreenState(form.copy(definition = form.definition.copy(fields = form.definition.fields.filter { it.id == "datetime" })), answers = mapOf("datetime" to Answer.Text("2031-05-06T07:08:00.000Z")))
-        for ((dark, scale) in listOf(false to 1f, true to 1f, false to 2f)) {
-            val theme = (if (dark) "dark" else "light") + if (scale == 2f) "-font2" else ""
-            RuntimeEnvironment.setFontScale(scale)
+        val theme = (if (dark) "dark" else "light") + if (scale == 2f) "-font2" else ""
+        RuntimeEnvironment.setFontScale(scale)
+        try {
             launch(Screen.Compact, dark, fontScale = scale) { FormScreen(state, JavaZoneTime, Actions) }.use {
                 compose.onNodeWithText("2031-05-06").performScrollTo().performClick()
                 compose.onNodeWithTag("form-date-dialog").captureRoboImage("src/androidHostTest/screenshots/form-date-picker-compact-$theme.png")
                 compose.onNodeWithTag("form-date-dismiss").performClick()
                 compose.onNodeWithText("07:08").performScrollTo().performClick()
                 val options = if (scale == 1f) RoborazziOptions(compareOptions = RoborazziOptions.CompareOptions(
-                    imageComparator = TimePickerImageComparator,
+                    imageComparator = if (dark) TimePickerImageComparator.Dark else TimePickerImageComparator.Light,
                     resultValidator = { it.pixelDifferences == 0 },
                 )) else RoborazziOptions()
                 compose.onNodeWithTag("form-time-dialog").captureRoboImage("src/androidHostTest/screenshots/form-time-picker-compact-$theme.png", roborazziOptions = options)
                 compose.onNodeWithTag("form-time-dismiss").performClick()
             }
+        } finally {
             RuntimeEnvironment.setFontScale(1f)
         }
     }
