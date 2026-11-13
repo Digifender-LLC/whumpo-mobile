@@ -149,7 +149,7 @@ fun ChatPane(
                 phase is Phase.Failed && chat.reviewChecks.isEmpty() -> ErrorCard(phase.what, phase.safe, actions::onRetry, Modifier.padding(horizontal = 20.dp))
                 phase is Phase.UpdateRequired -> UpdateRequiredScreen(onUpdate = onUpdateApp, onHelp = onHelp)
                 chat.turns.isEmpty() && chat.outbound == null && chat.reviewChecks.isEmpty() -> EmptyConversation(actions)
-                else -> Transcript(chat, screen.now, actions, animated, onOpenPreview)
+                else -> Transcript(chat, screen.now, actions, animated, onOpenPreview, screen.formCards)
             }
         }
         chat.notice?.let {
@@ -221,7 +221,7 @@ private fun EmptyConversation(actions: ChatActions) {
 }
 
 @Composable
-private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, animated: Boolean, onOpenPreview: (PreviewRef) -> Unit) {
+private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, animated: Boolean, onOpenPreview: (PreviewRef) -> Unit, formCards: Map<String, FormCardSummary>) {
     val listState = rememberLazyListState()
     val missingChecks = chat.reviewChecks.filter { check -> chat.turns.none { it.id == check.turnId } }
     val failure = chat.transcriptFailure ?: (chat.phase as? Phase.Failed)
@@ -238,7 +238,7 @@ private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, anim
     ) {
         failure?.let { item(key = "transcript-error") { ErrorCard(it.what, it.safe, actions::onRetry) } }
         items(chat.turns, key = { it.id }) { turn ->
-            TurnItem(turn, now, actions, onOpenPreview, chat.reviewChecks.lastOrNull { it.turnId == turn.id })
+            TurnItem(turn, now, actions, onOpenPreview, chat.reviewChecks.lastOrNull { it.turnId == turn.id }, turn.interaction?.let { formCards[it.interactionId] })
         }
         items(missingChecks, key = { "review-check-${it.requestId}" }) { check -> ReviewCheckCard(check, actions, onOpenPreview) }
         chat.outbound?.let { out -> item(key = "outbound") { OutboundItem(out, actions) } }
@@ -247,7 +247,7 @@ private fun Transcript(chat: ChatState, now: Instant, actions: ChatActions, anim
 }
 
 @Composable
-private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit, reviewCheck: ReviewFlow?) {
+private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenPreview: (PreviewRef) -> Unit, reviewCheck: ReviewFlow?, formCard: FormCardSummary?) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Bubble(turn.userText, mine = true)
         // Relative like Projects and Activity; TalkBack reads the absolute UTC time too.
@@ -267,7 +267,7 @@ private fun TurnItem(turn: ChatTurn, now: Instant, actions: ChatActions, onOpenP
             }
         }
         if (turn.review != null || reviewCheck != null) ReviewCard(turn, actions, onOpenPreview, retained = reviewCheck)
-        turn.interaction?.let { InteractionCard(it, actions::onOpenForm) }
+        turn.interaction?.let { InteractionCard(it, actions::onOpenForm, summary = formCard) }
     }
 }
 
@@ -389,12 +389,23 @@ private fun Composer(screen: ChatScreenState, actions: ChatActions) {
 
 /** A form in the conversation. It opens natively; its read decides what can be shown or sent. */
 @Composable
-fun InteractionCard(interaction: InteractionRef, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
+fun InteractionCard(interaction: InteractionRef, onOpen: (String) -> Unit, modifier: Modifier = Modifier, summary: FormCardSummary? = null) {
+    val state = summary?.state ?: interaction.state
+    val title = summary?.title?.takeIf { it.isNotBlank() } ?: "Whumpo has a form for you"
+    val status = when {
+        state == "submitted" -> "Sent"
+        state != "open" -> "No longer open"
+        summary?.hasDraft == true -> "Draft saved"
+        else -> "Needs your answers"
+    }
+    val action = if (state != "open") "View" else if (summary?.hasDraft == true) "Continue" else "Answer"
     Card(
-        modifier.fillMaxWidth().padding(start = 36.dp).testTag("interaction-${interaction.interactionId}"),
+        onClick = { onOpen(interaction.interactionId) },
+        modifier = modifier.fillMaxWidth().padding(start = 36.dp).heightIn(min = 48.dp).testTag("interaction-open")
+            .semantics(mergeDescendants = true) { contentDescription = "$title. $status. $action form." },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.padding(16.dp).clearAndSetSemantics {}, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(
                 WhumpoIcons.Chat,
                 contentDescription = null,
@@ -403,22 +414,16 @@ fun InteractionCard(interaction: InteractionRef, onOpen: (String) -> Unit, modif
             )
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Whumpo has a form for you",
+                    title,
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    when (interaction.state) {
-                        "open" -> "Answer it here. Nothing is sent until you choose Send."
-                        "submitted" -> "You sent this form."
-                        else -> "This form is no longer open."
-                    },
+                    status,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                WhumpoSecondaryButton({ onOpen(interaction.interactionId) }, Modifier.heightIn(min = 48.dp).testTag("interaction-open")) {
-                    Text(if (interaction.state == "open") "Open form" else "View form")
-                }
+                Text(action, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
         }
     }

@@ -17,6 +17,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import com.whumpo.android.ui.chat.ChatActions
+import com.whumpo.android.ui.chat.forms.FormCardSummary
 import com.whumpo.android.ui.chat.ChatLayout
 import com.whumpo.android.ui.chat.ChatState
 import com.whumpo.android.ui.chat.Outbound
@@ -150,11 +151,25 @@ class ChatBehaviorTest : RobolectricUiTest() {
             // Only the first turn, so the list is not scrolled past the card.
             ChatLayout(ChatScenes.screen(ChatScenes.ready.copy(turns = turns)), WidthClass.Compact, recorder, animated = false)
         }.use {
-            compose.onNode(hasText("Whumpo has a form for you")).assertExists()
+            compose.onNodeWithTag("interaction-open").assertContentDescriptionEquals("Whumpo has a form for you. Sent. View form.")
             kotlin.test.assertEquals(emptyList(), recorder.forms)
             compose.onNodeWithTag("interaction-open").assertHeightIsAtLeast(48.dp).performClick()
             kotlin.test.assertEquals(listOfNotNull(turns.single().interaction?.interactionId), recorder.forms)
         }
+    }
+
+    @Test
+    fun aKnownFormCardDescribesItsTitleDraftAndActionAsOneNode() {
+        val recorder = Recorder()
+        val turn = ChatScenes.turns.first()
+        val interaction = checkNotNull(turn.interaction)
+        val state = ChatScenes.screen(ChatScenes.ready.copy(turns = listOf(turn))).copy(
+            formCards = mapOf(interaction.interactionId to FormCardSummary("Project brief", "open", true)),
+        )
+        launch(Screen.Compact) { ChatLayout(state, WidthClass.Compact, recorder, animated = false) }.use {
+            compose.onNodeWithTag("interaction-open").assertContentDescriptionEquals("Project brief. Draft saved. Continue form.").performClick()
+        }
+        assertEquals(listOf(interaction.interactionId), recorder.forms)
     }
 
     @Test

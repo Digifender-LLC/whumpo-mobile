@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -108,13 +109,13 @@ class FormDeviceTest {
         submission = null,
     )
 
-    private fun show(fontScale: Float = 1f): Actions {
-        val actions = Actions()
+    private fun show(fontScale: Float = 1f, displayedForm: FormRead.Form = form, initialAnswers: Map<String, Answer> = emptyMap()): Actions {
+        val actions = Actions().apply { answers = initialAnswers }
         scenario.onActivity { activity ->
             activity.setContent {
                 val base = LocalDensity.current
                 CompositionLocalProvider(LocalDensity provides Density(base.density, fontScale)) {
-                    WhumpoTheme { FormScreen(FormScreenState(form, actions.answers), JavaZoneTime, actions) }
+                    WhumpoTheme { FormScreen(FormScreenState(displayedForm, actions.answers), JavaZoneTime, actions) }
                 }
             }
         }
@@ -130,7 +131,7 @@ class FormDeviceTest {
         assertEquals(Answer.Text("Synthetic answer"), actions.answers["name"])
         assertTrue(actions.calls.isEmpty())
         compose.onNodeWithTag("form-send").performClick()
-        assertEquals(listOf("submit"), actions.calls)
+        assertEquals(listOf("submit"), actions.calls.filterNot { it.startsWith("blur:") })
     }
 
     @Test
@@ -141,6 +142,7 @@ class FormDeviceTest {
         fieldIds.forEach { compose.onNodeWithTag("form-field-$it").performScrollTo().assertIsDisplayed() }
         compose.onNodeWithTag("form-send").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         compose.onNodeWithTag("form-save").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag("form-cancel").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         compose.onRoot().tryPerformAccessibilityChecks()
     }
 
@@ -148,5 +150,26 @@ class FormDeviceTest {
     fun theActionBarStaysAboveTheSoftKeyboard() {
         show()
         assertAboveKeyboard(compose, scenario, "form-field-name", "form-actions")
+    }
+
+    @Test
+    fun dateAndTimePickersRequireConfirmationWithoutSubmitting() {
+        val dates = form.copy(definition = form.definition.copy(fields = listOf(
+            FormField("date", "Date", "", true, FieldKind.Date),
+            FormField("datetime", "Date and time", "", true, FieldKind.DateTime("UTC")),
+        )))
+        val initial = mapOf("date" to Answer.Text("2031-05-06"), "datetime" to Answer.Text("2032-04-08T10:15:00.000Z"))
+        val actions = show(displayedForm = dates, initialAnswers = initial)
+        compose.onNodeWithText("2031-05-06").performClick()
+        compose.onNodeWithTag("form-date-picker").assertExists()
+        assertEquals(initial, actions.answers)
+        compose.onNodeWithTag("form-date-dismiss").performClick()
+        assertEquals(initial, actions.answers)
+        compose.onNodeWithText("10:15").performScrollTo().performClick()
+        compose.onNodeWithTag("form-time-picker").assertExists()
+        assertEquals(initial, actions.answers)
+        compose.onNodeWithTag("form-time-confirm").performClick()
+        assertEquals(initial, actions.answers)
+        assertTrue(actions.calls.filterNot { it.startsWith("blur:") }.isEmpty())
     }
 }
