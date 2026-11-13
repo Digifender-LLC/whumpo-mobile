@@ -649,6 +649,115 @@ class FormControllerTest {
     private fun savedRead(text: String) = read("draft").edit("draft.short-text", JsonPrimitive(text)).edit("answerRevision", JsonPrimitive(2))
 
     @Test
+    fun saveSettlingBeforeAStaleReopenReadPreservesItsAnswers() = test { api ->
+        val mutationGate = CompletableDeferred<Unit>().also { api.mutateGate = it }
+        val c = controller(api)
+        c.open(DRAFT_ID)
+        c.onAnswer("short-text", Answer.Text("Synthetic saved"))
+        val answers = c.screen().answers
+        c.onSaveDraft()
+        val request = api.sent.single().request
+        c.close()
+        val reopenGate = CompletableDeferred<Unit>().also { api.readGate = it }
+        api.snapshotReadBeforeGate = true
+        c.open(DRAFT_ID)
+        api.onRead = { savedRead("Synthetic saved") }
+        mutationGate.complete(Unit)
+        assertTrue(c.pane.value is FormPane.Loading)
+        reopenGate.complete(Unit)
+        assertEquals(answers, c.screen().answers, "an older read cannot replace the confirmed save")
+        assertNull(c.screen().review)
+        assertEquals(request.requestId, c.screen().send.attempt?.receipt?.requestId)
+        assertEquals(2, c.screen().send.attempt?.receipt?.answerRevision)
+        c.close()
+        api.readGate = null
+        c.open(DRAFT_ID)
+        assertEquals(answers, c.screen().answers)
+        assertEquals(2, (c.screen().read as FormRead.Form).answerRevision)
+        assertNull(c.screen().send.attempt)
+        c.onSaveDraft()
+        assertEquals(2, api.sent.size)
+        assertEquals(2, api.sent.last().request.expectedAnswerRevision)
+        assertTrue("Synthetic saved" in api.sent.last().bytes().decodeToString())
+    }
+
+    @Test
+    fun completedSubmitReadWhileReopeningSurvivesAnOlderReadOrFailure() = test { _ ->
+        for (failInitialRead in listOf(false, true)) {
+            val api = FakeApi()
+            val complete = submittedRead
+            val interactionId = submittedForm.interactionId
+            api.onRead = { complete.edit("state", JsonPrimitive("open")).edit("submission", JsonNull)
+                .edit("draft", complete.getValue("submission").jsonObject.getValue("answers")).edit("answerRevision", JsonPrimitive(0)) }
+            val mutationGate = CompletableDeferred<Unit>().also { api.mutateGate = it }
+            val c = controller(api)
+            c.open(interactionId)
+            c.onSubmit()
+            val request = api.sent.single().request
+            c.close()
+            val reopenGate = CompletableDeferred<Unit>().also { api.readGate = it }
+            api.snapshotReadBeforeGate = !failInitialRead
+            c.open(interactionId)
+            api.onRead = { complete.edit("submission.id", JsonPrimitive(request.requestId))
+                .edit("submission.continuation.id", JsonPrimitive(request.requestId)).edit("answerRevision", JsonPrimitive(1)) }
+            api.readGate = null
+            mutationGate.complete(Unit)
+            assertTrue(c.pane.value is FormPane.Loading)
+            if (failInitialRead) api.onRead = { throw lost }
+            reopenGate.complete(Unit)
+            val shown = c.screen().read as FormRead.Form
+            assertEquals(FormState.Submitted, shown.state)
+            assertEquals(request.requestId, shown.submission?.id)
+            assertEquals(FormContinuationPhase.NotStarted, c.screen().continuation?.phase)
+            assertEquals(SendOutcome.Committed, c.screen().send.attempt?.outcome)
+            assertEquals(request.requestId, c.screen().send.attempt?.receipt?.requestId)
+            assertEquals(false, c.screen().send.followUpFailed)
+            assertEquals(3, api.reads.size)
+            assertEquals(1, api.sent.size)
+            assertTrue(api.continued.isEmpty())
+            c.reset()
+        }
+    }
+
+    @Test
+    fun olderSubmitFollowUpCannotReplaceAFresherReopenRead() = test { _ ->
+        for (newerRevision in listOf(1, 2)) {
+            val api = FakeApi()
+            val complete = submittedRead
+            val interactionId = submittedForm.interactionId
+            api.onRead = { complete.edit("state", JsonPrimitive("open")).edit("submission", JsonNull)
+                .edit("draft", complete.getValue("submission").jsonObject.getValue("answers")).edit("answerRevision", JsonPrimitive(0)) }
+            val mutationGate = CompletableDeferred<Unit>().also { api.mutateGate = it }
+            val c = controller(api)
+            c.open(interactionId)
+            c.onSubmit()
+            val request = api.sent.single().request
+            c.close()
+            val submitted = complete.edit("submission.id", JsonPrimitive(request.requestId))
+                .edit("submission.continuation.id", JsonPrimitive(request.requestId)).edit("answerRevision", JsonPrimitive(1))
+            api.onRead = { submitted }
+            val followUpGate = CompletableDeferred<Unit>().also { api.readGate = it }
+            api.snapshotReadBeforeGate = true
+            mutationGate.complete(Unit)
+            api.readGate = null
+            api.onRead = { submitted.edit("answerRevision", JsonPrimitive(newerRevision))
+                .edit("submission.continuation.state", JsonPrimitive("succeeded")) }
+            c.open(interactionId)
+            followUpGate.complete(Unit)
+            val shown = c.screen().read as FormRead.Form
+            assertEquals(newerRevision, shown.answerRevision)
+            assertEquals("succeeded", shown.submission?.continuation?.state)
+            assertEquals(FormContinuationPhase.Succeeded, c.screen().continuation?.phase)
+            assertEquals(request.requestId, c.screen().send.attempt?.receipt?.requestId)
+            assertEquals(SendOutcome.Committed, c.screen().send.attempt?.outcome)
+            c.onContinue()
+            assertTrue(api.continued.isEmpty())
+            assertEquals(1, api.sent.size)
+            c.reset()
+        }
+    }
+
+    @Test
     fun editsAfterASuccessfulSaveSurviveCloseAndReopen() = test { api ->
         val c = controller(api)
         c.open(DRAFT_ID)

@@ -59,6 +59,7 @@ class FormController(
     private var visitId: String? = null
     private var keptAnswers: KeptAnswers? = null
     private var seenReread: FormRead? = null
+    private var readPendingAtOpen = false
     private val kept = mutableMapOf<String, Kept>()
     private val continuations = mutableMapOf<String, FormContinuation>()
     private var activeContinuation: FormContinuation? = null
@@ -97,6 +98,7 @@ class FormController(
         keptAnswers = retained?.answers
         // A reread from before the form was closed is not applied again.
         seenReread = sub.state.value.reread
+        readPendingAtOpen = sub.state.value.reading
         _pane.value = FormPane.Loading(interactionId)
         watch = scope.launch { sub.state.collect { if (g == generation) onSend(it) } }
         scope.launch {
@@ -111,17 +113,23 @@ class FormController(
                 null
             }
             if (g != generation) return@launch
-            if (read == null) {
+            // A submit may settle and finish its follow-up while this pane is still loading.
+            val send = sub.state.value
+            val latest = send.reread?.takeIf {
+                !readPendingAtOpen && !send.unresolved && it !== seenReread && !olderRead(it, read)
+            } ?: read
+            if (latest == null) {
                 _pane.value = FormPane.Failed(interactionId)
                 return@launch
             }
-            if (read is FormRead.Form && read.interactionId != interactionId) {
+            if (latest is FormRead.Form && latest.interactionId != interactionId) {
                 _pane.value = FormPane.Shown(interactionId, FormScreenState(FormRead.UpdateRequired))
                 return@launch
             }
-            val (answers, review) = (read as? FormRead.Form)?.let(::starting) ?: (emptyMap<String, Answer>() to null)
-            show(interactionId, read, answers, review, continuationRevisions)
-            if (read is FormRead.Form) loadFirstPages(read)
+            if (!send.unresolved) seenReread = send.reread
+            val (answers, review) = (latest as? FormRead.Form)?.let(::starting) ?: (emptyMap<String, Answer>() to null)
+            show(interactionId, latest, answers, review, continuationRevisions)
+            if (latest is FormRead.Form) loadFirstPages(latest)
         }
     }
 
@@ -134,6 +142,7 @@ class FormController(
         continuationWatch = null
         activeContinuation = null
         reloadContinuationRevisions = null
+        readPendingAtOpen = false
         val id = visitId
         val sub = submitter
         if (id != null && sub != null) keep(id, sub)
@@ -188,7 +197,7 @@ class FormController(
         val s = saves[form.interactionId]?.takeIf { it.base != null && it.revision > k.revision }
         val baseline = s?.base ?: k.baseline
         val revision = s?.revision ?: k.revision
-        if (k.read.definitionDigest == form.definitionDigest && revision == form.answerRevision) return k.answers to k.review
+        if (k.read.definitionDigest == form.definitionDigest && revision >= form.answerRevision) return k.answers to k.review
         return reconcile(k.read.definition, baseline, k.answers, form)
     }
 
@@ -253,6 +262,9 @@ class FormController(
 
     private fun shown(): FormPane.Shown? = _pane.value as? FormPane.Shown
 
+    private fun olderRead(candidate: FormRead?, current: FormRead?) =
+        candidate is FormRead.Form && current is FormRead.Form && candidate.answerRevision < current.answerRevision
+
     private fun show(interactionId: String, read: FormRead, answers: Map<String, Answer>, review: FormReview?, continuationRevisions: Map<String, Int>) {
         val send = submitter?.state?.value ?: FormSendState()
         _pane.value = FormPane.Shown(interactionId, decorate(FormScreenState(read, answers, send = send, review = review)))
@@ -268,15 +280,21 @@ class FormController(
     )
 
     private fun onSend(send: FormSendState) {
+        // This read began before the new visit's initial read; its late reply cannot replace that newer snapshot.
+        if (readPendingAtOpen && !send.reading) {
+            seenReread = send.reread
+            readPendingAtOpen = false
+        }
         val current = shown() ?: return
         settleSaves(current.interactionId, send)
         var screen = current.screen.copy(send = send)
         val reread = send.reread
         val form = screen.read as? FormRead.Form
         var newDigest: FormRead.Form? = null
-        val freshRead = reread != null && reread !== seenReread && !send.unresolved
+        val newRead = reread != null && reread !== seenReread && !send.unresolved
+        if (newRead) seenReread = reread
+        val freshRead = newRead && !olderRead(reread, form)
         if (freshRead) {
-            seenReread = reread
             when {
                 reread is FormRead.UpdateRequired -> screen = FormScreenState(FormRead.UpdateRequired, send = send)
                 reread is FormRead.Form && reread.interactionId == current.interactionId -> {
