@@ -99,12 +99,15 @@ class FormSubmitter(
     private val announced = mutableSetOf<String>()
     private val followUps = mutableSetOf<String>()
 
+    /** The newest answer revision a committed mutation confirmed; a later refusal does not lower it. */
+    private var confirmedRevision = 0
+
     /** Starts `submit`, `save-draft` or `cancel` on [form]. Returns false, sending nothing, when not allowed. */
     fun start(form: FormRead.Form, operation: String, answers: JsonObject?): Boolean {
         val s = _state.value
         if (!s.canStart || form.state != FormState.Open) return false
         if (operation != "cancel" && answers == null) return false
-        val revision = maxOf(form.answerRevision, s.attempt?.receipt?.answerRevision ?: 0)
+        val revision = maxOf(form.answerRevision, s.attempt?.receipt?.answerRevision ?: 0, confirmedRevision)
         val mutation = try {
             api.freeze(form.copy(answerRevision = revision).mutation(newId(), operation, answers))
         } catch (_: IllegalArgumentException) {
@@ -153,6 +156,7 @@ class FormSubmitter(
     fun reset() {
         generation += 1
         conflictRead = null
+        confirmedRevision = 0
         announced.clear()
         followUps.clear()
         _state.value = FormSendState()
@@ -222,6 +226,7 @@ class FormSubmitter(
         val key = "${request.operation}:${request.requestId}"
         val text = when (request.operation) { "submit" -> "Sent"; "save-draft" -> "Saved"; else -> "Canceled" }
         val first = announced.add(key)
+        confirmedRevision = maxOf(confirmedRevision, receipt.answerRevision)
         _state.update {
             it.copy(
                 attempt = SendAttempt(mutation, SendOutcome.Committed, receipt),

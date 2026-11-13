@@ -245,6 +245,20 @@ class FormSubmitterTest {
     }
 
     @Test
+    fun aRefusalAfterASaveKeepsTheSavedRevision() = test { api ->
+        val s = submitter(api)
+        s.start(open, "save-draft", answers)
+        val saved = s.state.value.attempt?.receipt?.answerRevision
+        api.onMutate = { throw MobileApiException.FieldProblem("synthetic_open_code", "Synthetic problem.", "short-text") }
+        s.start(open, "save-draft", answers)
+        assertEquals(SendOutcome.Rejected, s.state.value.attempt?.outcome)
+        api.onMutate = { receiptFor(it) }
+        s.start(open, "submit", answers)
+        assertEquals(SendOutcome.Committed, s.state.value.attempt?.outcome)
+        assertEquals(listOf(open.answerRevision, saved, saved), api.mutations.map { it.expectedAnswerRevision })
+    }
+
+    @Test
     fun followUpReadWithoutASubmissionIsNotTheNextStep() = test { api ->
         val s = submitter(api)
         api.onRead = { ProposedFormsFixture.read("open") }
