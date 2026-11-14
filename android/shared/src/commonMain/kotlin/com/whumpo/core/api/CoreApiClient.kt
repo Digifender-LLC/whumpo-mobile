@@ -1,0 +1,93 @@
+package com.whumpo.core.api
+
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.HttpClientEngine
+import io.ktor.client.request.header
+import io.ktor.client.request.parameter
+import io.ktor.client.request.request
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpMethod
+import kotlinx.serialization.json.Json
+
+/** Only exact configured HTTPS origins or explicit debug loopback origins are accepted. */
+class CoreOrigin private constructor(val value: String) {
+    companion object {
+        private val https = Regex("https://[a-z0-9]+(?:[-.][a-z0-9]+)+")
+        private val loopback = Regex("http://127\\.0\\.0\\.1:([1-9][0-9]{0,4})")
+
+        fun allowlisted(value: String, allowedHttpsOrigins: Set<String>, debugLoopback: Boolean = false): CoreOrigin {
+            val port = loopback.matchEntire(value)?.groupValues?.get(1)?.toInt()
+            require((https.matches(value) && value in allowedHttpsOrigins) ||
+                (debugLoopback && port != null && port in 1..65535)) { "Core origin is not allowed" }
+            return CoreOrigin(value)
+        }
+    }
+}
+
+/** Owns the platform engine and HTTP client. The engine constructor supports local mock tests. */
+class CoreApiClient internal constructor(private val engine: HttpClientEngine, val origin: CoreOrigin) : AutoCloseable {
+    private val http = HttpClient(engine) { followRedirects = false }
+    private val json = Json { ignoreUnknownKeys = true }
+
+    internal suspend fun session(token: String): CoreSession =
+        json.decodeFromString(call(token, "/v1/auth/session"))
+
+    internal suspend fun switch(token: String, target: String): CoreSessionToken {
+        require(coreIdentifier.matches(target))
+        return json.decodeFromString(call(token, "/v1/auth/session/switch", HttpMethod.Post, json.encodeToString(CoreSwitch(target))))
+    }
+
+    internal suspend fun rotate(token: String): CoreSessionToken =
+        json.decodeFromString(call(token, "/v1/auth/session/rotate", HttpMethod.Post, "{}"))
+
+    internal suspend fun organizations(token: String, cursor: String?, limit: Int): CoreMembershipPage {
+        require(limit in 1..50 && (cursor == null || coreIdentifier.matches(cursor)))
+        return json.decodeFromString(call(token, "/v1/auth/organizations", cursor = cursor, limit = limit))
+    }
+
+    internal suspend fun profile(token: String): CoreOrganizationProfile =
+        json.decodeFromString(call(token, "/v1/organization"))
+
+    internal suspend fun rename(token: String, name: String, version: Long, key: String): CoreOrganizationProfile {
+        require(version in 1..9_007_199_254_740_991L && coreIdentifier.matches(key))
+        return json.decodeFromString(call(token, "/v1/organization", HttpMethod.Patch,
+            json.encodeToString(CoreProfilePatch(name)), version = version, key = key))
+    }
+
+    internal suspend fun entitlements(token: String): CoreOrganizationEntitlements =
+        json.decodeFromString(call(token, "/v1/organization/entitlements"))
+
+    private suspend fun call(
+        token: String,
+        path: String,
+        verb: HttpMethod = HttpMethod.Get,
+        body: String? = null,
+        cursor: String? = null,
+        limit: Int? = null,
+        version: Long? = null,
+        key: String? = null,
+    ): String {
+        require(coreBearer.matches(token)) { "Invalid core bearer format" }
+        val response = http.request(origin.value + path) {
+            method = verb
+            header("Authorization", "Bearer $token")
+            header("Origin", origin.value)
+            if (cursor != null) parameter("cursor", cursor)
+            if (limit != null) parameter("limit", limit)
+            if (version != null) header("If-Match", "\"$version\"")
+            if (key != null) header("Idempotency-Key", key)
+            if (body != null) {
+                header("Content-Type", "application/json")
+                setBody(body)
+            }
+        }
+        if (response.status.value != 200) throw CoreHttpException(response.status.value)
+        return response.bodyAsText()
+    }
+
+    override fun close() {
+        http.close()
+        engine.close()
+    }
+}
