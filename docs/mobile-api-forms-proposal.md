@@ -1,12 +1,20 @@
 # Native forms wire snapshot (synthetic)
 
-Section A's `interaction.read` and `interaction.resources` shapes are adopted into the v1 fixtures; the remaining sections are the client rules and synthetic case catalog for them. The fixture values are synthetic; `template:"example@1"` and placeholder digests are not server-valid as-is. Nothing here claims implementation, deployment, compatibility, persistence, or live acceptance.
+The v1 fixtures use the `interaction.read` and `interaction.resources` shapes
+in Section A. The other sections give client rules and synthetic cases for
+these shapes. The server does not accept the example `template:"example@1"`
+or the placeholder digests. Implementation, deployment, compatibility,
+persistence, and live acceptance require separate evidence.
 
-The fixture is [`forms.json`](../tests/fixtures/proposed/forms.json). `docs/mobile-api-v1.md` and `tests/fixtures/mobile-v1/` remain the authoritative v1 contract; where this document differs from them, they win.
+The fixture is [`forms.json`](../tests/fixtures/proposed/forms.json). For the
+authoritative v1 contract, use `docs/mobile-api-v1.md` and
+`tests/fixtures/mobile-v1/`. If this document differs, use those sources.
 
 ## A. Proposed amendment to frozen v1 shapes (normative, adopted into the v1 fixtures)
 
-The read and resources response objects below **replaced**, rather than added to, the earlier `interaction.read` response and `interaction.resources` response in `tests/fixtures/mobile-v1/operations.json`. The earlier frozen v1 shapes were:
+The adopted response objects replaced the earlier `interaction.read` and
+`interaction.resources` responses in `tests/fixtures/mobile-v1/operations.json`.
+These are the earlier frozen v1 shapes.
 
 `interaction.read` response body:
 
@@ -251,17 +259,52 @@ The exact adopted resources page object, also present as the first entry in `res
 }
 ```
 
-The adopted `POST /interactions/read` response is `{version:1,envelope:{version:1,id,expiresAt,definition,definitionDigest},state,answerRevision,draft,replacementInteractionId,submission}`. Additional read or envelope members are server metadata that the client ignores and does not echo or display. `definitionDigest` is opaque: the client echoes it unchanged and never computes it.
+The adopted `POST /interactions/read` response is `{version:1,envelope:{version:1,id,expiresAt,definition,definitionDigest},state,answerRevision,draft,replacementInteractionId,submission}`. The client ignores other read or
+envelope members. It does not show them or send them back. The
+`definitionDigest` is opaque. The client sends it back unchanged and does not
+calculate it.
 
-`state` is `open`, `submitted`, `canceled`, `expired`, or `superseded`; any other value requires an update. `state` is authoritative over `expiresAt`: a future expiry does not make a non-open state open. Proposed: if an `open` response has an elapsed expiry, the server resolves it; the client never infers a state from expiry. `draft` is `null` when no saved draft exists or an answers object when one exists; `{}` is a saved empty draft. `replacementInteractionId` is `null` or the UUID of the form that replaced this one. A `superseded` state with a null replacement is terminal and no longer open.
+`state` is `open`, `submitted`, `canceled`, `expired`, or `superseded`.
+Other values require an update. The client uses `state` as authoritative.
+A future `expiresAt` does not open a form in a non-open state. Under the
+proposal, the server resolves an `open` response whose expiry elapsed. The
+client never infers the state from expiry.
 
-`submission` is `null` or `{id,answers,continuation}`. Its `continuation` is `null` or uses the existing public `Continuation` shape `{id,state,resultTurnId,reason}`. Submitted answers are included in the read response.
+`draft` is `null` if there is no saved draft. If a saved draft exists,
+`draft` is an answers object. An empty saved draft is `{}`.
+`replacementInteractionId` is `null` or the UUID of the replacement form.
+A `superseded` form with a null replacement is terminal and closed.
 
-The `definition` shape is `{version:1,kind,template,title,summary,presentation,fields,cards,submitBinding,continuationBinding,purpose?}`. A native form requires `kind:"form"` and `cards:[]`; any other kind or a non-empty cards array requires an update. `template` and optional `purpose` are opaque labels. `presentation` is `inline`, `panel`, or `dialog`; any other `presentation` requires an update, and the client must fail closed: it does not render the form and performs no form mutation. The title is at most 100 UTF-16 code units, the summary is at most 400 UTF-16 code units, and a definition contains 1–12 fields in display order.
+`submission` is `null` or `{id,answers,continuation}`. Its `continuation` is
+`null` or uses the public `Continuation` shape `{id,state,resultTurnId,reason}`.
+The read response includes submitted answers.
 
-Every field has shape `{id,type,label,help,required,binding:"answer.value@1",constraints,default?,when?,group?,source?,questionId?}`. The field ID matches `^[a-z][a-z0-9-]{0,39}$`; the label is 1–80 UTF-16 code units, help is 0–240 UTF-16 code units and may be empty, and labels and help are plain text. `source` and `questionId` are opaque.
+The `definition` shape is
+`{version:1,kind,template,title,summary,presentation,fields,cards,submitBinding,continuationBinding,purpose?}`.
+A native form requires `kind:"form"` and `cards:[]`. Other kinds and non-empty
+card arrays require an update. `template` and optional `purpose` are opaque
+labels. `presentation` is `inline`, `panel`, or `dialog`. If `presentation`
+has a different value, show the update screen without fields and do not send
+a form mutation. The title limit is 100 UTF-16 code units. The summary limit
+is 400 UTF-16 code units. A definition contains 1–12 fields in display order.
 
-An optional `default` has shape `{value,provenance}`, with allowed provenance values `saved`, `user`, and `suggested`. It prefills an answer, and a suggested value is shown as a suggestion. The optional `when` has shape `{fieldId,equals}`; it shows a field only while the earlier choice or boolean field equals `equals`, and answers for fields that are not shown are omitted. The optional `group` is an integer from 0 through 2 and is for visual grouping only. `default`, `when` and `group` are part of the adopted read shape and appear in its example; the native client implements prefill, suggestion display and conditional display.
+Each field has shape
+`{id,type,label,help,required,binding:"answer.value@1",constraints,default?,when?,group?,source?,questionId?}`.
+The field ID matches `^[a-z][a-z0-9-]{0,39}$`. The label contains 1–80 UTF-16
+code units. Help text contains 0–240 UTF-16 code units and can be empty. Labels
+and help use plain text. `source` and `questionId` are opaque.
+
+An optional `default` has shape `{value,provenance}`. Allowed provenance
+values are `saved`, `user`, and `suggested`. The client fills the answer with
+the default. It shows a suggested value as a suggestion. The optional `when`
+has shape `{fieldId,equals}`. The client shows the field only while the earlier
+choice or boolean field equals `equals`. It omits answers for hidden fields.
+The optional `group` is an integer from 0 through 2. The client uses it only
+to group fields on the screen.
+
+The adopted read shape and its example include `default`, `when`, and
+`group`. The native client fills defaults, shows suggestions, and shows fields
+when their conditions apply.
 
 | Type | Constraints | Answer |
 | --- | --- | --- |
@@ -276,12 +319,11 @@ An optional `default` has shape `{value,provenance}`, with allowed provenance va
 | `resource` | `{collection:"projects",multiple,maxItems}`; `maxItems` is 1 for one value or 1–5 for multiple values | A UUID, or a unique UUID array when multiple values are allowed. |
 
 Numeric bounds are exact and inclusive. For finite JSON numbers, use their
-closest shortest decimal values (matching Node's `JSON.stringify`, including
-subnormals). The distance from the answer to the nearest grid point anchored at
+closest shortest decimal values. These values match Node's `JSON.stringify`
+output, including subnormals. The distance from the answer to the nearest grid point anchored at
 `min` must be strictly less than `step * 1e-7`; equality is rejected. This is a
 fraction of the step, independent of answer magnitude. The native client also
-rejects typed precision that would be lost during its existing Double wire
-conversion. For example, `0.300000001` fits `min=0.1, step=0.2`; with `min=0,
+rejects an entry if its Double wire conversion loses precision. For example, `0.300000001` fits `min=0.1, step=0.2`; with `min=0,
 step=1`, `0.00000009999999` fits and `0.0000001` does not. These rules do not
 introduce an arbitrary-precision wire format or establish live-service acceptance.
 
@@ -289,7 +331,9 @@ Every field's `binding` is exactly `answer.value@1`. Within the native admission
 
 Proposed: a build that renders a `resource` field with `collection:"projects"` declares `owned.projects@1` among its interaction capabilities; this declaration is not a field binding.
 
-Unanswered fields are omitted, and drafts may omit required fields. Answers are limited to 16 KiB and a mutation body is limited to 32 KiB. Lengths are measured in UTF-16 code units.
+The client omits unanswered fields. Drafts can omit required fields. The
+answer size limit is 16 KiB. The mutation body size limit is 32 KiB. Measure
+text length in UTF-16 code units.
 
 A field-level `422` response has `{version:1,error:{code,message,fieldId}}` for one field problem. It is passed through from the interaction vocabulary and is outside the closed mobile codes in `tests/fixtures/mobile-v1/errors.json`; its synthetic example is `errors.field422` in the forms fixture. The `code` set is open, and clients do not branch on unknown codes. A `400` response is a form-level shape or validation error. For an interaction-route `409` whose code is none of the mapped codes, the client rereads and classifies the result: a replacement means “form changed,” a terminal state means “no longer open,” and a greater `answerRevision` means “newer answers.” The mapped codes `onboarding_required`, `identity_changed`, `request_conflict`, `stale_revision`, `chat_busy`, and `review_unavailable` keep existing behavior. `request_conflict` means the same request ID was already used with a different payload; the original payload must be reused for a retry.
 
@@ -297,7 +341,9 @@ The native client handles interaction-route 422 responses as field problems, wit
 
 For `POST /interactions/receipt`, `404 not_found` means no mutation was recorded for that request ID.
 
-The adopted resources page response is `{version:1,interactionId,definitionDigest,fieldId,collection:"projects",items:[{id,name,photo:null}],nextBefore}`. `nextBefore` is an opaque JSON value or `null` when exhausted. The client echoes it unchanged as the next request's `before` and never inspects or constructs it. The example cursor's internal structure is not contractual.
+The adopted resources page response is `{version:1,interactionId,definitionDigest,fieldId,collection:"projects",items:[{id,name,photo:null}],nextBefore}`. `nextBefore` is an opaque JSON value or `null` when exhausted. The client sends the value unchanged as `before` in the next request. It does
+not examine or make the cursor. The contract does not specify the cursor
+structure shown in the example.
 
 The minimum-build plan uses only these verified facts: `GET /config` returns `minimumBuild`; a build below it receives `426 client_update_required`; and `versionCode` is the base plus the CI run number. The proposed `minimumBuild` is raised to the `versionCode` of the first released build implementing the amended read/resources parsing, and is set only when that release exists. The adopted shapes need no server change. The paired website fixture copy lands with this amendment and the client change follows separately; nothing here is deployed, and no numeric build threshold is proposed. The `minimumBuild` value `40` in `errors.clientUpdateRequired426` is a synthetic example, not a proposed threshold.
 
@@ -313,13 +359,21 @@ Fail closed to an update-required screen with no fields or mutations for any uns
 
 Show submitted answers read-only to their authorized owner and keep them in memory only for that screen. When a 422 `fieldId` names a field in the current definition, show the problem on that field; otherwise show it at form level. Label a resource ID whose name is not present in a loaded page as “Name not loaded.”
 
-Use explicit taps for retries and reads; do not poll. After an uncertain mutation outcome, gate retry on the receipt check. If the owner explicitly retries, reuse the original request ID and exact request body; never create a new ID automatically.
+Require a tap for each retry or read. Do not poll. If the mutation outcome
+is uncertain, require a receipt check before a retry. If the owner selects
+retry, use the original request ID and the exact request body. Do not create
+a new ID automatically.
 
 This forms contract adds no fresh-passkey requirement. Review confirmation keeps its own existing fresh-passkey requirement.
 
 Photo resources are deferred under WH-085. The digest remains opaque and is never computed by the client.
 
-Public references: `mobile-api-v1.md` lines 12, 25, 33–39, 85–104, 150, 153–166; `Models.kt` lines 403–410; `tests/fixtures/mobile-v1/operations.json` interaction response bodies.
+The proposal originally cited these source locations. The line numbers refer
+to the version it cited.
+
+- `mobile-api-v1.md` lines 12, 25, 33–39, 85–104, 150, 153–166
+- `Models.kt` lines 403–410
+- `tests/fixtures/mobile-v1/operations.json` interaction response bodies
 
 ## D. Adopted continuation clarification
 
@@ -334,4 +388,8 @@ The existing continuation shape is `{id,state,resultTurnId,reason}`. A submitted
 | `failed` | Terminal, including stopped/changed/unavailable. No retry-as-new authority. |
 | Future state | Read-only/update-required; no mutation. |
 
-Lost replies preserve submission identity and uncertainty. There is no automatic dispatch, polling or new submission. A fresh authoritative read may establish `not-started` again; stale/failed reads and status-only emissions may not. The server remains authoritative for identity, ownership, replacement, expiry and feature eligibility; these controls are not an authorization bypass.
+If a reply is lost, keep the submission ID and its uncertain status. Do not
+dispatch automatically, poll, or create a new submission. A fresh server
+read can establish `not-started` again. Stale reads, failed reads, and
+status-only updates cannot establish it. The server still controls identity,
+ownership, replacement, expiry, and feature eligibility.
