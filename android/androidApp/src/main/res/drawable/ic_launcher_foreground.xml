@@ -1,14 +1,15 @@
-<!-- Simplified Whumpo mark for the adaptive icon: a soft "W" inside the 66dp safe zone. -->
+<!-- Whumpo rhino mark. The silhouette stays within the adaptive icon safe zone. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M34,42l8,26l12,-22l12,22l8,-26"
-        android:strokeWidth="8"
-        android:strokeColor="#FFF8FAFC"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
+    <group android:translateX="22" android:translateY="22">
+        <path
+            android:fillColor="#FFF4F4EC"
+            android:pathData="M5 51 8 34q4-11 15-15l-1-9q7 0 12 10l4 2q7 4 9 11 8-3 13-9 0 9-5 15l4 2-2 9-12 5-10-3-7-7-8 10H7Z" />
+        <path
+            android:fillColor="#FF70A69D"
+            android:pathData="m47 33 13-9q0 9-5 15Z" />
+    </group>
 </vector>
