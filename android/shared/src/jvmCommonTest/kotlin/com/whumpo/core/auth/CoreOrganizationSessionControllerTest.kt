@@ -19,6 +19,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CoreOrganizationSessionControllerTest {
@@ -40,7 +41,7 @@ class CoreOrganizationSessionControllerTest {
         var switches = 0
         val engine = MockEngine { request ->
             val bearer = request.headers["Authorization"]
-            assertEquals(base, request.headers["Origin"])
+            assertNull(request.headers["Origin"])
             when (request.url.encodedPath) {
                 "/v1/auth/session" -> respond(session(if (bearer == "Bearer $source") "solo" else "team"))
                 "/v1/auth/session/switch" -> {
@@ -155,6 +156,39 @@ class CoreOrganizationSessionControllerTest {
             val first = controller.rename("New name", 2, "rename-1")
             assertEquals(first, controller.rename("New name", 2, "rename-1"))
             assertFalse(controller.entitlements().siteBuildAvailable)
+        }
+    }
+
+    @Test
+    fun rotationMustPreserveAbsoluteExpiry() = runTest {
+        var verifies = 0
+        val engine = MockEngine { request ->
+            assertNull(request.headers["Origin"])
+            when (request.url.encodedPath) {
+                "/v1/auth/session" -> {
+                    verifies++
+                    respond(session("solo"))
+                }
+                "/v1/auth/session/rotate" -> respond("""{"token":"$target","expiresAt":9001}""")
+                else -> error("Unexpected path")
+            }
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val controller = CoreOrganizationSessionController(api) { 1 }
+            controller.establish(source)
+            assertFailsWith<CoreProtocolException> { controller.rotate() }
+            assertEquals(1, verifies)
+            assertIs<CoreOrganizationSessionController.State.SignedOut>(controller.state.value)
+        }
+    }
+
+    @Test
+    fun rejectsOversizedSessionResponse() = runTest {
+        val engine = MockEngine { respond(session("solo") + " ".repeat(65_536)) }
+        CoreApiClient(engine, origin).use { api ->
+            val controller = CoreOrganizationSessionController(api) { 1 }
+            assertFailsWith<CoreProtocolException> { controller.establish(source) }
+            assertIs<CoreOrganizationSessionController.State.SignedOut>(controller.state.value)
         }
     }
 

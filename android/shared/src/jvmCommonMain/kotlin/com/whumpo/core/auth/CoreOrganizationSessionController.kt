@@ -110,7 +110,7 @@ class CoreOrganizationSessionController(
         try {
             val replacement = exchange(current.token)
             if (!coreBearer.matches(replacement.token) || replacement.token == current.token ||
-                (targetOrgId != null && replacement.expiresAt != source.expiresAt)) throw CoreProtocolException()
+                replacement.expiresAt != source.expiresAt) throw CoreProtocolException()
             return verifyAndActivate(transition, replacement.token, source.userId,
                 targetOrgId ?: source.orgId, replacement.expiresAt)
         } finally {

@@ -4,10 +4,12 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
-import io.ktor.client.request.request
+import io.ktor.client.request.prepareRequest
 import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpMethod
+import io.ktor.utils.io.readBuffer
+import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
 
 /** Only exact configured HTTPS origins or explicit debug loopback origins are accepted. */
@@ -69,10 +71,9 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         key: String? = null,
     ): String {
         require(coreBearer.matches(token)) { "Invalid core bearer format" }
-        val response = http.request(origin.value + path) {
+        return http.prepareRequest(origin.value + path) {
             method = verb
             header("Authorization", "Bearer $token")
-            header("Origin", origin.value)
             if (cursor != null) parameter("cursor", cursor)
             if (limit != null) parameter("limit", limit)
             if (version != null) header("If-Match", "\"$version\"")
@@ -81,9 +82,12 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
                 header("Content-Type", "application/json")
                 setBody(body)
             }
+        }.execute { response ->
+            if (response.status.value != 200) throw CoreHttpException(response.status.value)
+            val bytes = response.bodyAsChannel().readBuffer(65_537L).readByteArray()
+            if (bytes.size > 65_536) throw CoreProtocolException()
+            bytes.decodeToString(throwOnInvalidSequence = true)
         }
-        if (response.status.value != 200) throw CoreHttpException(response.status.value)
-        return response.bodyAsText()
     }
 
     override fun close() {
