@@ -1,6 +1,7 @@
 package com.whumpo.core.api
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 enum class CoreRole { owner, admin, operator, viewer }
@@ -10,6 +11,12 @@ data class CoreSession(val sessionId: String, val orgId: String, val userId: Str
 
 @Serializable
 internal class CoreSessionToken(val token: String, val expiresAt: Long)
+
+@Serializable
+internal data class CoreAuthenticationOptions(val challengeId: String, val options: JsonObject)
+
+@Serializable
+internal data class CoreAuthenticationVerify(val challengeId: String, val response: JsonObject)
 
 @Serializable
 internal data class CoreSwitch(val orgId: String)

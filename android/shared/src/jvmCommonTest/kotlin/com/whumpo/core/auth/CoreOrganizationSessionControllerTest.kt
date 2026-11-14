@@ -193,6 +193,92 @@ class CoreOrganizationSessionControllerTest {
     }
 
     @Test
+    fun credentialManagerFlowUsesCoreChallengeAndVerifiedSession() = runTest {
+        val paths = mutableListOf<String>()
+        val assertion = """{"id":"synthetic","response":{"userHandle":"fixture"}}"""
+        val engine = MockEngine { request ->
+            val path = request.url.encodedPath
+            paths += path
+            when (path) {
+                "/v1/auth/passkeys/authentication/options" -> {
+                    assertNull(request.headers["Authorization"])
+                    assertEquals("{}", request.body.toByteArray().decodeToString())
+                    respond("""{"challengeId":"$source","options":{"challenge":"fixture","rpId":"example.test"}}""")
+                }
+                "/v1/auth/passkeys/authentication/verify" -> {
+                    assertNull(request.headers["Authorization"])
+                    assertEquals("""{"challengeId":"$source","response":$assertion}""", request.body.toByteArray().decodeToString())
+                    respond(replacement)
+                }
+                "/v1/auth/session" -> {
+                    assertEquals("Bearer $target", request.headers["Authorization"])
+                    respond(session("team"))
+                }
+                else -> error("Unexpected path")
+            }
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val controller = CoreOrganizationSessionController(api) { 1 }
+            val passkeys = object : PasskeyAuthenticator {
+                override suspend fun getAssertion(requestJson: String): PasskeyResult {
+                    assertEquals("""{"challenge":"fixture","rpId":"example.test"}""", requestJson)
+                    return PasskeyResult.Assertion(assertion)
+                }
+            }
+            assertEquals(CoreOrganizationSessionController.SignInResult.SignedIn, controller.signIn(passkeys))
+            assertEquals(3, paths.size)
+            assertEquals("team", assertIs<CoreOrganizationSessionController.State.Active>(controller.state.value).session.orgId)
+        }
+    }
+
+    @Test
+    fun lateOrganizationSuccessCannotReachTheNewScreen() = runTest {
+        val requested = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val engine = MockEngine { request ->
+            val old = request.headers["Authorization"] == "Bearer $source"
+            when (request.url.encodedPath) {
+                "/v1/auth/session" -> respond(session(if (old) "solo" else "team"))
+                "/v1/auth/session/switch" -> respond(replacement)
+                "/v1/organization" -> if (old) {
+                    requested.complete(Unit)
+                    release.await()
+                    respond("""{"orgId":"solo","displayName":"Previous organization","version":1}""")
+                } else respond("""{"orgId":"team","displayName":"Current organization","version":1}""")
+                else -> error("Unexpected path")
+            }
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val controller = CoreOrganizationSessionController(api) { 1 }
+            val previous = controller.establish(source)
+            val pending = async { assertFailsWith<CancellationException> { controller.profile() } }
+            requested.await()
+            val active = controller.switchOrganization("team")
+            release.complete(Unit)
+            pending.await()
+            assertFalse(controller.commitIfCurrent(previous.epoch) { error("Stale page") })
+            assertEquals("Current organization", controller.profile().displayName)
+            assertTrue(controller.commitIfCurrent(active.epoch) { })
+        }
+    }
+
+    @Test
+    fun unavailablePasskeysDoNotSendVerify() = runTest {
+        val engine = MockEngine { request ->
+            assertEquals("/v1/auth/passkeys/authentication/options", request.url.encodedPath)
+            respond("""{"challengeId":"$source","options":{"challenge":"fixture"}}""")
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val controller = CoreOrganizationSessionController(api) { 1 }
+            val passkeys = object : PasskeyAuthenticator {
+                override suspend fun getAssertion(requestJson: String) = PasskeyResult.Unavailable
+            }
+            assertEquals(CoreOrganizationSessionController.SignInResult.Unavailable, controller.signIn(passkeys))
+            assertIs<CoreOrganizationSessionController.State.SignedOut>(controller.state.value)
+        }
+    }
+
+    @Test
     fun scopesUseStableIdentityOrganizationAndEnvironment() {
         val otherBase = "https://test.example.test"
         val otherOrigin = CoreOrigin.allowlisted(otherBase, setOf(otherBase))

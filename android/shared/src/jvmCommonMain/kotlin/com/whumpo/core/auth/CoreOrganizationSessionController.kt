@@ -17,6 +17,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * In-memory integration boundary. The caller owns secure token acquisition and the controller lifetime.
@@ -45,6 +48,36 @@ class CoreOrganizationSessionController(
         val transition = synchronized(lock) { beginTransition() }
         return verifyAndActivate(transition, bearer)
     }
+
+    /** Returns the platform outcome without exposing the assertion or bearer to presentation code. */
+    suspend fun signIn(passkeys: PasskeyAuthenticator): SignInResult {
+        val transition = synchronized(lock) { beginTransition() }
+        try {
+            val challenge = api.authenticationOptions()
+            if (!coreBearer.matches(challenge.challengeId) ||
+                (challenge.options["challenge"] as? JsonPrimitive)?.isString != true) throw CoreProtocolException()
+            return when (val result = passkeys.getAssertion(challenge.options.toString())) {
+                is PasskeyResult.Assertion -> {
+                    val assertion = Json.parseToJsonElement(result.json) as? JsonObject ?: throw CoreProtocolException()
+                    currentCoroutineContext().ensureActive()
+                    synchronized(lock) {
+                        if (epoch != transition) throw CancellationException("Core session changed")
+                    }
+                    val replacement = api.authenticate(challenge.challengeId, assertion)
+                    if (!coreBearer.matches(replacement.token)) throw CoreProtocolException()
+                    verifyAndActivate(transition, replacement.token, expiresAt = replacement.expiresAt)
+                    SignInResult.SignedIn
+                }
+                PasskeyResult.Cancelled -> SignInResult.Cancelled
+                PasskeyResult.NoCredential -> SignInResult.NoCredential
+                PasskeyResult.Unavailable -> SignInResult.Unavailable
+            }
+        } finally {
+            abortTransition(transition)
+        }
+    }
+
+    enum class SignInResult { SignedIn, Cancelled, NoCredential, Unavailable }
 
     fun clear() {
         synchronized(lock) { clearLocked() }

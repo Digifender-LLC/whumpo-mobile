@@ -11,6 +11,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.utils.io.readBuffer
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 /** Only exact configured HTTPS origins or explicit debug loopback origins are accepted. */
 class CoreOrigin private constructor(val value: String) {
@@ -31,6 +32,15 @@ class CoreOrigin private constructor(val value: String) {
 class CoreApiClient internal constructor(private val engine: HttpClientEngine, val origin: CoreOrigin) : AutoCloseable {
     private val http = HttpClient(engine) { followRedirects = false }
     private val json = Json { ignoreUnknownKeys = true }
+
+    internal suspend fun authenticationOptions(): CoreAuthenticationOptions =
+        json.decodeFromString(call(null, "/v1/auth/passkeys/authentication/options", HttpMethod.Post, "{}"))
+
+    internal suspend fun authenticate(challengeId: String, response: JsonObject): CoreSessionToken {
+        require(coreBearer.matches(challengeId))
+        return json.decodeFromString(call(null, "/v1/auth/passkeys/authentication/verify", HttpMethod.Post,
+            json.encodeToString(CoreAuthenticationVerify(challengeId, response))))
+    }
 
     internal suspend fun session(token: String): CoreSession =
         json.decodeFromString(call(token, "/v1/auth/session"))
@@ -61,7 +71,7 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         json.decodeFromString(call(token, "/v1/organization/entitlements"))
 
     private suspend fun call(
-        token: String,
+        token: String?,
         path: String,
         verb: HttpMethod = HttpMethod.Get,
         body: String? = null,
@@ -70,10 +80,10 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         version: Long? = null,
         key: String? = null,
     ): String {
-        require(coreBearer.matches(token)) { "Invalid core bearer format" }
+        require(token == null || coreBearer.matches(token)) { "Invalid core bearer format" }
         return http.prepareRequest(origin.value + path) {
             method = verb
-            header("Authorization", "Bearer $token")
+            if (token != null) header("Authorization", "Bearer $token")
             if (cursor != null) parameter("cursor", cursor)
             if (limit != null) parameter("limit", limit)
             if (version != null) header("If-Match", "\"$version\"")
