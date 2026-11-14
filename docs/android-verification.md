@@ -10,17 +10,17 @@
 | `Instrumented tests (API 28)` | `.github/workflows/android.yml` / `instrumented` matrix API 28 | Client instrumented suites on disposable x86_64 Google APIs emulator |
 | `Instrumented tests (API 36)` | `.github/workflows/android.yml` / `instrumented` matrix API 36 | Same client-only suites on disposable x86_64 Google APIs emulator |
 
-These are the exact source-defined names. A workflow file does not prove a run
-occurred or that repository protections require its checks.
+The table gives the exact check names from the workflow files. Examine GitHub
+separately for check results and branch protection.
 
-`Mobile policy` checks tracked paths and Git index modes against known private
-source/configuration, generated-output and signing-file boundaries. It does not
-detect backend code copied under an otherwise allowed path; Gitleaks and
-independent source review remain required.
+`Mobile policy` examines tracked paths and Git index modes for known private
+source, private configuration, generated output, and signing files. The check
+does not detect backend code in a permitted path. The policy still requires
+Gitleaks and independent source review.
 
 ## Credential-free local commands
 
-From the repository root:
+Enter these commands from the repository root.
 
 ```sh
 node tests/policy.mjs
@@ -38,8 +38,8 @@ bash -n \
   android/scripts/test-ci-install-sdk.sh
 ```
 
-With a credential-free environment, a configured JDK 21 and Android SDK, run
-Gradle serially from `android/`:
+Use an environment without credentials. Configure JDK 21 and the Android SDK.
+From `android/`, enter each Gradle command separately.
 
 ```sh
 ./gradlew :shared:jvmTest :shared:compileKotlinJvm
@@ -52,8 +52,8 @@ variants, runs shared Android host tests (including committed Roborazzi
 baselines), and requests both app unit-test tasks. If an app unit task reports
 `NO-SOURCE`, record that result without counting it as test coverage.
 
-Instrumentation needs an already available disposable emulator; the script
-accepts only API 28 or 36 and one numeric `emulator-<digits>` serial:
+Use an available disposable emulator for instrumentation. The script accepts
+only API 28 or 36 and one numeric `emulator-<digits>` serial.
 
 ```sh
 bash android/scripts/ci-instrumented.sh 28
@@ -62,10 +62,10 @@ bash android/scripts/ci-instrumented.sh 36
 
 The script preserves `ANDROID_SERIAL`, which pinned AGP consumes to select the
 connected target, and checks that exact emulator's actual API with a bounded
-`getprop ro.build.version.sdk` call before Gradle. A missing/unresponsive target,
-API mismatch, malformed serial or comma-separated device list fails before tests.
-This is a selected-device preflight under job ownership, not atomic device
-attestation across the entire run.
+`getprop ro.build.version.sdk` call before Gradle. The script stops before tests if the target is missing or unresponsive. It also
+stops for an API mismatch, a malformed serial, or a comma-separated device list.
+The job examines the selected device before the tests. Continuous device
+attestation is outside the scope of this check.
 
 Each run invokes only `connectedLocalDebugAndroidTest` and
 `connectedDeployedDebugAndroidTest`, with `WorkerJourneyTest` excluded. The
@@ -95,19 +95,18 @@ the concrete reporting class, and every parameterized description (including its
 parameter suffix) must be listed separately. Never strip parameter suffixes or
 accept a partial parameter set. Synthetic regressions cover these identities.
 
-API36 requires actual execution of `composerIsNotCoveredByTheKeyboard` in both
-flavors; a missing keyboard fails. API28 alone permits that case to skip for the
-exact keyboard-absence assumption. This is conditional suite completion **without
-keyboard coverage**, not equivalent keyboard acceptance. The existing deployed
-loopback-credential assumption and named missing-local-backup-transport assumption
-are also explicitly allowlisted per API/flavor in the inventory. All other skips
-are rejected; accepted skips print their identities and missing-coverage warning.
+On API 36, both flavors must complete `composerIsNotCoveredByTheKeyboard`. A
+missing keyboard fails the test. Only API 28 permits that test to skip under the
+exact keyboard-absence assumption. The suite can then pass without keyboard
+coverage. The inventory also permits the deployed loopback-credential assumption
+and the named missing-local-backup-transport assumption for specified APIs
+and flavors. The validator rejects all other skips. It prints the identity of
+each permitted skip with a warning about missing coverage.
 
 The keyboard assertion samples three stable **rendered frames**, identified by
 vsync timestamps in OnDraw, with no active IME animation. Callback-generation
-changes reset the evidence, including animations between polls. Callback
-availability is logged, not required: distinct stable frames provide evidence on
-APIs without callbacks. A stable covered composer still fails the original 1px
+changes reset the evidence, including animations between polls. The test records callback availability. On APIs without callbacks, distinct
+stable frames provide evidence. A stable covered composer still fails the original 1px
 geometry assertion. Synthetic Java regressions exercise repeated-frame rejection,
 movement, animation and absence resets, and stable-but-covered geometry.
 
@@ -120,10 +119,9 @@ AuthGate layout. Thread facts are captured in callbacks and asserted on the test
 thread; callback cleanup and activity closure run in `finally`. This retains the
 same test identity, inventory and skip policy. Compilation alone does not establish
 that the rule change fixes the hosted runtime failure.
-Do not run
-the private `android/scripts/test-worker-journey.sh` from this public repository.
-It requires private website Worker source and dependencies; public CI does not
-replace that separate integration.
+Keep `android/scripts/test-worker-journey.sh` in the private test environment.
+It requires private website Worker source and dependencies. The integration
+requires the private test separately from public CI.
 
 Client CI runs on `ubuntu-24.04` for every pull request and each push to `main`, with
 read-only contents permissions, no repository secrets, no private source, no
@@ -133,13 +131,13 @@ it does not download emulator images. Each instrumentation job provisions only
 its matrix emulator. CI does not use shared Gradle caches or a screenshot
 recording input.
 
-The separate trusted-main merge controller is not client CI and never checks
-out a PR revision. Its synthetic boundary tests run in `Mobile policy`; see the
-[merge policy](agent-merge-policy.md) for event, permission and bootstrap limits.
+The merge controller operates separately on trusted main. It never checks out
+a PR revision. `Mobile policy` does synthetic tests of its boundaries. See
+the [merge policy](agent-merge-policy.md) for event, permission, and bootstrap limits.
 
-Report artifacts are retained for seven days and limited to synthetic JUnit/build/
-Roborazzi reports and the allowlisted instrumentation files: ANR summaries,
-device state, Gradle exit status and tree diagnostics. Raw logcat, workspaces,
+CI keeps report artifacts for seven days. It includes synthetic JUnit, build,
+and Roborazzi reports. The permitted instrumentation files are ANR summaries,
+device state, Gradle exit status, and tree diagnostics. Raw logcat, workspaces,
 `.gradle`, `.android`, signing files and private Worker outputs are not uploaded.
 Both Android artifact uploads explicitly exclude `android/**/logcat*`, including
 AGP's per-test files nested under `androidTest-results`. Policy regressions check
@@ -185,12 +183,12 @@ downloaded artifact's run/revision association, exact three-file inventory,
 manifest hashes and matching APK signatures before use. Hosted ZIP inspection is
 required evidence in addition to synthetic exporter and source-policy tests.
 
-Local or CI test results do not establish live Worker/API availability, provider
-behavior, official signing, Play publication, physical-device acceptance,
-customer acceptance or a website ownership cutover.
+Live Worker or API availability, provider behavior, official signing, and Play
+publication require separate evidence. Physical-device acceptance, customer
+acceptance, and website ownership cutover also require separate evidence.
 
 ## Dependency updates
 
 `.github/dependabot.yml` declares weekly grouped version-update checks for Gradle
-in `/android` and GitHub Actions in `/`. It does not establish that the dependency
-graph, security alerts or security updates are enabled.
+in `/android` and GitHub Actions in `/`. Examine GitHub separately for the
+dependency graph, security alerts, and security updates.

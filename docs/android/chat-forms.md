@@ -1,14 +1,13 @@
 # Native chat forms
 
-Status: implemented against the adopted contract in
-[mobile API v1](../mobile-api-v1.md) and `tests/fixtures/mobile-v1/`, and wired
-into the chat. The model, decoder, send recovery, resources paging, controller
-and Compose screen live in
-`android/shared/src/commonMain/kotlin/com/whumpo/android/ui/chat/forms/`; the
-synthetic catalog in `tests/fixtures/proposed/forms.json` drives the tests.
-Verification uses synthetic JVM, host UI, screenshot and API 28/36 emulator
-checks. These checks do not establish live Worker compatibility, physical-device/
-TalkBack, signed-release or customer acceptance.
+Chat uses native forms under the adopted [mobile API v1](../mobile-api-v1.md)
+contract and its fixtures in `tests/fixtures/mobile-v1/`. The model, decoder,
+send recovery, resource paging, controller, and Compose screen are in
+`android/shared/src/commonMain/kotlin/com/whumpo/android/ui/chat/forms/`. The
+tests use synthetic examples in `tests/fixtures/proposed/forms.json`. Checks
+cover JVM, host UI, screenshots, and API 28 and 36 emulators. Live Worker
+compatibility, physical-device and TalkBack use, signed releases, and customer
+acceptance require separate evidence.
 
 ## Goal
 
@@ -57,24 +56,25 @@ calendar and clock labels stay readable. Both require an explicit confirmation.
 
 ## Accessibility and input
 
-- Every field has a persistent visible label; placeholders are examples only.
-- Required fields say "Required" in text, not by color or an asterisk alone.
-- Errors appear under the field, are tied to it as the field's error semantics
-  and are announced politely. After a failed submit, focus moves to the first
+- Each field has a label that stays visible. Placeholders give examples only.
+- The app shows "Required" text for each required field.
+- The app shows an error under its field and links it to that field. The
+  accessibility announcement uses the polite setting. After a failed submit, focus moves to the first
   invalid field and a short summary at the top lists the problems.
-- IME actions move to the next field; the last field's action closes the
-  keyboard. The submit bar stays above the keyboard (`imePadding`), and the
+- The keyboard action moves to the next field. The action on the last field
+  closes the keyboard. The submit bar stays above the keyboard (`imePadding`), and the
   focused field is scrolled into view.
-- Large text (200%) reflows: labels and errors wrap, no truncation, the submit
-  bar can scroll with content instead of covering fields.
+- At 200% text size, labels and errors wrap without truncation. The submit
+  bar can scroll with the content to keep fields visible.
 - Targets are at least 48dp. Light and dark use theme roles only.
 
 ## Validation
 
-Client validation mirrors the definition's own constraints for fast feedback
-and runs on blur and on submit, never on every keystroke for untouched fields.
-The server remains authoritative: its field errors are shown on the named
-fields; an unknown field id shows the form-level error.
+The client applies the limits in the form definition. It does this when a
+field loses focus and when the user submits the form. It does not examine
+every keystroke in untouched fields. The server remains authoritative. The app
+shows each server error at the named field. If the field ID is unknown, the
+app shows the error at form level.
 
 Number entry retains the finite JSON number format. Range bounds are exact and
 inclusive. The canonical decimal distance to the nearest grid point must be
@@ -91,43 +91,47 @@ required visible answers fail closed.
 Uses the existing `interactions/mutate`, `receipt`, `continue`, `stop` and
 `reconcile` aliases.
 
-- One `requestId` per submit attempt is created once and reused for every retry
-  of that attempt, like chat sends.
-- **Sending** disables the button and shows progress.
-- **Accepted** (`receipt` with the new `answerRevision`): the card records "Sent"
-  and the form keeps the receipt/read-only answers visible until Close or Back.
-  This keeps explicit next-step choices reachable instead of hiding a required
-  Continue, Stop or Check action behind an automatic dismissal.
-- **Lost reply** (outcome unknown): the form explains that arrival is unconfirmed
-  and offers Check again, which reads `interactions/receipt` for the same
-  `requestId` only on a tap. It never re-sends on its own. If the receipt
-  confirms the mutation was recorded, it is treated as accepted; if it shows nothing was committed, `Send again` reuses the same ID
-  and answers; otherwise `Check again` stays available.
-- **Stale definition or answer revision:** re-read the interaction, keep typed
-  values for fields whose id and type are unchanged, mark the rest as changed
-  and ask the owner to review before sending. Implemented: a newer saved draft
-  is held in a review card ("Use newer answers" or "Keep my answers"), answers
-  for removed or retyped fields are taken out and listed, and Send and Save
-  draft wait for the choice. Choosing sends nothing; unedited answers simply
-  follow the newer read.
-  A late reopen read cannot replace answers already confirmed at a newer
-  revision; a submit follow-up arriving while the pane loads is retained.
-- **Continuations:** follow the [published lifecycle](../mobile-api-v1.md#native-form-continuation-lifecycle). Only `not-started` exposes Continue/confirmed Stop;
-  `pending` offers an explicit status check, `unknown` reconciles the same submission,
-  and succeeded/failed are terminal. Unsupported states expose no mutation.
-  A successful result can refresh Chat; prepared changes still need ordinary review.
-- **Save draft** uses `save-draft` with the same guarantees. **Cancel form** is
-  explicit, confirmed, and sends no answers.
-- **Offline or proof required:** answers stay only in account memory; nothing is
-  sent until the owner acts again. Sign-out/account change clears all form answers,
-  retained requests, continuation state and card metadata. No form answers enter
-  SavedInstanceState, including Material picker/input state.
+- The app creates one `requestId` per submit attempt. It uses the same ID for
+  each retry of that attempt, as it does for chat messages.
+- While a send is in progress, the app disables the button and shows progress.
+- If `receipt` returns the new `answerRevision`, the card shows "Sent".
+  The app keeps the receipt and read-only answers visible until Close or Back.
+  This keeps Continue, Stop, or Check available when the form requires it.
+- If the reply is lost, the app shows the uncertain status and offers
+  Check again. When the owner taps it, the app reads `interactions/receipt`
+  for the same `requestId`. The app does not send again automatically.
+  If the receipt shows a recorded mutation, the app accepts the result.
+  If the receipt shows no commit, `Send again` uses the same ID and answers.
+  Otherwise, `Check again` stays available.
+- If the definition or answer revision is stale, the app reads the interaction
+  again. It keeps typed values only for fields with the same ID and type. It
+  lists fields that the new definition removes or changes to a different type.
+  For a newer saved draft, the review card offers "Use newer answers" and
+  "Keep my answers". Send and Save draft stay disabled until the owner selects
+  an option. The option sends nothing. Unedited answers use the newer read.
+  A late reopen read cannot replace answers that the app already confirmed at
+  a newer revision. The app keeps a submit follow-up that arrives during pane
+  loading.
+- The [published lifecycle](../mobile-api-v1.md#native-form-continuation-lifecycle)
+  specifies the continuation controls. Only `not-started` offers Continue or
+  confirmed Stop. In `pending`, the owner can request a status check. In
+  `unknown`, the app reconciles the same submission. The succeeded and
+  failed states are terminal. Unsupported states permit no mutations.
+  A successful result can refresh Chat. Prepared changes still require the
+  ordinary review.
+- Save draft uses `save-draft` with the same guarantees. Cancel form requires
+  explicit confirmation and sends no answers.
+- If the app is offline or proof is necessary, answers stay in account memory.
+  The app sends nothing until the owner acts again. Sign-out or account change
+  clears answers, retained requests, continuation state, and card metadata.
+  SavedInstanceState contains no answers, including in Material picker or
+  input state.
 
 ## Update required
 
-A `426 client_update_required` read or a definition outside the admitted subset
-shows the existing update-required pattern inside the card and form: "Update
-Whumpo to answer this form." with the update action. No field is rendered.
+If the read returns `426 client_update_required` or an unsupported definition,
+the card and form show "Update Whumpo to answer this form." with the update
+action. The app shows no fields.
 
 ## Tests and evidence
 
