@@ -14,6 +14,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +85,7 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
     val actions = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
     var page by remember(active?.epoch) { mutableStateOf<OrganizationPreview?>(null) }
+    var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var cursor by remember(active?.epoch) { mutableStateOf<String?>(null) }
     LaunchedEffect(active?.epoch, cursor) {
         if (active != null) {
@@ -97,7 +99,16 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
             }
         }
     }
+    if (active != null && showWork) {
+        key(active.epoch) {
+            CoreWorkPreview(controller, active.epoch, page?.profile?.displayName ?: active.session.orgId) {
+                showWork = false
+            }
+        }
+        return
+    }
     CorePreviewContent(state, page, message,
+        openWork = { showWork = true },
         signIn = {
             message = null
             actions.launch {
@@ -137,6 +148,7 @@ private fun CorePreviewContent(
     state: CoreOrganizationSessionController.State,
     page: OrganizationPreview?,
     message: String?,
+    openWork: () -> Unit,
     signIn: () -> Unit,
     choose: (String) -> Unit,
     next: (String?) -> Unit,
@@ -164,6 +176,7 @@ private fun CorePreviewContent(
                     page.memberships.nextCursor?.let { Button(onClick = { next(it) }) { Text("More organizations") } }
                     Button(onClick = { next(null) }) { Text("First page") }
                 }
+                Button(onClick = openWork) { Text("Open Work") }
                 Button(onClick = signOut) { Text("Sign out locally") }
             }
         }

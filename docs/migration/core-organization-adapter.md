@@ -4,7 +4,7 @@ The shared Android and JVM module includes an opt-in transport and session contr
 
 Contract provenance is the `backend.openapi.json` snapshot at SHA-256 `f6a092fd4f301dbeee297920fadae63815a9fef37a5627e4711f18a73c45340c`. The subset covers `/v1/auth/session`, `/v1/auth/session/rotate`, `/v1/auth/organizations`, `/v1/auth/session/switch`, `/v1/organization`, and `/v1/organization/entitlements`. The client declares `siteBuildAvailable` as a required entitlement field alongside `teamAdmissionAvailable`.
 
-A platform integration creates a `CoreOrigin` from its explicit HTTPS allowlist and acquires a bearer through its secure sign-in flow. Debug integrations can opt in to an explicit IPv4 loopback origin. The adapter verifies the bearer before exposing an active session and validates the replacement identity, organization, and expiration on switch. A switch invalidates the old epoch before the request and installs the replacement token and verified session together. An ambiguous switch or rejected replacement requires fresh authentication. Switches and rotations preserve the source session’s absolute expiry. Native bearer requests omit the browser Origin header. Native passkey origin verification remains part of sign-in. The HTTP client disables redirects and connection retries and reads at most 64 KiB of JSON plus one byte to detect oversized responses.
+A platform integration creates a `CoreOrigin` from its explicit HTTPS allowlist and acquires a bearer through its secure sign-in flow. Debug integrations can opt in to an explicit IPv4 loopback origin. The adapter verifies the bearer before exposing an active session and validates the replacement identity, organization, and expiration on switch. A switch invalidates the old epoch before the request and installs the replacement token and verified session together. An ambiguous switch or rejected replacement requires fresh authentication. Switches and rotations preserve the source session’s absolute expiry. Native bearer requests omit the browser Origin header. Native passkey origin verification remains part of sign-in. The HTTP client disables redirects and connection retries and reads bounded JSON plus one byte to detect oversized responses. The default bound is 64 KiB. Work list requests allow 64 KiB per requested task, capped at ten tasks.
 
 Keep organization data and jobs under the active state's `CoreAccountScope` and epoch. The scope hashes the configured environment origin, verified user ID, and organization ID into a separate storage namespace. Clear displayed organization data and cancel its jobs when the epoch changes. Before publishing any deferred result, use `commitIfCurrent` with the epoch captured when starting the operation. That callback must be short, synchronous, and limited to local state commits.
 
@@ -28,3 +28,22 @@ adb shell run-as com.whumpo.android.local am start -n com.whumpo.android.local/c
 The local Worker must be running at port 5173. Native sign-in requires a pre-enrolled test passkey, the relying party's Digital Asset Links association for the exact test app and certificate, and server verification of the signed app origin. The loopback API forwarding alone supplies no relying-party association. A failed platform or server check leaves the signed-out preview visible with a sign-in error. Registration, association provisioning, and real native passkey verification are outside this preview.
 
 Local verification built the local and deployed debug APKs and passed 11 focused JVM tests. The local APK manifest marks the preview non-exported. The deployed debug APK omits it. No device was attached, so launch and passkey interaction on Android remain unverified.
+
+## Work and website receipts
+
+After passkey sign-in, choose **Open Work** in the local preview. Open a task
+to see its current detail, then choose **View website receipts** for the task's
+project. Work and receipts use paginated reads. The receipts screen shows
+published and withdrawn versions, including the page count when the receipt
+contains a multipage manifest. A project without a website target has its own
+empty state. These screens leave the legacy app and existing release gate in
+place.
+
+The Work subset uses `GET /v1/work/tasks`, `GET /v1/tasks/{taskId}`,
+`GET /v1/site-targets?projectId=…`, and `GET /v1/site-targets/{id}/history`
+from the public contract snapshot with SHA-256
+`01f90c2a89ce2709909ee5a548664f54446a1632de579b1aa03df33203677a6d`.
+The adapter binds task detail to the selected task and project, and website
+receipts to the selected project target and verified organization. The Work
+screen drops open detail, cursors, errors, and in-flight results when the
+organization session changes.

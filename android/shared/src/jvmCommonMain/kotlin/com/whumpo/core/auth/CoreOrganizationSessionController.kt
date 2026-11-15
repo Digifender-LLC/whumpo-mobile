@@ -1,6 +1,7 @@
 package com.whumpo.core.auth
 
 import com.whumpo.core.account.CoreAccountScope
+import com.whumpo.core.api.CORE_MAX_VERSION
 import com.whumpo.core.api.CoreApiClient
 import com.whumpo.core.api.CoreHttpException
 import com.whumpo.core.api.CoreMembershipPage
@@ -9,7 +10,13 @@ import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreProtocolException
 import com.whumpo.core.api.CoreSession
 import com.whumpo.core.api.CoreSessionToken
+import com.whumpo.core.api.CoreWebsiteHistoryItem
+import com.whumpo.core.api.CoreWebsiteHistoryPage
+import com.whumpo.core.api.CoreWebsiteOperation
+import com.whumpo.core.api.CoreWorkPage
+import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.coreBearer
+import com.whumpo.core.api.coreDigest
 import com.whumpo.core.api.coreIdentifier
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -105,6 +112,76 @@ class CoreOrganizationSessionController(
         api.entitlements(it.token).also { coverage -> verifyOrganization(coverage.orgId, it) }
     }
 
+    suspend fun work(cursor: String? = null, limit: Int = 10): CoreWorkPage = request { current ->
+        api.work(current.token, cursor, limit).also { page ->
+            if (page.items.size > limit || page.items.map { it.id }.distinct().size != page.items.size ||
+                page.nextCursor?.let { it == cursor || !coreDigest.matches(it) || page.items.isEmpty() } == true
+            ) throw CoreProtocolException()
+            page.items.forEach(::verifyTask)
+        }
+    }
+
+    suspend fun task(taskId: String, projectId: String): CoreWorkTask = request { current ->
+        api.task(current.token, taskId).also { task ->
+            verifyTask(task)
+            if (task.id != taskId || task.projectId != projectId) throw CoreProtocolException()
+        }
+    }
+
+    /** Null means the project has no reserved website target. */
+    suspend fun websiteReceipts(projectId: String, before: String? = null, limit: Int = 10): CoreWebsiteHistoryPage? =
+        request { current ->
+            val target = try {
+                api.websiteTarget(current.token, projectId)
+            } catch (error: CoreHttpException) {
+                if (error.status == 404 && before == null) return@request null
+                throw error
+            }
+            verifyOrganization(target.orgId, current)
+            if (target.projectId != projectId || !coreIdentifier.matches(target.id) ||
+                target.version !in 1..CORE_MAX_VERSION) throw CoreProtocolException()
+            verifyCurrent(current)
+            api.websiteHistory(current.token, target.id, before, limit).also { page ->
+                val versions = page.items.map { it.receipt.targetVersion }
+                if (page.items.size > limit ||
+                    versions.zipWithNext().any { (first, second) -> first <= second } ||
+                    (before != null && versions.any { it >= before.toLong() }) ||
+                    (page.nextCursor != null && page.nextCursor != versions.lastOrNull()?.toString())
+                ) throw CoreProtocolException()
+                page.items.forEach { verifyReceipt(it, target.id, current) }
+            }
+        }
+
+    private fun verifyReceipt(item: CoreWebsiteHistoryItem, targetId: String, current: Credential) {
+        val receipt = item.receipt
+        verifyOrganization(receipt.orgId, current)
+        if (receipt.targetId != targetId || !coreIdentifier.matches(receipt.effectId) ||
+            !coreDigest.matches(receipt.artifactDigest) || receipt.targetVersion !in 2..CORE_MAX_VERSION ||
+            receipt.confirmedAt.isBlank()) throw CoreProtocolException()
+        when (item.operation) {
+            CoreWebsiteOperation.Publish -> {
+                if (item.buildId?.let(coreIdentifier::matches) != true ||
+                    receipt.artifactBytes?.let { it in 1..32_768 } != true || receipt.withdrawnEffectId != null ||
+                    (receipt.pageManifestDigest == null) != (receipt.pageCount == null) ||
+                    (receipt.pageManifestDigest != null &&
+                        (!coreDigest.matches(receipt.pageManifestDigest) || receipt.pageCount?.let { it in 2..4 } != true))
+                ) throw CoreProtocolException()
+            }
+            CoreWebsiteOperation.Withdraw -> {
+                if (item.buildId != null || receipt.targetVersion < 3 ||
+                    receipt.withdrawnEffectId?.let(coreIdentifier::matches) != true ||
+                    receipt.artifactBytes != null || receipt.pageManifestDigest != null ||
+                    receipt.pageCount != null) throw CoreProtocolException()
+            }
+        }
+    }
+
+    private fun verifyTask(task: CoreWorkTask) {
+        if (!coreIdentifier.matches(task.id) || !coreIdentifier.matches(task.projectId) ||
+            task.parentTaskId?.let { !coreIdentifier.matches(it) } == true ||
+            task.title.isBlank() || task.version !in 1..CORE_MAX_VERSION) throw CoreProtocolException()
+    }
+
     /** Run a short, non-suspending result commit only while the captured epoch is active. */
     fun commitIfCurrent(capturedEpoch: Long, commit: () -> Unit): Boolean = synchronized(lock) {
         val current = credential ?: return@synchronized false
@@ -188,24 +265,30 @@ class CoreOrganizationSessionController(
         if (orgId != current.state.session.orgId) throw CoreProtocolException()
     }
 
+    private suspend fun verifyCurrent(current: Credential) {
+        currentCoroutineContext().ensureActive()
+        synchronized(lock) {
+            if (credential !== current) throw CancellationException("Core session changed")
+            requireCredential()
+        }
+    }
+
     private suspend fun <T> request(operation: suspend (Credential) -> T): T {
         val current = synchronized(lock) { requireCredential() }
-        try {
-            val result = operation(current)
-            currentCoroutineContext().ensureActive()
+        val result = try {
+            operation(current)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
             synchronized(lock) {
                 if (credential !== current) {
                     throw CancellationException("Core session changed")
                 }
-                requireCredential()
-            }
-            return result
-        } catch (error: CoreHttpException) {
-            synchronized(lock) {
-                if (credential !== current) throw CancellationException("Core session changed")
-                if (error.status == 401) clearLocked()
+                if (credential === current && error is CoreHttpException && error.status == 401) clearLocked()
             }
             throw error
         }
+        verifyCurrent(current)
+        return result
     }
 }

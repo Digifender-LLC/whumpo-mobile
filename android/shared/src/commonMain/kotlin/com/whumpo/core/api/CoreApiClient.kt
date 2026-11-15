@@ -70,6 +70,29 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
     internal suspend fun entitlements(token: String): CoreOrganizationEntitlements =
         json.decodeFromString(call(token, "/v1/organization/entitlements"))
 
+    internal suspend fun work(token: String, cursor: String?, limit: Int): CoreWorkPage {
+        require(limit in 1..10 && (cursor == null || coreDigest.matches(cursor)))
+        // A task description can be 10,000 characters, including JSON-escaped characters.
+        return json.decodeFromString(call(token, "/v1/work/tasks", cursor = cursor, limit = limit,
+            maxResponseBytes = limit * 65_536))
+    }
+
+    internal suspend fun task(token: String, taskId: String): CoreWorkTask {
+        require(coreIdentifier.matches(taskId))
+        return json.decodeFromString(call(token, "/v1/tasks/$taskId"))
+    }
+
+    internal suspend fun websiteTarget(token: String, projectId: String): CoreWebsiteTarget {
+        require(coreIdentifier.matches(projectId))
+        return json.decodeFromString(call(token, "/v1/site-targets", projectId = projectId))
+    }
+
+    internal suspend fun websiteHistory(token: String, targetId: String, before: String?, limit: Int): CoreWebsiteHistoryPage {
+        require(coreIdentifier.matches(targetId) && limit in 1..50)
+        require(before == null || (coreHistoryCursor.matches(before) && before.toLong() <= CORE_MAX_VERSION))
+        return json.decodeFromString(call(token, "/v1/site-targets/$targetId/history", before = before, limit = limit))
+    }
+
     private suspend fun call(
         token: String?,
         path: String,
@@ -79,11 +102,16 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         limit: Int? = null,
         version: Long? = null,
         key: String? = null,
+        projectId: String? = null,
+        before: String? = null,
+        maxResponseBytes: Int = 65_536,
     ): String {
         require(token == null || coreBearer.matches(token)) { "Invalid core bearer format" }
         return http.prepareRequest(origin.value + path) {
             method = verb
             if (token != null) header("Authorization", "Bearer $token")
+            if (projectId != null) parameter("projectId", projectId)
+            if (before != null) parameter("before", before)
             if (cursor != null) parameter("cursor", cursor)
             if (limit != null) parameter("limit", limit)
             if (version != null) header("If-Match", "\"$version\"")
@@ -94,8 +122,8 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
             }
         }.execute { response ->
             if (response.status.value != 200) throw CoreHttpException(response.status.value)
-            val bytes = response.bodyAsChannel().readBuffer(65_537L).readByteArray()
-            if (bytes.size > 65_536) throw CoreProtocolException()
+            val bytes = response.bodyAsChannel().readBuffer(maxResponseBytes.toLong() + 1).readByteArray()
+            if (bytes.size > maxResponseBytes) throw CoreProtocolException()
             bytes.decodeToString(throwOnInvalidSequence = true)
         }
     }
