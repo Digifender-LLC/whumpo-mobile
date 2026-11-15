@@ -71,7 +71,7 @@ class CoreTaskCreationTest {
             assertEquals(CoreTaskCommandStatus.WaitingApproval, acceptance.status)
             assertEquals("approval-1", acceptance.approvalId)
             assertEquals(posts[0], posts[1])
-            assertEquals("""{"projectId":"project-1","title":"Café","description":"Scope"}""", posts[0].second)
+            assertEquals("""{"projectId":"project-1","title":"Café","description":" Scope "}""", posts[0].second)
             controller.createTask(controller.prepareTaskCreation(active.epoch, authorizedProject, "Changed", ""))
             assertNotEquals(checkNotNull(posts[0].first), checkNotNull(posts[2].first))
             assertEquals("""{"projectId":"project-1","title":"Changed"}""", posts[2].second)
@@ -103,6 +103,69 @@ class CoreTaskCreationTest {
             assertEquals(CoreTaskCommandStatus.Queued, controller.createTask(request).status)
             status = HttpStatusCode.Forbidden
             assertEquals(403, assertFailsWith<CoreHttpException> { controller.createTask(request) }.status)
+            assertEquals(active, controller.state.value)
+        }
+    }
+
+    @Test
+    fun validatesUnicodeCodePointsAndPreservesDescriptionWhitespace() = runTest {
+        var posts = 0
+        val emoji = "🦏"
+        val title = emoji.repeat(200)
+        val description = " " + emoji.repeat(9_998) + "\n"
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/v1/auth/session" -> respond(session("solo"))
+                "/v1/tasks" -> {
+                    posts++
+                    assertEquals(
+                        """{"projectId":"project-1","title":"$title","description":" ${emoji.repeat(9_998)}\n"}""",
+                        request.body.toByteArray().decodeToString(),
+                    )
+                    respond(queued, HttpStatusCode.Accepted)
+                }
+                else -> error("Unexpected path")
+            }
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val controller = CoreOrganizationSessionController(api) { 1 }
+            val active = controller.establish(source)
+            val request = controller.prepareTaskCreation(active.epoch, project, "\uFEFF $title\u00A0", description)
+            controller.createTask(request)
+            assertFailsWith<IllegalArgumentException> {
+                controller.prepareTaskCreation(active.epoch, project, title + emoji, description)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                controller.prepareTaskCreation(active.epoch, project, title, description + emoji)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                controller.prepareTaskCreation(active.epoch, project, "Task\u0000", "")
+            }
+            assertFailsWith<IllegalArgumentException> {
+                controller.prepareTaskCreation(active.epoch, project, title, "Description\u0000")
+            }
+            assertFailsWith<IllegalArgumentException> {
+                controller.prepareTaskCreation(active.epoch, project, title, "Unpaired \uD800")
+            }
+            assertEquals(1, posts)
+        }
+    }
+
+    @Test
+    fun viewerCannotPrepareTaskPost() = runTest {
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/v1/auth/session" -> respond(session("solo").replace("owner", "viewer"))
+                else -> error("Viewer task preparation must stay local")
+            }
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val controller = CoreOrganizationSessionController(api) { 1 }
+            val active = controller.establish(source)
+            val error = assertFailsWith<CoreHttpException> {
+                controller.prepareTaskCreation(active.epoch, project, "Task", "")
+            }
+            assertEquals(403, error.status)
             assertEquals(active, controller.state.value)
         }
     }

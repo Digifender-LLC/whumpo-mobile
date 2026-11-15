@@ -36,10 +36,11 @@ internal fun CoreWorkPreview(
     controller: CoreOrganizationSessionController,
     epoch: Long,
     organizationName: String,
+    canCreateTask: Boolean,
     close: () -> Unit,
 ) {
     var creating by remember { mutableStateOf(false) }
-    if (creating) {
+    if (creating && canCreateTask) {
         CoreTaskCreationPreview(controller, epoch, organizationName) { creating = false }
         return
     }
@@ -74,7 +75,7 @@ internal fun CoreWorkPreview(
             when {
                 task == null -> {
                     Text("Work", style = MaterialTheme.typography.headlineMedium)
-                    Button(onClick = { creating = true }) { Text("New task") }
+                    if (canCreateTask) Button(onClick = { creating = true }) { Text("New task") }
                     WorkRead(controller, epoch, { controller.work(workCursor) }) { page ->
                         if (page.items.isEmpty()) Text("No tasks on this page.")
                         page.items.forEach { item ->

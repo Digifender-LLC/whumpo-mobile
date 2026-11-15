@@ -28,6 +28,7 @@ import com.whumpo.android.auth.CredentialManagerPasskeys
 import com.whumpo.android.ui.theme.WhumpoTheme
 import com.whumpo.core.api.CoreApiClient
 import com.whumpo.core.api.CoreMembershipPage
+import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreOrganizationEntitlements
 import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreOrigin
@@ -101,7 +102,10 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
     }
     if (active != null && showWork) {
         key(active.epoch) {
-            CoreWorkPreview(controller, active.epoch, page?.profile?.displayName ?: active.session.orgId) {
+            CoreWorkPreview(
+                controller, active.epoch, page?.profile?.displayName ?: active.session.orgId,
+                canCreateTask = active.session.role != CoreRole.viewer,
+            ) {
                 showWork = false
             }
         }

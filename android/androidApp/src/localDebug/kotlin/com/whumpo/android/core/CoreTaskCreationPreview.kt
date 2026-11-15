@@ -151,6 +151,9 @@ internal fun CoreTaskCreationPreview(
                                     try {
                                         val request = controller.prepareTaskCreation(epoch, chosen, title, description)
                                         submission = SubmissionState.Sending(request)
+                                    } catch (error: CoreHttpException) {
+                                        if (error.status == 403) feedback = "Your organization access does not allow task creation."
+                                        else throw error
                                     } catch (_: IllegalArgumentException) {
                                         feedback = "Enter a title of up to 200 characters and a description of up to 10,000."
                                     }
@@ -206,5 +209,5 @@ private fun TaskDetails(
         minLines = 3,
         modifier = Modifier.fillMaxWidth(),
     )
-    Button(enabled = title.isNotBlank(), onClick = submit) { Text("Create task") }
+    Button(enabled = title.isNotEmpty(), onClick = submit) { Text("Create task") }
 }

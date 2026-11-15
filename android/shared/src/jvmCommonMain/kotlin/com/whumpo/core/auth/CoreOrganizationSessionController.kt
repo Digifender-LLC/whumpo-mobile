@@ -14,6 +14,7 @@ import com.whumpo.core.api.CoreWorkspaceChoices
 import com.whumpo.core.api.CoreOrganizationEntitlements
 import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreProtocolException
+import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreSession
 import com.whumpo.core.api.CoreSessionToken
 import com.whumpo.core.api.CoreWebsiteHistoryItem
@@ -188,13 +189,14 @@ class CoreOrganizationSessionController(
     )
 
     fun prepareTaskCreation(epoch: Long, project: CoreProjectChoice, title: String, description: String): TaskCreation {
-        val normalizedTitle = Normalizer.normalize(title.trim(), Normalizer.Form.NFC)
-        val normalizedDescription = Normalizer.normalize(description.trim(), Normalizer.Form.NFC).ifEmpty { null }
-        require(coreIdentifier.matches(project.id) && normalizedTitle.length in 1..200 &&
-            (normalizedDescription?.length ?: 0) <= 10_000)
+        require(coreIdentifier.matches(project.id))
         return synchronized(lock) {
             val current = requireCredential().state
             if (current.epoch != epoch) throw CancellationException("Core session changed")
+            if (current.session.role == CoreRole.viewer) throw CoreHttpException(403)
+            val normalizedTitle = normalizeTaskText(title.trim(::isTaskTitleSpace), 200)
+            require(normalizedTitle.isNotEmpty())
+            val normalizedDescription = description.takeIf(String::isNotEmpty)?.let { normalizeTaskText(it, 10_000) }
             TaskCreation(current.scope, epoch, UUID.randomUUID().toString(), CoreNewTask(project.id, normalizedTitle, normalizedDescription))
         }
     }
@@ -203,6 +205,7 @@ class CoreOrganizationSessionController(
         if (current.state.epoch != submission.epoch || current.state.scope != submission.scope) {
             throw CancellationException("Core session changed")
         }
+        if (current.state.session.role == CoreRole.viewer) throw CoreHttpException(403)
         api.createTask(current.token, submission.draft, submission.key).also { accepted ->
             if (!coreIdentifier.matches(accepted.runId) || !coreIdentifier.matches(accepted.effectId) ||
                 when (accepted.status) {
@@ -212,6 +215,18 @@ class CoreOrganizationSessionController(
             ) throw CoreProtocolException()
         }
     }
+
+    private fun normalizeTaskText(text: String, maxCodePoints: Int): String {
+        require(text.codePoints().noneMatch { it == 0 || it in 0xD800..0xDFFF })
+        return Normalizer.normalize(text, Normalizer.Form.NFC).also {
+            require(it.codePointCount(0, it.length) <= maxCodePoints)
+        }
+    }
+
+    // Match ECMAScript trim used by the task contract, including the byte-order mark.
+    private fun isTaskTitleSpace(character: Char): Boolean =
+        character in '\u0009'..'\u000D' || character == '\u2028' || character == '\u2029' ||
+            character == '\uFEFF' || Character.getType(character) == Character.SPACE_SEPARATOR.toInt()
 
     private fun verifyReceipt(item: CoreWebsiteHistoryItem, targetId: String, current: Credential) {
         val receipt = item.receipt
@@ -240,7 +255,7 @@ class CoreOrganizationSessionController(
     private fun verifyTask(task: CoreWorkTask) {
         if (!coreIdentifier.matches(task.id) || !coreIdentifier.matches(task.projectId) ||
             task.parentTaskId?.let { !coreIdentifier.matches(it) } == true ||
-            task.title.isBlank() || task.version !in 1..CORE_MAX_VERSION) throw CoreProtocolException()
+            task.title.isEmpty() || task.version !in 1..CORE_MAX_VERSION) throw CoreProtocolException()
     }
 
     /** Run a short, non-suspending result commit only while the captured epoch is active. */
