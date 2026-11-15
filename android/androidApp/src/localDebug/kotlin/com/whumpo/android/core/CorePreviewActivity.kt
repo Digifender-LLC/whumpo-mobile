@@ -35,6 +35,7 @@ import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.coreApiClient
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import com.whumpo.core.auth.PasskeyAuthenticator
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -89,6 +90,18 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
     var cursor by remember(active?.epoch) { mutableStateOf<String?>(null) }
+    LaunchedEffect(active?.epoch) {
+        if (active != null) {
+            while (true) {
+                val remaining = active.session.expiresAt - System.currentTimeMillis()
+                if (remaining <= 0) {
+                    controller.expireIfCurrent(active.epoch)
+                    break
+                }
+                delay(minOf(remaining, 60_000))
+            }
+        }
+    }
     LaunchedEffect(active?.epoch, cursor) {
         if (active != null) {
             try {
@@ -106,6 +119,7 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
             CoreWorkPreview(
                 controller, active.epoch, page?.profile?.displayName ?: active.session.orgId,
                 canCreateTask = active.session.role != CoreRole.viewer,
+                canRecoverApplication = active.session.role == CoreRole.owner,
             ) {
                 showWork = false
             }

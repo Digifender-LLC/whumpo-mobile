@@ -34,6 +34,12 @@ import com.whumpo.core.api.coreBearer
 import com.whumpo.core.api.coreDigest
 import com.whumpo.core.api.coreIdentifier
 import com.whumpo.core.api.coreTimestamp
+import com.whumpo.core.api.CoreApplicationRecoveryState
+import com.whumpo.core.api.CoreRecoveryPoint
+import com.whumpo.core.api.CoreRestoreResult
+import com.whumpo.core.api.recoveryId
+import com.whumpo.core.api.verifyRecoveryPoint
+import com.whumpo.core.api.verifyRestore
 import java.text.Normalizer
 import java.time.Instant
 import java.time.format.DateTimeParseException
@@ -422,6 +428,121 @@ class CoreOrganizationSessionController(
         }
     }
 
+    class RecoveryProject internal constructor(internal val epoch: Long, val id: String)
+
+    data class RecoverySnapshot(val state: CoreApplicationRecoveryState, val points: List<CoreRecoveryPoint>)
+
+    sealed interface RecoveryAction {
+        data class Capture(val revision: Long) : RecoveryAction
+        data class Remove(val point: CoreRecoveryPoint, val confirmation: String) : RecoveryAction
+        data class Prepare(val point: CoreRecoveryPoint, val revision: Long) : RecoveryAction
+        data class Confirm(val review: CoreRestoreResult.Review, val confirmation: String) : RecoveryAction
+    }
+
+    class RecoveryAttempt internal constructor(
+        internal val project: RecoveryProject,
+        val action: RecoveryAction,
+        internal val key: String,
+    )
+
+    sealed interface RecoveryOutcome {
+        data class Captured(val point: CoreRecoveryPoint) : RecoveryOutcome
+        data object Removed : RecoveryOutcome
+        data class Reviewed(val result: CoreRestoreResult) : RecoveryOutcome
+    }
+
+    fun recoveryProject(epoch: Long, project: CoreProjectChoice): RecoveryProject {
+        require(coreIdentifier.matches(project.id))
+        return RecoveryProject(epoch, project.id)
+    }
+
+    fun prepareRecoveryAttempt(project: RecoveryProject, action: RecoveryAction): RecoveryAttempt {
+        return RecoveryAttempt(project, action, UUID.randomUUID().toString())
+    }
+
+    suspend fun recovery(project: RecoveryProject): RecoverySnapshot = request { current ->
+        verifyRecoveryAuthority(project, current)
+        val state = api.recoveryState(current.token, project.id)
+        if (state.projectId != project.id || state.revision !in 0..CORE_MAX_VERSION ||
+            state.runtimeEligible && !state.enabled ||
+            listOfNotNull(state.programId, state.testId, state.accessId, state.disableReviewId).any { !recoveryId.matches(it) } ||
+            (state.enabled && (state.programId == null || state.testId == null || state.accessId == null)) ||
+            (!state.enabled && listOfNotNull(state.programId, state.testId, state.accessId, state.disableReviewId).isNotEmpty())
+        ) throw CoreProtocolException()
+        verifyCurrent(current)
+        val points = api.recoveryPoints(current.token, project.id).points
+        if (points.size > 10 || !distinct(points.map { it.id }) || points.any { it.removed }) throw CoreProtocolException()
+        points.forEach { verifyRecoveryPoint(it, project.id) }
+        RecoverySnapshot(state, points)
+    }
+
+    suspend fun readApplicationRestore(project: RecoveryProject, review: CoreRestoreResult.Review): CoreRestoreResult =
+        request { current ->
+            verifyRecoveryAuthority(project, current)
+            verifyRestore(review)
+            require(review.projectId == project.id)
+            api.restoreReview(current.token, review.id).also { verifyExactRestore(review, it) }
+        }
+
+    suspend fun writeRecovery(attempt: RecoveryAttempt): RecoveryOutcome = request { current ->
+        val project = attempt.project
+        verifyRecoveryAuthority(project, current)
+        when (val action = attempt.action) {
+            is RecoveryAction.Capture -> {
+                require(action.revision in 1..CORE_MAX_VERSION)
+                val point = api.captureRecoveryPoint(current.token, project.id, action.revision, attempt.key)
+                verifyRecoveryPoint(point, project.id)
+                if (point.applicationRevision != action.revision) throw CoreProtocolException()
+                RecoveryOutcome.Captured(point)
+            }
+            is RecoveryAction.Remove -> {
+                require(action.confirmation == "REMOVE" && !action.point.removed)
+                verifyRecoveryPoint(action.point, project.id)
+                val removal = api.removeRecoveryPoint(current.token, action.point.id, attempt.key)
+                if (removal.id != action.point.id || !removal.removed) throw CoreProtocolException()
+                RecoveryOutcome.Removed
+            }
+            is RecoveryAction.Prepare -> {
+                require(!action.point.removed && action.revision in 1..CORE_MAX_VERSION)
+                verifyRecoveryPoint(action.point, project.id)
+                val result = api.prepareApplicationRestore(current.token, project.id, action.point.id, action.revision, attempt.key)
+                verifyRestore(result)
+                if (result is CoreRestoreResult.Review &&
+                    (result.projectId != project.id || result.pointId != action.point.id ||
+                        result.programId != action.point.programId || result.expectedApplicationRevision != action.revision)
+                ) throw CoreProtocolException()
+                RecoveryOutcome.Reviewed(result)
+            }
+            is RecoveryAction.Confirm -> {
+                val review = action.review
+                verifyRestore(review)
+                require(action.confirmation == "RESTORE" && review.projectId == project.id && review.state == "waiting_approval")
+                val result = api.confirmApplicationRestore(current.token, review.id, review.payloadHash, attempt.key)
+                verifyExactRestore(review, result)
+                if (result.receipt == null) throw CoreProtocolException()
+                RecoveryOutcome.Reviewed(result)
+            }
+        }
+    }
+
+    private fun verifyRecoveryAuthority(project: RecoveryProject, current: Credential) {
+        if (project.epoch != current.state.epoch) throw CancellationException("Core session changed")
+        if (current.state.session.role != CoreRole.owner) throw CoreHttpException(403)
+    }
+
+    private fun verifyExactRestore(expected: CoreRestoreResult.Review, result: CoreRestoreResult) {
+        verifyRestore(result)
+        if (result.payloadHash != expected.payloadHash) throw CoreProtocolException()
+        when (result) {
+            is CoreRestoreResult.Review -> if (result.copy(state = expected.state, receipt = expected.receipt) != expected) {
+                throw CoreProtocolException()
+            }
+            is CoreRestoreResult.Compacted -> if (result.reviewId != expected.id ||
+                (result.receipt?.restoredDocuments ?: 0) > expected.documents
+            ) throw CoreProtocolException()
+        }
+    }
+
     private fun verifySubmission(submission: TaskCreation, current: Credential) {
         if (current.state.epoch != submission.epoch || current.state.scope != submission.scope) {
             throw CancellationException("Core session changed")
@@ -476,6 +597,11 @@ class CoreOrganizationSessionController(
         if (current.state.epoch != capturedEpoch || current.state.session.expiresAt <= now()) return@synchronized false
         commit()
         true
+    }
+
+    fun expireIfCurrent(capturedEpoch: Long) = synchronized(lock) {
+        val current = credential ?: return@synchronized
+        if (current.state.epoch == capturedEpoch && current.state.session.expiresAt <= now()) clearLocked()
     }
 
     private fun beginTransition(): Long {

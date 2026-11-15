@@ -12,6 +12,9 @@ import io.ktor.utils.io.readBuffer
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.put
 
 /** Only exact configured HTTPS origins or explicit debug loopback origins are accepted. */
 class CoreOrigin private constructor(val value: String) {
@@ -117,6 +120,52 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
     /** The route accepts no query parameters. */
     internal suspend fun todayBriefing(token: String): CoreTodayBriefing =
         json.decodeFromString(call(token, "/v1/briefing/today", maxResponseBytes = CORE_TODAY_MAX_BYTES))
+
+    internal suspend fun recoveryState(token: String, projectId: String): CoreApplicationRecoveryState =
+        Json.decodeFromString(call(token, "/v1/application-state", projectId = projectId))
+
+    internal suspend fun recoveryPoints(token: String, projectId: String): CoreRecoveryPoints =
+        Json.decodeFromString(call(token, recoveryPoints, projectId = projectId))
+
+    internal suspend fun captureRecoveryPoint(token: String, projectId: String, revision: Long, key: String): CoreRecoveryPoint =
+        Json.decodeFromString(call(token, recoveryPoints, HttpMethod.Post, recoveryBody(projectId, revision), key = key))
+
+    internal suspend fun removeRecoveryPoint(token: String, id: String, key: String): CoreRecoveryRemoval =
+        Json.decodeFromString(call(token, "$recoveryPoints/$id/remove", HttpMethod.Post,
+            buildJsonObject { put("confirmation", "REMOVE") }.toString(), key = key))
+
+    internal suspend fun prepareApplicationRestore(token: String, projectId: String, id: String, revision: Long, key: String): CoreRestoreResult =
+        restoreResponse(call(token, restoreReviews, HttpMethod.Post, recoveryBody(projectId, revision, id), key = key))
+
+    internal suspend fun restoreReview(token: String, id: String): CoreRestoreResult =
+        restoreResponse(call(token, "$restoreReviews/$id"))
+
+    internal suspend fun confirmApplicationRestore(token: String, id: String, hash: String, key: String): CoreRestoreResult =
+        restoreResponse(call(token, "$restoreReviews/$id/confirm", HttpMethod.Post, buildJsonObject {
+            put("payloadHash", hash)
+            put("confirmation", "RESTORE")
+        }.toString(), key = key))
+
+    private fun recoveryBody(projectId: String, revision: Long, pointId: String? = null): String =
+        buildJsonObject {
+            put("projectId", projectId)
+            put("expectedApplicationRevision", revision)
+            if (pointId != null) put("pointId", pointId)
+        }.toString()
+
+    private fun restoreResponse(body: String): CoreRestoreResult {
+        val value = Json.parseToJsonElement(body) as? JsonObject ?: throw CoreProtocolException()
+        return if (value["state"]?.toString() == "\"compacted\"") {
+            Json.decodeFromJsonElement<CoreRestoreResult.Compacted>(value)
+        } else {
+            Json.decodeFromJsonElement<CoreRestoreResult.Review>(value)
+        }
+    }
+
+    private companion object {
+        const val recoveryPoints = "/v1/application-recovery-points"
+        const val restoreReviews = "/v1/application-restore-reviews"
+    }
 
     private suspend fun call(
         token: String?,

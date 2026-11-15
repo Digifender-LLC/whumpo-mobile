@@ -37,14 +37,20 @@ internal fun CoreWorkPreview(
     epoch: Long,
     organizationName: String,
     canCreateTask: Boolean,
+    canRecoverApplication: Boolean,
     close: () -> Unit,
 ) {
+    var recovering by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<CoreWorkTask?>(null) }
     var openedFromCreation by remember { mutableStateOf(false) }
     var receipts by remember { mutableStateOf(false) }
     var workCursor by remember { mutableStateOf<String?>(null) }
     var historyCursor by remember { mutableStateOf<String?>(null) }
+    if (recovering && canRecoverApplication) {
+        CoreApplicationRecoveryPreview(controller, epoch, organizationName) { recovering = false }
+        return
+    }
     if (creating && canCreateTask) {
         CoreTaskCreationPreview(controller, epoch, organizationName,
             openTask = { created ->
@@ -87,6 +93,7 @@ internal fun CoreWorkPreview(
             when {
                 task == null -> {
                     Text("Work", style = MaterialTheme.typography.headlineMedium)
+                    if (canRecoverApplication) OutlinedButton(onClick = { recovering = true }) { Text("Application recovery") }
                     if (canCreateTask) Button(onClick = { creating = true }) { Text("New task") }
                     WorkRead(controller, epoch, { controller.work(workCursor) }) { page ->
                         if (page.items.isEmpty()) Text("No tasks on this page.")
