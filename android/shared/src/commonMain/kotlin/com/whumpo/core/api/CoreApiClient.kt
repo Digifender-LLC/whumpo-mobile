@@ -93,6 +93,22 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return json.decodeFromString(call(token, "/v1/site-targets/$targetId/history", before = before, limit = limit))
     }
 
+    internal suspend fun workspaceChoices(token: String, cursor: String?, limit: Int): CoreWorkspaceChoices {
+        require(limit in 1..25 && (cursor == null || coreIdentifier.matches(cursor)))
+        return json.decodeFromString(call(token, "/v1/workspaces", cursor = cursor, limit = limit))
+    }
+
+    internal suspend fun projectChoices(token: String, workspaceId: String, cursor: String?, limit: Int): CoreProjectChoices {
+        require(coreIdentifier.matches(workspaceId) && limit in 1..25 && (cursor == null || coreIdentifier.matches(cursor)))
+        return json.decodeFromString(call(token, "/v1/projects", workspaceId = workspaceId, cursor = cursor, limit = limit))
+    }
+
+    internal suspend fun createTask(token: String, draft: CoreNewTask, requestKey: String): CoreTaskCommandAcceptance {
+        require(coreIdentifier.matches(requestKey))
+        return json.decodeFromString(call(token, "/v1/tasks", HttpMethod.Post, json.encodeToString(draft),
+            key = requestKey, expectedStatus = 202))
+    }
+
     private suspend fun call(
         token: String?,
         path: String,
@@ -105,11 +121,14 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         projectId: String? = null,
         before: String? = null,
         maxResponseBytes: Int = 65_536,
+        workspaceId: String? = null,
+        expectedStatus: Int = 200,
     ): String {
         require(token == null || coreBearer.matches(token)) { "Invalid core bearer format" }
         return http.prepareRequest(origin.value + path) {
             method = verb
             if (token != null) header("Authorization", "Bearer $token")
+            if (workspaceId != null) parameter("workspaceId", workspaceId)
             if (projectId != null) parameter("projectId", projectId)
             if (before != null) parameter("before", before)
             if (cursor != null) parameter("cursor", cursor)
@@ -121,7 +140,10 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
                 setBody(body)
             }
         }.execute { response ->
-            if (response.status.value != 200) throw CoreHttpException(response.status.value)
+            if (response.status.value != expectedStatus) {
+                if (response.status.value in 200..299) throw CoreProtocolException()
+                throw CoreHttpException(response.status.value)
+            }
             val bytes = response.bodyAsChannel().readBuffer(maxResponseBytes.toLong() + 1).readByteArray()
             if (bytes.size > maxResponseBytes) throw CoreProtocolException()
             bytes.decodeToString(throwOnInvalidSequence = true)

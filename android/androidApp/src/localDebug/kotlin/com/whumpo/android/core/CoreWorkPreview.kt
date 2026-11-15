@@ -38,6 +38,11 @@ internal fun CoreWorkPreview(
     organizationName: String,
     close: () -> Unit,
 ) {
+    var creating by remember { mutableStateOf(false) }
+    if (creating) {
+        CoreTaskCreationPreview(controller, epoch, organizationName) { creating = false }
+        return
+    }
     var selected by remember { mutableStateOf<CoreWorkTask?>(null) }
     var receipts by remember { mutableStateOf(false) }
     var workCursor by remember { mutableStateOf<String?>(null) }
@@ -69,6 +74,7 @@ internal fun CoreWorkPreview(
             when {
                 task == null -> {
                     Text("Work", style = MaterialTheme.typography.headlineMedium)
+                    Button(onClick = { creating = true }) { Text("New task") }
                     WorkRead(controller, epoch, { controller.work(workCursor) }) { page ->
                         if (page.items.isEmpty()) Text("No tasks on this page.")
                         page.items.forEach { item ->
@@ -141,7 +147,7 @@ private sealed interface WorkReadResult<out T> {
 }
 
 @Composable
-private fun <T> WorkRead(
+internal fun <T> WorkRead(
     controller: CoreOrganizationSessionController,
     epoch: Long,
     read: suspend () -> T,

@@ -47,3 +47,15 @@ The adapter binds task detail to the selected task and project, and website
 receipts to the selected project target and verified organization. The Work
 screen drops open detail, cursors, errors, and in-flight results when the
 organization session changes.
+
+From **Work**, choose **New task**, a workspace, and a project. The preview reads
+available choices from `GET /v1/workspaces` and `GET /v1/projects?workspaceId=…`,
+then submits the title and optional description to `POST /v1/tasks`. A valid
+acceptance shows whether the command is queued or awaiting approval. The task
+appears in Work after the server applies the command.
+
+If acceptance is uncertain, **Retry same request** resends the frozen draft with
+its original idempotency key. Leaving the form discards this in-memory retry
+state. Check Work for the task before creating it again. A new draft uses a new
+key. Changing organizations clears the form and prevents an old response from
+updating the new organization's screen.

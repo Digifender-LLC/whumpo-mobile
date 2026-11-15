@@ -5,6 +5,12 @@ import com.whumpo.core.api.CORE_MAX_VERSION
 import com.whumpo.core.api.CoreApiClient
 import com.whumpo.core.api.CoreHttpException
 import com.whumpo.core.api.CoreMembershipPage
+import com.whumpo.core.api.CoreNewTask
+import com.whumpo.core.api.CoreProjectChoice
+import com.whumpo.core.api.CoreProjectChoices
+import com.whumpo.core.api.CoreTaskCommandAcceptance
+import com.whumpo.core.api.CoreTaskCommandStatus
+import com.whumpo.core.api.CoreWorkspaceChoices
 import com.whumpo.core.api.CoreOrganizationEntitlements
 import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreProtocolException
@@ -18,6 +24,8 @@ import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.coreBearer
 import com.whumpo.core.api.coreDigest
 import com.whumpo.core.api.coreIdentifier
+import java.text.Normalizer
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -151,6 +159,59 @@ class CoreOrganizationSessionController(
                 page.items.forEach { verifyReceipt(it, target.id, current) }
             }
         }
+
+    suspend fun workspaceChoices(cursor: String? = null): CoreWorkspaceChoices = request { current ->
+        api.workspaceChoices(current.token, cursor, 20).also { page ->
+            verifyChoices(page.items.map { it.id }, cursor, page.nextCursor)
+            if (page.items.any { it.name.isBlank() }) throw CoreProtocolException()
+        }
+    }
+
+    suspend fun projectChoices(workspaceId: String, cursor: String? = null): CoreProjectChoices = request { current ->
+        api.projectChoices(current.token, workspaceId, cursor, 20).also { page ->
+            verifyChoices(page.items.map { it.id }, cursor, page.nextCursor)
+            if (page.items.any { it.workspaceId != workspaceId || it.name.isBlank() }) throw CoreProtocolException()
+        }
+    }
+
+    private fun verifyChoices(ids: List<String>, cursor: String?, nextCursor: String?) {
+        if (ids.size > 20 || ids.distinct().size != ids.size || ids.any { !coreIdentifier.matches(it) } ||
+            nextCursor?.let { it == cursor || ids.isEmpty() || !coreIdentifier.matches(it) } == true
+        ) throw CoreProtocolException()
+    }
+
+    class TaskCreation internal constructor(
+        internal val scope: CoreAccountScope,
+        internal val epoch: Long,
+        internal val key: String,
+        internal val draft: CoreNewTask,
+    )
+
+    fun prepareTaskCreation(epoch: Long, project: CoreProjectChoice, title: String, description: String): TaskCreation {
+        val normalizedTitle = Normalizer.normalize(title.trim(), Normalizer.Form.NFC)
+        val normalizedDescription = Normalizer.normalize(description.trim(), Normalizer.Form.NFC).ifEmpty { null }
+        require(coreIdentifier.matches(project.id) && normalizedTitle.length in 1..200 &&
+            (normalizedDescription?.length ?: 0) <= 10_000)
+        return synchronized(lock) {
+            val current = requireCredential().state
+            if (current.epoch != epoch) throw CancellationException("Core session changed")
+            TaskCreation(current.scope, epoch, UUID.randomUUID().toString(), CoreNewTask(project.id, normalizedTitle, normalizedDescription))
+        }
+    }
+
+    suspend fun createTask(submission: TaskCreation): CoreTaskCommandAcceptance = request { current ->
+        if (current.state.epoch != submission.epoch || current.state.scope != submission.scope) {
+            throw CancellationException("Core session changed")
+        }
+        api.createTask(current.token, submission.draft, submission.key).also { accepted ->
+            if (!coreIdentifier.matches(accepted.runId) || !coreIdentifier.matches(accepted.effectId) ||
+                when (accepted.status) {
+                    CoreTaskCommandStatus.Queued -> accepted.approvalId != null
+                    CoreTaskCommandStatus.WaitingApproval -> accepted.approvalId?.let(coreIdentifier::matches) != true
+                }
+            ) throw CoreProtocolException()
+        }
+    }
 
     private fun verifyReceipt(item: CoreWebsiteHistoryItem, targetId: String, current: Credential) {
         val receipt = item.receipt
