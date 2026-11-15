@@ -89,6 +89,7 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
     var page by remember(active?.epoch) { mutableStateOf<OrganizationPreview?>(null) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
+    var showOnboarding by remember(state) { mutableStateOf(false) }
     var cursor by remember(active?.epoch) { mutableStateOf<String?>(null) }
     LaunchedEffect(active?.epoch) {
         if (active != null) {
@@ -114,6 +115,10 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
             }
         }
     }
+    if (state == CoreOrganizationSessionController.State.SignedOut && showOnboarding) {
+        CoreOnboardingPreview { showOnboarding = false }
+        return
+    }
     if (active != null && showWork) {
         key(active.epoch) {
             CoreWorkPreview(
@@ -137,6 +142,7 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
     CorePreviewContent(state, page, message,
         openToday = { showToday = true },
         openWork = { showWork = true },
+        tryOnboarding = { showOnboarding = true },
         signIn = {
             message = null
             actions.launch {
@@ -178,6 +184,7 @@ private fun CorePreviewContent(
     message: String?,
     openToday: () -> Unit,
     openWork: () -> Unit,
+    tryOnboarding: () -> Unit,
     signIn: () -> Unit,
     choose: (String) -> Unit,
     next: (String?) -> Unit,
@@ -186,7 +193,11 @@ private fun CorePreviewContent(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Whumpo organizations")
         when (state) {
-            CoreOrganizationSessionController.State.SignedOut -> Button(onClick = signIn) { Text("Sign in with a passkey") }
+            CoreOrganizationSessionController.State.SignedOut -> {
+                Button(onClick = signIn) { Text("Sign in with a passkey") }
+                Button(onClick = tryOnboarding) { Text("Try onboarding") }
+                Text("Offline preview. No account, payment or saved data.")
+            }
             CoreOrganizationSessionController.State.Transitioning -> Text("Checking session…")
             is CoreOrganizationSessionController.State.Active -> {
                 Text(page?.profile?.displayName ?: state.session.orgId)

@@ -27,6 +27,10 @@ See the [build notes](docs/android-build.md) for build variants and test limits.
 Host tests use synthetic data and reference screenshots. Emulator, physical-device,
 live-service, signing, and customer acceptance each require separate evidence.
 
+## Offline onboarding preview
+
+The local debug harness offers [Try onboarding](docs/core-onboarding-preview.md): plan selection, demo checkout, two account-security choices, conversational organization setup and a personalized offline workspace. It creates no real account or payment.
+
 ## Layout
 
 | Location | Contents |
