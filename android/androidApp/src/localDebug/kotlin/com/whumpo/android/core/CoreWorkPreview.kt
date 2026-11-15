@@ -40,14 +40,26 @@ internal fun CoreWorkPreview(
     close: () -> Unit,
 ) {
     var creating by remember { mutableStateOf(false) }
-    if (creating && canCreateTask) {
-        CoreTaskCreationPreview(controller, epoch, organizationName) { creating = false }
-        return
-    }
     var selected by remember { mutableStateOf<CoreWorkTask?>(null) }
+    var openedFromCreation by remember { mutableStateOf(false) }
     var receipts by remember { mutableStateOf(false) }
     var workCursor by remember { mutableStateOf<String?>(null) }
     var historyCursor by remember { mutableStateOf<String?>(null) }
+    if (creating && canCreateTask) {
+        CoreTaskCreationPreview(controller, epoch, organizationName,
+            openTask = { created ->
+                controller.commitIfCurrent(epoch) {
+                    selected = created
+                    openedFromCreation = true
+                    receipts = false
+                    historyCursor = null
+                    creating = false
+                }
+            },
+            close = { creating = false },
+        )
+        return
+    }
     val task = selected
     val goBack: () -> Unit = {
         when {
@@ -79,7 +91,7 @@ internal fun CoreWorkPreview(
                     WorkRead(controller, epoch, { controller.work(workCursor) }) { page ->
                         if (page.items.isEmpty()) Text("No tasks on this page.")
                         page.items.forEach { item ->
-                            Card(onClick = { selected = item }, modifier = Modifier.fillMaxWidth()) {
+                            Card(onClick = { selected = item; openedFromCreation = false }, modifier = Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(item.title, style = MaterialTheme.typography.titleMedium)
                                     Text(item.status.label, style = MaterialTheme.typography.bodyMedium)
@@ -109,14 +121,16 @@ internal fun CoreWorkPreview(
                         }
                     }
                 }
-                else -> WorkRead(controller, epoch, { controller.task(task.id, task.projectId) }) { detail ->
+                else -> WorkRead(controller, epoch, {
+                    if (openedFromCreation) controller.canonicalTask(task.id) else controller.task(task.id, task.projectId)
+                }) { detail ->
                     Text(detail.title, style = MaterialTheme.typography.headlineMedium)
                     Text(detail.status.label, style = MaterialTheme.typography.titleMedium)
                     detail.description?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
                     detail.dueAt?.let { Text("Due $it") }
                     if (detail.archivedAt != null) Text("Archived")
                     Text("Project ${detail.projectId}", style = MaterialTheme.typography.bodyMedium)
-                    Button(onClick = { receipts = true }) { Text("View website receipts") }
+                    Button(onClick = { selected = detail; receipts = true }) { Text("View website receipts") }
                 }
             }
         }

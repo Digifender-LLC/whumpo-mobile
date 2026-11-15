@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -21,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -28,15 +31,24 @@ import com.whumpo.core.api.CoreHttpException
 import com.whumpo.core.api.CoreProjectChoice
 import com.whumpo.core.api.CoreTaskCommandAcceptance
 import com.whumpo.core.api.CoreTaskCommandStatus
+import com.whumpo.core.api.CoreTaskOutcome
+import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.CoreWorkspaceChoice
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 private sealed interface SubmissionState {
     data object Editing : SubmissionState
     data class Sending(val request: CoreOrganizationSessionController.TaskCreation) : SubmissionState
     data class Uncertain(val request: CoreOrganizationSessionController.TaskCreation, val message: String) : SubmissionState
-    data class Accepted(val response: CoreTaskCommandAcceptance) : SubmissionState
+    data class Accepted(
+        val request: CoreOrganizationSessionController.TaskCreation,
+        val response: CoreTaskCommandAcceptance,
+        val outcome: CoreTaskOutcome? = null,
+        val checking: Boolean = false,
+        val message: String? = null,
+    ) : SubmissionState
 }
 
 @Composable
@@ -44,6 +56,7 @@ internal fun CoreTaskCreationPreview(
     controller: CoreOrganizationSessionController,
     epoch: Long,
     organizationName: String,
+    openTask: (CoreWorkTask) -> Unit,
     close: () -> Unit,
 ) {
     var selection by remember { mutableStateOf<CoreWorkspaceChoice?>(null) }
@@ -54,6 +67,7 @@ internal fun CoreTaskCreationPreview(
     var description by remember { mutableStateOf("") }
     var feedback by remember { mutableStateOf<String?>(null) }
     var submission by remember { mutableStateOf<SubmissionState>(SubmissionState.Editing) }
+    val requests = rememberCoroutineScope()
     val current = submission
     val canClose = current is SubmissionState.Editing || current is SubmissionState.Accepted
     BackHandler { if (canClose) close() }
@@ -62,7 +76,7 @@ internal fun CoreTaskCreationPreview(
         if (current is SubmissionState.Sending) {
             try {
                 val accepted = controller.createTask(current.request)
-                controller.commitIfCurrent(epoch) { submission = SubmissionState.Accepted(accepted) }
+                controller.commitIfCurrent(epoch) { submission = SubmissionState.Accepted(current.request, accepted) }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -84,6 +98,28 @@ internal fun CoreTaskCreationPreview(
                             else "The server did not confirm whether it accepted the task.",
                         )
                     }
+                }
+            }
+        }
+    }
+
+    fun checkTask(accepted: SubmissionState.Accepted) {
+        if (submission != accepted || accepted.checking) return
+        submission = accepted.copy(checking = true, message = null)
+        requests.launch {
+            try {
+                val outcome = controller.taskOutcome(accepted.request)
+                controller.commitIfCurrent(epoch) { submission = accepted.copy(outcome = outcome, checking = false, message = null) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                controller.commitIfCurrent(epoch) {
+                    val message = when ((error as? CoreHttpException)?.status) {
+                        403 -> "Your organization access does not allow checking this task."
+                        404 -> "The task status is no longer available."
+                        else -> "Could not check the task status."
+                    }
+                    submission = accepted.copy(checking = false, message = message)
                 }
             }
         }
@@ -172,12 +208,43 @@ internal fun CoreTaskCreationPreview(
                 TextButton(onClick = close) { Text("Leave without confirmation") }
             }
             is SubmissionState.Accepted -> {
+                val outcome = current.outcome
                 Text(
-                    if (current.response.status == CoreTaskCommandStatus.WaitingApproval) "Task awaiting approval."
-                    else "Task creation queued.",
+                    when (outcome) {
+                        null -> if (current.response.status == CoreTaskCommandStatus.WaitingApproval) {
+                            "Task awaiting approval."
+                        } else "Task creation queued."
+                        CoreTaskOutcome.Queued -> "Task creation queued."
+                        CoreTaskOutcome.WaitingApproval -> "Task awaiting approval."
+                        CoreTaskOutcome.Failed -> "Task creation failed."
+                        CoreTaskOutcome.Canceled -> "Task creation was canceled."
+                        is CoreTaskOutcome.Confirmed -> "Task created."
+                    },
                     style = MaterialTheme.typography.titleMedium,
                 )
+                if (outcome is CoreTaskOutcome.Confirmed) {
+                    CreatedTaskContent(outcome.task) { openTask(outcome.task) }
+                }
+                current.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                when {
+                    current.checking -> CircularProgressIndicator()
+                    outcome == null || outcome == CoreTaskOutcome.Queued || outcome == CoreTaskOutcome.WaitingApproval ->
+                        OutlinedButton(onClick = { checkTask(current) }) {
+                            Text(if (outcome == null) "Check task status" else "Refresh task status")
+                        }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun CreatedTaskContent(task: CoreWorkTask, open: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(task.title, style = MaterialTheme.typography.titleMedium)
+            Text(task.status.label, style = MaterialTheme.typography.bodyMedium)
+            Button(onClick = open) { Text("Open task") }
         }
     }
 }

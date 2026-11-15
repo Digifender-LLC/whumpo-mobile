@@ -51,11 +51,39 @@ organization session changes.
 From **Work**, choose **New task**, a workspace, and a project. The preview reads
 available choices from `GET /v1/workspaces` and `GET /v1/projects?workspaceId=…`,
 then submits the title and optional description to `POST /v1/tasks`. A valid
-acceptance shows whether the command is queued or awaiting approval. The task
-appears in Work after the server applies the command.
+acceptance shows whether the command is queued or awaiting approval. An
+acceptance does not mean the task exists. **Check task status** reads
+`GET /v1/effects/{effectId}` for the exact accepted effect and run in the
+session that submitted it. The screen reports queued, awaiting approval,
+failed or canceled. Only a confirmed effect names a task. The preview then
+reads that task with `GET /v1/tasks/{taskId}` and shows the canonical task,
+which may have moved to another project since creation. **Open task** reads
+current detail by that exact task ID, so a later move within the organization
+also remains readable. Website receipts use the displayed task's current
+project. The adapter rejects
+an effect or task with a different ID, run or task binding. A replayed
+acceptance must name the same effect and run. Checking status never resends
+the task request.
 
 If acceptance is uncertain, **Retry same request** resends the frozen draft with
 its original idempotency key. Leaving the form discards this in-memory retry
 state. Check Work for the task before creating it again. A new draft uses a new
 key. Changing organizations clears the form and prevents an old response from
 updating the new organization's screen.
+
+## Task outcome qualification
+
+The task outcome increment passed 400 shared JVM tests and 501 Android host
+tests with no failures or skips. Both debug variants and their instrumentation
+APKs built, and both lint tasks passed. App unit tasks reported `NO-SOURCE`.
+The local APK keeps the preview non-exported; the deployed APK omits it.
+
+Synthetic tests cover all effect outcomes, exact effect/run/task bindings,
+uncertain submission with the original key, replay identity, canonical task
+moves, old-organization responses and delayed unauthorized responses. A late
+acceptance cannot update a request handle after its session changes. The
+existing response limits and session lifetime checks remain in effect.
+
+These are local build and transport tests. No device interaction, instrumented
+test execution, live Worker sign-in or signed-release qualification ran for
+this increment.

@@ -109,6 +109,11 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
             key = requestKey, expectedStatus = 202))
     }
 
+    internal suspend fun effect(token: String, effectId: String): CoreEffect {
+        require(coreIdentifier.matches(effectId))
+        return json.decodeFromString(call(token, "/v1/effects/$effectId"))
+    }
+
     private suspend fun call(
         token: String?,
         path: String,

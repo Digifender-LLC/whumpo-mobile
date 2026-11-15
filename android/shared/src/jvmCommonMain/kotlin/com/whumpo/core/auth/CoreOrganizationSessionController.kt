@@ -3,6 +3,7 @@ package com.whumpo.core.auth
 import com.whumpo.core.account.CoreAccountScope
 import com.whumpo.core.api.CORE_MAX_VERSION
 import com.whumpo.core.api.CoreApiClient
+import com.whumpo.core.api.CoreEffectState
 import com.whumpo.core.api.CoreHttpException
 import com.whumpo.core.api.CoreMembershipPage
 import com.whumpo.core.api.CoreNewTask
@@ -10,6 +11,7 @@ import com.whumpo.core.api.CoreProjectChoice
 import com.whumpo.core.api.CoreProjectChoices
 import com.whumpo.core.api.CoreTaskCommandAcceptance
 import com.whumpo.core.api.CoreTaskCommandStatus
+import com.whumpo.core.api.CoreTaskOutcome
 import com.whumpo.core.api.CoreWorkspaceChoices
 import com.whumpo.core.api.CoreOrganizationEntitlements
 import com.whumpo.core.api.CoreOrganizationProfile
@@ -137,6 +139,14 @@ class CoreOrganizationSessionController(
         }
     }
 
+    /** Reads the current task by identity, allowing an authorized move within the organization. */
+    suspend fun canonicalTask(taskId: String): CoreWorkTask = request { current ->
+        api.task(current.token, taskId).also { task ->
+            verifyTask(task)
+            if (task.id != taskId) throw CoreProtocolException()
+        }
+    }
+
     /** Null means the project has no reserved website target. */
     suspend fun websiteReceipts(projectId: String, before: String? = null, limit: Int = 10): CoreWebsiteHistoryPage? =
         request { current ->
@@ -186,7 +196,10 @@ class CoreOrganizationSessionController(
         internal val epoch: Long,
         internal val key: String,
         internal val draft: CoreNewTask,
-    )
+    ) {
+        /** The verified acceptance for this exact request key; guarded by the controller lock. */
+        internal var acceptance: CoreTaskCommandAcceptance? = null
+    }
 
     fun prepareTaskCreation(epoch: Long, project: CoreProjectChoice, title: String, description: String): TaskCreation {
         require(coreIdentifier.matches(project.id))
@@ -202,9 +215,7 @@ class CoreOrganizationSessionController(
     }
 
     suspend fun createTask(submission: TaskCreation): CoreTaskCommandAcceptance = request { current ->
-        if (current.state.epoch != submission.epoch || current.state.scope != submission.scope) {
-            throw CancellationException("Core session changed")
-        }
+        verifySubmission(submission, current)
         if (current.state.session.role == CoreRole.viewer) throw CoreHttpException(403)
         api.createTask(current.token, submission.draft, submission.key).also { accepted ->
             if (!coreIdentifier.matches(accepted.runId) || !coreIdentifier.matches(accepted.effectId) ||
@@ -213,6 +224,50 @@ class CoreOrganizationSessionController(
                     CoreTaskCommandStatus.WaitingApproval -> accepted.approvalId?.let(coreIdentifier::matches) != true
                 }
             ) throw CoreProtocolException()
+            val context = currentCoroutineContext()
+            synchronized(lock) {
+                context.ensureActive()
+                if (credential !== current) throw CancellationException("Core session changed")
+                requireCredential()
+                val previous = submission.acceptance
+                if (previous != null && (previous.runId != accepted.runId || previous.effectId != accepted.effectId)) {
+                    throw CoreProtocolException()
+                }
+                submission.acceptance = accepted
+            }
+        }
+    }
+
+    /**
+     * Reads the outcome of the effect accepted for [submission] in its initiating session. A confirmed effect
+     * resolves to the canonical task, which may have moved to another project since creation.
+     */
+    suspend fun taskOutcome(submission: TaskCreation): CoreTaskOutcome = request { current ->
+        verifySubmission(submission, current)
+        val accepted = checkNotNull(synchronized(lock) { submission.acceptance }) { "Task command was not accepted" }
+        val effect = api.effect(current.token, accepted.effectId)
+        if (effect.id != accepted.effectId || effect.runId != accepted.runId ||
+            (effect.state == CoreEffectState.Confirmed) != (effect.taskId != null) ||
+            effect.taskId?.let(coreIdentifier::matches) == false) throw CoreProtocolException()
+        when (effect.state) {
+            CoreEffectState.Queued -> CoreTaskOutcome.Queued
+            CoreEffectState.WaitingApproval -> CoreTaskOutcome.WaitingApproval
+            CoreEffectState.Failed -> CoreTaskOutcome.Failed
+            CoreEffectState.Canceled -> CoreTaskOutcome.Canceled
+            CoreEffectState.Confirmed -> {
+                val taskId = checkNotNull(effect.taskId)
+                verifyCurrent(current)
+                val task = api.task(current.token, taskId)
+                verifyTask(task)
+                if (task.id != taskId) throw CoreProtocolException()
+                CoreTaskOutcome.Confirmed(task)
+            }
+        }
+    }
+
+    private fun verifySubmission(submission: TaskCreation, current: Credential) {
+        if (current.state.epoch != submission.epoch || current.state.scope != submission.scope) {
+            throw CancellationException("Core session changed")
         }
     }
 
