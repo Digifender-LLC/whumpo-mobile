@@ -87,3 +87,47 @@ existing response limits and session lifetime checks remain in effect.
 These are local build and transport tests. No device interaction, instrumented
 test execution, live Worker sign-in or signed-release qualification ran for
 this increment.
+
+## Today
+
+After passkey sign-in, choose **Open Today** in the local preview. The screen
+reads `GET /v1/briefing/today` with no query parameters and shows blocked
+priorities, deadlines, pending decisions, verified task results and website
+activity for the server's rolling window. **Refresh** reads the briefing again.
+Truncated sections say that more items exist. An empty briefing, an empty
+section and absent website activity each have their own label.
+
+Source kinds stay distinct. A pending decision or a website change awaiting
+review is labeled as pending and never as completed. Verified task results
+are task-effect receipts; website receipts appear only under website activity.
+The preview does not offer native approval decisions.
+
+Selecting a blocked priority or deadline reads that exact task ID through
+`GET /v1/tasks/{taskId}`, so a task that has since moved projects stays
+readable. The adapter rejects a different task ID or a version older than the
+briefing row. Selecting a website receipt reads the project's site target and
+then its history at the receipt's exact version through the exclusive `before`
+cursor with a limit of one. The history entry must match the target, effect,
+operation, artifact digest and, for publications, build. A version the history
+no longer lists has its own message. Reviews have no receipt to open.
+
+The briefing response schema has no organization field. The adapter binds each
+briefing to the session epoch and scope that read it, discards a response that
+arrives after a switch or sign-out, and refuses navigation from a briefing of an
+earlier session. A late unauthorized response from the old session does not
+clear the replacement session. Validation covers the exact 24-hour UTC windows, section
+limits and truncation, the `empty` flag, provenance, source kinds, identifiers,
+versions, timestamps, website kind and operation pairing, review-only fields,
+and duplicate rows within each section. Cross-section source reuse is allowed.
+An empty truncated section remains visible as omitted items, not an all-clear.
+The client reads at most 256 KiB of JSON plus one overflow byte for the compact
+briefing rows; the 64 KiB default for other routes is unchanged. The server
+proof-processing budget is separate from the response envelope.
+
+`CoreTodayTest` covers these cases with synthetic MockEngine payloads. Integrated
+verification passed 407 JVM tests and 508 Android host tests, with no failures
+or skips. Both debug variants and instrumentation APKs built; both lint tasks
+passed. App unit tasks reported `NO-SOURCE`. The local preview remains
+non-exported and absent from the deployed variant. These are local transport
+and build checks; no device interaction, instrumented test execution, live
+Worker sign-in or signed-release qualification ran for this increment.

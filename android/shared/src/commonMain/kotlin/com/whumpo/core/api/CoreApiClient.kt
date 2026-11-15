@@ -114,6 +114,10 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return json.decodeFromString(call(token, "/v1/effects/$effectId"))
     }
 
+    /** The route accepts no query parameters. */
+    internal suspend fun todayBriefing(token: String): CoreTodayBriefing =
+        json.decodeFromString(call(token, "/v1/briefing/today", maxResponseBytes = CORE_TODAY_MAX_BYTES))
+
     private suspend fun call(
         token: String?,
         path: String,

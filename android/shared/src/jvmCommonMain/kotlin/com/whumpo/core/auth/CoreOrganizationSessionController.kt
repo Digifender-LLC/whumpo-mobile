@@ -19,6 +19,12 @@ import com.whumpo.core.api.CoreProtocolException
 import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreSession
 import com.whumpo.core.api.CoreSessionToken
+import com.whumpo.core.api.CORE_TODAY_SECTION_LIMIT
+import com.whumpo.core.api.CoreTaskStatus
+import com.whumpo.core.api.CoreTodayBriefing
+import com.whumpo.core.api.CoreTodaySiteActivity
+import com.whumpo.core.api.CoreTodaySiteKind
+import com.whumpo.core.api.CoreTodayTaskSource
 import com.whumpo.core.api.CoreWebsiteHistoryItem
 import com.whumpo.core.api.CoreWebsiteHistoryPage
 import com.whumpo.core.api.CoreWebsiteOperation
@@ -27,7 +33,10 @@ import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.coreBearer
 import com.whumpo.core.api.coreDigest
 import com.whumpo.core.api.coreIdentifier
+import com.whumpo.core.api.coreTimestamp
 import java.text.Normalizer
+import java.time.Instant
+import java.time.format.DateTimeParseException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -149,27 +158,175 @@ class CoreOrganizationSessionController(
 
     /** Null means the project has no reserved website target. */
     suspend fun websiteReceipts(projectId: String, before: String? = null, limit: Int = 10): CoreWebsiteHistoryPage? =
-        request { current ->
-            val target = try {
-                api.websiteTarget(current.token, projectId)
-            } catch (error: CoreHttpException) {
-                if (error.status == 404 && before == null) return@request null
-                throw error
-            }
-            verifyOrganization(target.orgId, current)
-            if (target.projectId != projectId || !coreIdentifier.matches(target.id) ||
-                target.version !in 1..CORE_MAX_VERSION) throw CoreProtocolException()
-            verifyCurrent(current)
-            api.websiteHistory(current.token, target.id, before, limit).also { page ->
-                val versions = page.items.map { it.receipt.targetVersion }
-                if (page.items.size > limit ||
-                    versions.zipWithNext().any { (first, second) -> first <= second } ||
-                    (before != null && versions.any { it >= before.toLong() }) ||
-                    (page.nextCursor != null && page.nextCursor != versions.lastOrNull()?.toString())
-                ) throw CoreProtocolException()
-                page.items.forEach { verifyReceipt(it, target.id, current) }
+        request { current -> readWebsiteReceipts(current, projectId, before, limit) }
+
+    private suspend fun readWebsiteReceipts(
+        current: Credential,
+        projectId: String,
+        before: String?,
+        limit: Int,
+    ): CoreWebsiteHistoryPage? {
+        val target = try {
+            api.websiteTarget(current.token, projectId)
+        } catch (error: CoreHttpException) {
+            if (error.status == 404 && before == null) return null
+            throw error
+        }
+        verifyOrganization(target.orgId, current)
+        if (target.projectId != projectId || !coreIdentifier.matches(target.id) ||
+            target.version !in 1..CORE_MAX_VERSION) throw CoreProtocolException()
+        verifyCurrent(current)
+        return api.websiteHistory(current.token, target.id, before, limit).also { page ->
+            val versions = page.items.map { it.receipt.targetVersion }
+            if (page.items.size > limit ||
+                versions.zipWithNext().any { (first, second) -> first <= second } ||
+                (before != null && versions.any { it >= before.toLong() }) ||
+                (page.nextCursor != null && page.nextCursor != versions.lastOrNull()?.toString())
+            ) throw CoreProtocolException()
+            page.items.forEach { verifyReceipt(it, target.id, current) }
+        }
+    }
+
+    /** A verified briefing bound to the organization session that read it. */
+    class Today internal constructor(
+        val epoch: Long,
+        internal val scope: CoreAccountScope,
+        val briefing: CoreTodayBriefing,
+    )
+
+    suspend fun today(): Today = request { current ->
+        val briefing = api.todayBriefing(current.token)
+        verifyToday(briefing)
+        Today(current.state.epoch, current.state.scope, briefing)
+    }
+
+    /**
+     * Reads the current task named by a blocked or deadline item of [today] by its exact canonical ID.
+     * The task may have moved to another project since the briefing was generated.
+     */
+    suspend fun todayTask(today: Today, source: CoreTodayTaskSource): CoreWorkTask {
+        val sections = today.briefing.sections
+        require(sections.blocked.items.any { it.source === source } || sections.deadlines.items.any { it.source === source })
+        return request { current ->
+            verifyTodayScope(today, current)
+            api.task(current.token, source.taskId).also { task ->
+                verifyTask(task)
+                if (task.id != source.taskId || task.version < source.version) throw CoreProtocolException()
             }
         }
+    }
+
+    /**
+     * Reads the website history entry for a site receipt in [today] at its exact target version and verifies
+     * that it is the same receipt. Null means the history no longer lists that version. Reviews have no receipt.
+     */
+    suspend fun todayWebsiteReceipt(today: Today, activity: CoreTodaySiteActivity): CoreWebsiteHistoryItem? {
+        require(!activity.source.kind.review && today.briefing.sections.siteActivity?.items?.any { it === activity } == true)
+        val source = activity.source
+        // History cursors are exclusive, so the next version selects the newest receipt at or below this one.
+        val before = source.targetVersion.takeIf { it < CORE_MAX_VERSION }?.let { (it + 1).toString() }
+        return request { current ->
+            verifyTodayScope(today, current)
+            val item = readWebsiteReceipts(current, source.projectId, before, 1)?.items?.singleOrNull()
+                ?.takeIf { it.receipt.targetVersion == source.targetVersion } ?: return@request null
+            val receipt = item.receipt
+            if (receipt.targetId != source.targetId || receipt.effectId != source.effectId ||
+                receipt.artifactDigest != source.artifactDigest || item.operation != source.operation ||
+                (item.operation == CoreWebsiteOperation.Publish && item.buildId != source.buildId)
+            ) throw CoreProtocolException()
+            item
+        }
+    }
+
+    private fun verifyTodayScope(today: Today, current: Credential) {
+        if (current.state.epoch != today.epoch || current.state.scope != today.scope) {
+            throw CancellationException("Core session changed")
+        }
+    }
+
+    private fun verifyToday(briefing: CoreTodayBriefing) {
+        val sections = briefing.sections
+        val all = listOf(sections.approvals, sections.blocked, sections.deadlines, sections.verified) +
+            listOfNotNull(sections.siteActivity)
+        val approvals = sections.approvals.items
+        val verified = sections.verified.items
+        val site = sections.siteActivity?.items.orEmpty()
+        val generatedAt = todayInstant(briefing.generatedAt)
+        if (todayInstant(briefing.verifiedSince) != generatedAt.minusSeconds(86_400) ||
+            todayInstant(briefing.dueBefore) != generatedAt.plusSeconds(86_400) ||
+            all.any { it.items.size > CORE_TODAY_SECTION_LIMIT } ||
+            sections.siteActivity?.items?.isEmpty() == true || briefing.empty != all.all { it.items.isEmpty() } ||
+            !distinct(sections.blocked.items.map { it.source.taskId }) ||
+            !distinct(sections.deadlines.items.map { it.source.taskId }) ||
+            !distinct(approvals.map { it.source.approvalId }) || !distinct(approvals.map { it.source.effectId }) ||
+            !distinct(verified.map { it.source.receiptId }) || !distinct(verified.map { it.source.effectId }) ||
+            !distinct(site.map { it.source.effectId })
+        ) throw CoreProtocolException()
+        sections.blocked.items.forEach {
+            verifyTodayRecord(it.provenance, it.observedAt)
+            verifyTodayTask(it.source, it.title)
+            if (it.status != CoreTaskStatus.Blocked) throw CoreProtocolException()
+            it.dueAt?.let(::todayInstant)
+        }
+        sections.deadlines.items.forEach {
+            verifyTodayRecord(it.provenance, it.observedAt)
+            verifyTodayTask(it.source, it.title)
+            if (it.status !in deadlineStatuses) throw CoreProtocolException()
+            todayInstant(it.dueAt)
+        }
+        approvals.forEach {
+            verifyTodayRecord(it.provenance, it.observedAt)
+            val source = it.source
+            if (source.kind != "approval" || !coreIdentifier.matches(source.approvalId) ||
+                !coreIdentifier.matches(source.effectId) || !coreIdentifier.matches(source.runId) ||
+                source.version !in 1..CORE_MAX_VERSION) throw CoreProtocolException()
+            todayInstant(it.expiresAt)
+        }
+        verified.forEach {
+            verifyTodayRecord(it.provenance, it.observedAt)
+            val source = it.source
+            if (source.kind != "effect_receipt" || !coreIdentifier.matches(source.effectId) ||
+                !coreIdentifier.matches(source.receiptId) || !coreIdentifier.matches(source.runId)) throw CoreProtocolException()
+        }
+        site.forEach {
+            verifyTodayRecord(it.provenance, it.observedAt)
+            val source = it.source
+            val minimumVersion = when (source.kind) {
+                CoreTodaySiteKind.PublicationReceipt -> 2L
+                CoreTodaySiteKind.WithdrawalReceipt -> 3L
+                CoreTodaySiteKind.PublicationReview, CoreTodaySiteKind.WithdrawalReview -> 1L
+            }
+            if (source.operation != source.kind.operation ||
+                listOf(source.effectId, source.targetId, source.projectId, source.taskId, source.buildId)
+                    .any { id -> !coreIdentifier.matches(id) } ||
+                !coreDigest.matches(source.artifactDigest) || source.targetVersion !in minimumVersion..CORE_MAX_VERSION ||
+                !it.createdAtValid ||
+                (source.kind.review != it.createdAtPresent) || (source.kind.review != (it.decisionAccess != null))
+            ) throw CoreProtocolException()
+        }
+    }
+
+    private fun verifyTodayRecord(provenance: String, observedAt: String) {
+        if (provenance != "source_record") throw CoreProtocolException()
+        todayInstant(observedAt)
+    }
+
+    private fun verifyTodayTask(source: CoreTodayTaskSource, title: String) {
+        if (source.kind != "task" || !coreIdentifier.matches(source.taskId) || !coreIdentifier.matches(source.projectId) ||
+            source.version !in 1..CORE_MAX_VERSION || title.isEmpty() || title.codePointCount(0, title.length) > 200
+        ) throw CoreProtocolException()
+    }
+
+    private fun todayInstant(value: String): Instant {
+        if (!coreTimestamp.matches(value)) throw CoreProtocolException()
+        return try {
+            Instant.parse(value)
+        } catch (_: DateTimeParseException) {
+            throw CoreProtocolException()
+        }
+    }
+
+    private fun distinct(ids: List<String>) = ids.distinct().size == ids.size
 
     suspend fun workspaceChoices(cursor: String? = null): CoreWorkspaceChoices = request { current ->
         api.workspaceChoices(current.token, cursor, 20).also { page ->
@@ -402,6 +559,12 @@ class CoreOrganizationSessionController(
             if (credential !== current) throw CancellationException("Core session changed")
             requireCredential()
         }
+    }
+
+    private companion object {
+        val deadlineStatuses = setOf(
+            CoreTaskStatus.Backlog, CoreTaskStatus.Ready, CoreTaskStatus.InProgress, CoreTaskStatus.NeedsApproval,
+        )
     }
 
     private suspend fun <T> request(operation: suspend (Credential) -> T): T {

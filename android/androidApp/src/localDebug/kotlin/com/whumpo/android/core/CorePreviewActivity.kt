@@ -87,6 +87,7 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
     var message by remember { mutableStateOf<String?>(null) }
     var page by remember(active?.epoch) { mutableStateOf<OrganizationPreview?>(null) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
+    var showToday by remember(active?.epoch) { mutableStateOf(false) }
     var cursor by remember(active?.epoch) { mutableStateOf<String?>(null) }
     LaunchedEffect(active?.epoch, cursor) {
         if (active != null) {
@@ -111,7 +112,16 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
         }
         return
     }
+    if (active != null && showToday) {
+        key(active.epoch) {
+            CoreTodayPreview(controller, active.epoch, page?.profile?.displayName ?: active.session.orgId) {
+                showToday = false
+            }
+        }
+        return
+    }
     CorePreviewContent(state, page, message,
+        openToday = { showToday = true },
         openWork = { showWork = true },
         signIn = {
             message = null
@@ -152,6 +162,7 @@ private fun CorePreviewContent(
     state: CoreOrganizationSessionController.State,
     page: OrganizationPreview?,
     message: String?,
+    openToday: () -> Unit,
     openWork: () -> Unit,
     signIn: () -> Unit,
     choose: (String) -> Unit,
@@ -180,6 +191,7 @@ private fun CorePreviewContent(
                     page.memberships.nextCursor?.let { Button(onClick = { next(it) }) { Text("More organizations") } }
                     Button(onClick = { next(null) }) { Text("First page") }
                 }
+                Button(onClick = openToday) { Text("Open Today") }
                 Button(onClick = openWork) { Text("Open Work") }
                 Button(onClick = signOut) { Text("Sign out locally") }
             }
