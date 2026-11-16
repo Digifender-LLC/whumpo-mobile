@@ -46,6 +46,8 @@ import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.coreApiClient
 import com.whumpo.core.auth.CoreOrganizationSessionController
+import com.whumpo.core.auth.CoreOwnershipController
+import com.whumpo.android.ui.ownership.CoreOwnershipSection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -110,6 +112,7 @@ internal fun CorePreview(
 ) {
     val state by controller.state.collectAsState()
     val active = state as? CoreOrganizationSessionController.State.Active
+    val ownership = remember(controller, active) { active?.let { CoreOwnershipController(controller, it) } }
     val actions = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
     var page by remember(active?.epoch) { mutableStateOf<OrganizationPreview?>(null) }
@@ -172,6 +175,16 @@ internal fun CorePreview(
         return
     }
     CorePreviewContent(state, page, message,
+        ownership = {
+            if (active != null && ownership != null) {
+                key(active.epoch) {
+                    CoreOwnershipSection(ownership, active.session.userId, active.session.role) {
+                        account.clear()
+                        showSecurity = true
+                    }
+                }
+            }
+        },
         openToday = { showToday = true },
         openWork = { showWork = true },
         tryOnboarding = { showOnboarding = true },
@@ -211,6 +224,7 @@ private fun CorePreviewContent(
     state: CoreOrganizationSessionController.State,
     page: OrganizationPreview?,
     message: String?,
+    ownership: @Composable () -> Unit,
     openToday: () -> Unit,
     openWork: () -> Unit,
     tryOnboarding: () -> Unit,
@@ -251,6 +265,7 @@ private fun CorePreviewContent(
                     page.memberships.nextCursor?.let { Button(onClick = { next(it) }) { Text("More organizations") } }
                     Button(onClick = { next(null) }) { Text("First page") }
                 }
+                ownership()
                 Button(onClick = openToday) { Text("Open Today") }
                 Button(onClick = openWork) { Text("Open Work") }
                 Button(onClick = signOut) { Text("Sign out locally") }

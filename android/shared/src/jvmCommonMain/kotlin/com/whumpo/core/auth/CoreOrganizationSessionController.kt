@@ -1,5 +1,12 @@
 package com.whumpo.core.auth
 
+import com.whumpo.core.api.CoreOwnershipDesignation
+import com.whumpo.core.api.CoreOwnershipMemberPage
+import com.whumpo.core.api.CoreOwnershipProvenance
+import com.whumpo.core.api.CoreOwnershipStatus
+import com.whumpo.core.api.CoreOwnershipTransfer
+import com.whumpo.core.api.CoreTransferStatus
+import com.whumpo.core.api.OwnershipRoute
 import com.whumpo.core.account.CoreAccountScope
 import com.whumpo.core.api.CORE_MAX_VERSION
 import com.whumpo.core.api.CoreApiClient
@@ -438,6 +445,97 @@ class CoreOrganizationSessionController(
                 CoreTaskOutcome.Confirmed(task)
             }
         }
+    }
+
+    internal suspend fun ownership(active: State.Active): CoreOwnershipDesignation = request { current ->
+        verifyOwnershipScope(active, current)
+        api.ownership<CoreOwnershipDesignation>(current.token, OwnershipRoute.Designation).also { value ->
+            value.verify()
+            verifyOrganization(value.orgId, current)
+            if (current.state.session.role != CoreRole.owner && value.pendingTransfer != null) throw CoreProtocolException()
+        }
+    }
+
+    internal suspend fun ownershipTransfer(active: State.Active, offer: CoreOwnershipTransfer): CoreOwnershipTransfer =
+        request { current ->
+            verifyOwnershipScope(active, current)
+            val actor = current.state.session.userId
+            if (offer.orgId != current.state.session.orgId || actor !in listOf(offer.sourceUserId, offer.targetUserId)) {
+                throw CoreHttpException(403)
+            }
+            api.ownership<CoreOwnershipTransfer>(current.token, OwnershipRoute.Transfer(offer.transferId)).also { value ->
+                value.verify()
+                if (!value.matchesOffer(offer)) throw CoreProtocolException()
+            }
+        }
+
+    internal suspend fun ownershipCandidates(active: State.Active): List<CoreOwnershipCandidate> = request { current ->
+        verifyOwnershipScope(active, current)
+        val actor = current.state.session.userId
+        if (current.state.session.role != CoreRole.owner) throw CoreHttpException(403)
+        val candidates = mutableListOf<CoreOwnershipCandidate>()
+        var ownMembership = false
+        var cursor: String? = null
+        repeat(50) {
+            verifyCurrent(current)
+            val page = api.ownership<CoreOwnershipMemberPage>(current.token, OwnershipRoute.Members, cursor = cursor)
+            if (page.items.size > 100) throw CoreProtocolException()
+            var previous = cursor
+            page.items.forEach { member ->
+                if (!coreIdentifier.matches(member.userId) || previous?.let { it >= member.userId } == true ||
+                    member.version !in 1..CORE_MAX_VERSION ||
+                    member.revokedAt?.encodeToByteArray()?.size?.let { it !in 1..64 } == true
+                ) throw CoreProtocolException()
+                previous = member.userId
+                if (member.role == CoreRole.owner && member.revokedAt == null) {
+                    if (member.userId == actor) ownMembership = true
+                    else candidates += CoreOwnershipCandidate(member.userId, member.version)
+                }
+            }
+            val next = page.nextCursor
+            if (next == null) {
+                if (!ownMembership) throw CoreProtocolException()
+                return@request candidates.toList()
+            }
+            if (page.items.size != 100 || next != previous) throw CoreProtocolException()
+            cursor = next
+        }
+        throw CoreProtocolException()
+    }
+
+    internal suspend fun writeOwnership(attempt: CoreOwnershipAttempt) = request { current ->
+        verifyOwnershipScope(attempt.active, current)
+        val actor = current.state.session.userId
+        val review = attempt.review
+        val transfer = review.transfer
+        when (review.action) {
+            CoreOwnershipAction.Claim, CoreOwnershipAction.Accept -> {
+                val result = api.ownership<CoreOwnershipDesignation>(current.token, attempt.route, attempt.body, attempt.version, attempt.key)
+                result.verify()
+                verifyOrganization(result.orgId, current)
+                val expectedVersion = transfer?.designationVersion?.plus(1) ?: 1L
+                val provenance = if (transfer == null) CoreOwnershipProvenance.owner_claim else CoreOwnershipProvenance.transfer
+                if (result.status != CoreOwnershipStatus.designated || result.primaryOwnerUserId != actor ||
+                    result.version != expectedVersion || result.provenance != provenance || result.pendingTransfer != null
+                ) throw CoreProtocolException()
+            }
+            CoreOwnershipAction.Offer, CoreOwnershipAction.Cancel -> {
+                val result = api.ownership<CoreOwnershipTransfer>(current.token, attempt.route, attempt.body, attempt.version, attempt.key)
+                result.verify()
+                verifyOrganization(result.orgId, current)
+                if (review.action == CoreOwnershipAction.Offer) {
+                    if (result.sourceUserId != actor || result.targetUserId != review.target?.userId ||
+                        result.targetMembershipVersion != review.target.membershipVersion || result.designationVersion != attempt.version
+                    ) throw CoreProtocolException()
+                } else if (transfer == null || !result.matchesOffer(transfer) || result.status != CoreTransferStatus.cancelled ||
+                    actor !in listOf(result.sourceUserId, result.targetUserId)
+                ) throw CoreProtocolException()
+            }
+        }
+    }
+
+    private fun verifyOwnershipScope(active: State.Active, current: Credential) {
+        if (current.state !== active) throw CancellationException("Core session changed")
     }
 
     class RecoveryProject internal constructor(internal val epoch: Long, val id: String)

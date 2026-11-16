@@ -66,3 +66,11 @@ Release configuration reads `WHUMPO_UPLOAD_STORE_FILE`, `WHUMPO_UPLOAD_STORE_PAS
 `WHUMPO_UPLOAD_KEY_ALIAS` and `WHUMPO_UPLOAD_KEY_PASSWORD` only from the environment.
 Do not provide these to public contribution jobs. If signing configuration is incomplete, a release build uses the debug identity
 and a `-debugsigned` suffix. Official releases require complete signing configuration. This repository contains no release publishing job.
+
+### Primary owner controls
+
+In the connected Core preview, open **Show primary owner details** on the Organization screen. The designation shows the stored user ID, version and source. Owners can review a claim when the organization is undesignated. The current primary owner can load eligible owners and review an offer for a specific recipient. The recipient can review acceptance, and the parties can review cancellation.
+
+Confirming sends the reviewed action. If the designation or transfer changes, refresh the details and review the action again. When the service cannot confirm a request, **Retry exact request** sends the same request for the active workspace session. A new session clears the saved retry. Claim, offer and acceptance can require a recent verified sign-in. **Sign in again** opens the existing account sign-in flow for passkeys or password and authenticator code.
+
+The shared JVM suite uses synthetic responses to verify request shape, closed response decoding, pagination, review invalidation, exact replay and session switching. Android host tests also exercise the claim review and retry controls at large text size. See [Android verification](android-verification.md) for the full client gate.

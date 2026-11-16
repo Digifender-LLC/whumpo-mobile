@@ -7,6 +7,8 @@ import io.ktor.client.request.parameter
 import io.ktor.client.request.prepareRequest
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsChannel
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
 import io.ktor.http.HttpMethod
 import io.ktor.utils.io.readBuffer
 import kotlinx.io.readByteArray
@@ -59,6 +61,24 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
     internal suspend fun organizations(token: String, cursor: String?, limit: Int): CoreMembershipPage {
         require(limit in 1..50 && (cursor == null || coreIdentifier.matches(cursor)))
         return json.decodeFromString(call(token, "/v1/auth/organizations", cursor = cursor, limit = limit))
+    }
+
+    internal suspend inline fun <reified T> ownership(
+        token: String,
+        route: OwnershipRoute,
+        body: String? = null,
+        version: Long? = null,
+        key: String? = null,
+        cursor: String? = null,
+    ): T {
+        require(route.write == (body != null) && route.write == (key != null))
+        require(key == null || coreIdentifier.matches(key))
+        require(version == null || (route.write && version in 1..CORE_MAX_VERSION))
+        require(cursor == null || (route == OwnershipRoute.Members && coreIdentifier.matches(cursor)))
+        val raw = call(token, route.path, if (route.write) HttpMethod.Post else HttpMethod.Get, body,
+            cursor = cursor, limit = if (route == OwnershipRoute.Members) 100 else null,
+            version = version, key = key, requireJson = true)
+        return decodeOwnership(raw)
     }
 
     internal suspend fun profile(token: String): CoreOrganizationProfile =
@@ -209,6 +229,7 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         workspaceId: String? = null,
         expectedStatus: Int = 200,
         accountAuthority: SecurityAuthority? = null,
+        requireJson: Boolean = false,
     ): String {
         require(token == null || coreBearer.matches(token)) { "Invalid core bearer format" }
         require(accountAuthority == null || (token == null && accountGrantBearer.matches(accountAuthority.token)))
@@ -231,6 +252,9 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
             if (response.status.value != expectedStatus) {
                 if (response.status.value in 200..299) throw CoreProtocolException()
                 throw CoreHttpException(response.status.value)
+            }
+            if (requireJson && response.contentType()?.withoutParameters() != ContentType.Application.Json) {
+                throw CoreProtocolException()
             }
             val bytes = response.bodyAsChannel().readBuffer(maxResponseBytes.toLong() + 1).readByteArray()
             if (bytes.size > maxResponseBytes) throw CoreProtocolException()
