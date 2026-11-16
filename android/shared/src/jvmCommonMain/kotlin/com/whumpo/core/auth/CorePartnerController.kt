@@ -446,7 +446,9 @@ class CorePartnerController(
     suspend fun verifyTask(step: PartnerRunStep) = perform {
         val run = current.run ?: return@perform
         update { copy(proof = null) }
-        val proof = protocol.verifyTask(run, step)
+        val source = current.savedForRun?.takeIf { it.id == run.sourceMessageId }
+            ?: current.messages.find { it.id == run.sourceMessageId && it.role == PartnerMessageRole.user }
+        val proof = protocol.verifyTask(run, step, source?.userId)
         update { copy(proof = proof) }
     }
 

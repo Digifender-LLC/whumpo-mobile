@@ -405,6 +405,67 @@ class CorePartnerControllerTest {
     }
 
     @Test
+    fun noApprovalTransitionAcceptsBoundHumanCompletionAndRejectsInconsistentEvidence() = runTest {
+        var actor = "user-1"
+        var kind = "human_assertion"
+        var status = "done"
+        var version = 2L
+        var taskReads = 0
+        fixture(handler = { request ->
+            when (request.url.encodedPath) {
+                "/v1/conversations" -> json(directory("a"))
+                "/v1/conversations/a/metadata" -> json(topic("a"))
+                "/v1/conversations/a/messages" -> json(page(listOf(message(1),
+                    """{"id":"outcome","userId":"user-1","sequence":2,"role":"assistant","content":"Outcome","createdAt":"$instant","runId":"run-1","receiptIds":["receipt-1"]}""",
+                )))
+                "/v1/agent-runs/run-1" -> json(
+                    """{"id":"run-1","conversationId":"a","sourceMessageId":"${id(1)}","status":"completed","planner":"local-task-fixture@1","deadlineAt":2000000000000,"modelCalls":1,"toolCalls":1,"steps":[{"index":1,"tool":"tasks.transition@1","effectId":"effect-1","result":{"taskId":"task-1","taskVersion":2,"receiptId":"receipt-1"}}]}""",
+                )
+                "/v1/effects/effect-1" -> json(
+                    """{"id":"effect-1","runId":"effect-run-1","state":"confirmed","version":2,"payloadHash":"$digest","policyRevision":2,"taskId":"task-1"}""",
+                )
+                "/v1/effects/effect-1/receipts" -> json(
+                    """{"items":[{"schemaVersion":1,"receiptId":"receipt-1","effectId":"effect-1","orgId":"org-1","runId":"effect-run-1","outcome":"confirmed","verificationMethod":"internal_read_after_write","redactedSummary":"Task marked done","verifiedAt":"$instant","createdAt":"$instant","taskEvidence":{"taskId":"task-1","taskVersion":2,"taskDigest":"$digest"},"completion":{"kind":"$kind","actorId":"$actor"}}]}""",
+                )
+                "/v1/tasks/task-1" -> {
+                    taskReads++
+                    json("""{"id":"task-1","projectId":"project-1","title":"Current task","description":null,"parentTaskId":null,"dueAt":null,"status":"$status","version":$version}""")
+                }
+                else -> error("Unexpected route")
+            }
+        }) { _, _, controller ->
+            controller.openFirst()
+            controller.openRun(controller.state.value.messages.last())
+            val step = assertNotNull(controller.state.value.run).steps.single()
+            controller.verifyTask(step)
+            assertIs<PartnerTaskProof.Verified>(controller.state.value.proof)
+
+            actor = "another-user"
+            controller.verifyTask(step)
+            assertNull(controller.state.value.proof)
+            actor = "../malformed"
+            controller.verifyTask(step)
+            assertNull(controller.state.value.proof)
+            actor = "user-1"
+            kind = "unknown_assertion"
+            controller.verifyTask(step)
+            assertNull(controller.state.value.proof)
+            assertEquals(1, taskReads)
+
+            kind = "human_assertion"
+            status = "ready"
+            controller.verifyTask(step)
+            assertNull(controller.state.value.proof)
+            version++
+            controller.verifyTask(step)
+            val verified = assertIs<PartnerTaskProof.Verified>(controller.state.value.proof)
+            assertEquals(2L, verified.verifiedVersion)
+            assertEquals(3L, verified.task.version)
+            assertEquals(3, taskReads)
+        }
+    }
+
+    @Test
     fun oldConversationSuccessOrUnauthorizedCannotChangeNewConversation() = runTest {
         for (denied in listOf(false, true)) {
             val entered = CompletableDeferred<Unit>()

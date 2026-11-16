@@ -163,7 +163,7 @@ internal class CorePartnerProtocol(
             result.status == if (choice == PartnerDecision.approve) PartnerApprovalStatus.approved else PartnerApprovalStatus.rejected)
     }
 
-    suspend fun verifyTask(run: PartnerRun, step: PartnerRunStep): PartnerTaskProof {
+    suspend fun verifyTask(run: PartnerRun, step: PartnerRunStep, sourceAuthor: String?): PartnerTaskProof {
         checkWire(step in run.steps && step.tool != PartnerTool.Read)
         val effectId = step.effectId ?: throw CoreProtocolException()
         val approval = step.approvalId?.let { approval(run, step) }
@@ -197,12 +197,20 @@ internal class CorePartnerProtocol(
             checkWire(evidence.taskVersion == (proposal.expectedVersion ?: 0) + 1 &&
                 (proposal.taskId == null || proposal.taskId == evidence.taskId))
         }
-        val completionActor = if ((approval?.proposal?.payload?.get("status") as? JsonPrimitive)?.content == "done") {
-            approval.requesterId
-        } else null
-        checkWire(receipt.completion?.actorId == completionActor)
+        val completion = receipt.completion
+        if (approval != null) {
+            val completedBy = if ((approval.proposal.payload["status"] as? JsonPrimitive)?.content == "done") {
+                approval.requesterId
+            } else null
+            checkWire(completion?.actorId == completedBy)
+        }
+        if (completion != null) {
+            checkWire(step.tool == PartnerTool.Transition && coreIdentifier.matches(completion.actorId) &&
+                (approval != null || sourceAuthor == null || completion.actorId == sourceAuthor))
+        }
         val task = sessions.canonicalTaskForPartner(active, evidence.taskId)
-        checkWire(task.version >= evidence.taskVersion)
+        checkWire(task.version >= evidence.taskVersion &&
+            (completion == null || task.version > evidence.taskVersion || task.status == CoreTaskStatus.Done))
         return PartnerTaskProof.Verified(task, receipt.receiptId, evidence.taskVersion)
     }
 }
