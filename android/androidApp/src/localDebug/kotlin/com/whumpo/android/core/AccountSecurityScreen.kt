@@ -6,17 +6,25 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -24,8 +32,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -36,25 +46,37 @@ import com.whumpo.android.ui.theme.WhumpoEntryTheme
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
 import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.core.api.AccountSecurityState
+import com.whumpo.core.api.RecoveryLossMode
+import com.whumpo.core.api.RecoveryReview
+import com.whumpo.core.api.SavedRecoveryProof
 import com.whumpo.core.api.SecurityInvitationPreview
 import com.whumpo.core.api.SecurityAccess
 import com.whumpo.core.api.SecurityAdmission
 import com.whumpo.core.api.SecurityMembershipPage
 import com.whumpo.core.api.SecurityMethodKind
 import com.whumpo.core.api.SecurityMethodStatus
+import com.whumpo.core.api.SecurityPhase
 import com.whumpo.core.api.SecurityProfile
 import com.whumpo.core.api.SecurityPurpose
 import com.whumpo.core.auth.AccountPasskeys
+import com.whumpo.core.auth.AccountSecurityIdentityMismatch
+import com.whumpo.core.auth.AccountSecurityProofRejected
+import com.whumpo.core.auth.AccountSecurityRetryResult
 import com.whumpo.core.auth.CoreAccountSecurityController
 import com.whumpo.core.auth.EnrollmentAcknowledgementLost
+import com.whumpo.core.auth.OneTimeMaterialUnavailable
 import com.whumpo.core.auth.PendingRecoveryDocument
 import com.whumpo.core.auth.PendingTotp
+import com.whumpo.core.auth.RecoveryAcknowledgementLost
+import com.whumpo.core.auth.replacementMethodsReady
+import com.whumpo.core.auth.verifiedSetupCount
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class Entry { Choose, Enrollment, Password, Totp }
+private enum class Entry { Choose, Enrollment, Reserved, Recovery, Password, Totp }
 
 @Composable
 internal fun AccountSecurityScreen(
@@ -66,6 +88,8 @@ internal fun AccountSecurityScreen(
 ) {
     val scope = rememberCoroutineScope()
     val resolver = LocalContext.current.contentResolver
+    val retry by controller.retry.collectAsState()
+    val reviewedRecovery by controller.recoveryReview.collectAsState()
     var entry by remember { mutableStateOf(Entry.Choose) }
     var invitation by remember { mutableStateOf<ReviewedInvitation?>(null) }
     var joining by remember { mutableStateOf(false) }
@@ -78,6 +102,18 @@ internal fun AccountSecurityScreen(
     var exporting by remember { mutableStateOf(false) }
     var leavingFailed by remember { mutableStateOf(false) }
     var organizations by remember { mutableStateOf<SecurityMembershipPage?>(null) }
+    var editingReview by remember { mutableStateOf(false) }
+    var checkingCompletion by remember { mutableStateOf(false) }
+    val offer = state?.recovery?.offer
+    var offerExpired by remember(offer?.id, offer?.expiresAt) { mutableStateOf(false) }
+    LaunchedEffect(offer?.id, offer?.expiresAt) {
+        if (offer != null) {
+            delay((offer.expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
+            offerExpired = true
+            recovery = null
+            written = false
+        }
+    }
 
     fun run(action: suspend () -> Unit) {
         if (busy || exporting) return
@@ -93,6 +129,15 @@ internal fun AccountSecurityScreen(
                 recovery = null
                 totpSetup = null
                 message = "The setup result was lost. Try signing in with the credentials you just set up."
+            } catch (_: RecoveryAcknowledgementLost) {
+                message = "The service did not confirm this step."
+            } catch (_: AccountSecurityProofRejected) {
+                message = "The service rejected the proof. Try again with your passkey or a current authenticator code."
+            } catch (_: AccountSecurityIdentityMismatch) {
+                entry = Entry.Choose
+                message = "Those credentials did not confirm the account you were setting up."
+            } catch (_: OneTimeMaterialUnavailable) {
+                message = "The service confirmed the request without returning its secret. Prepare a fresh one."
             } catch (_: Exception) {
                 message = "Could not complete this step. Check the local service and try again."
             } finally {
@@ -117,16 +162,136 @@ internal fun AccountSecurityScreen(
         }
     }
 
+    fun clearStepSecrets() {
+        recovery = null
+        totpSetup = null
+        written = false
+        organizations = null
+    }
+
+    fun restart(next: Entry, explanation: String? = null) {
+        controller.clear()
+        clearStepSecrets()
+        editingReview = false
+        checkingCompletion = false
+        entry = next
+        message = explanation
+    }
+
+    fun retryStep() {
+        val requested = retry
+        run {
+            when (val result = controller.retryPending()) {
+                is AccountSecurityRetryResult.Material -> {
+                    recovery = result.document
+                    written = false
+                }
+                is AccountSecurityRetryResult.Totp -> totpSetup = result.setup
+                AccountSecurityRetryResult.Updated -> when (requested) {
+                    CoreAccountSecurityController.Retry.Review -> editingReview = false
+                    CoreAccountSecurityController.Retry.SaveMaterial -> {
+                        recovery = null
+                        written = false
+                    }
+                    CoreAccountSecurityController.Retry.VerifyTotp -> totpSetup = null
+                    CoreAccountSecurityController.Retry.Complete -> clearStepSecrets()
+                    else -> Unit
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun materialStep(selectedProfile: SecurityProfile, replacement: Boolean) {
+        val kit = selectedProfile == SecurityProfile.Passkeys
+        val label = if (kit) "recovery kit" else "ten recovery codes"
+        val document = recovery?.takeIf { !offerExpired && offer?.id == it.offerId && offer.generation == it.generation }
+        RecoveryMaterialStep(label, replacement, document != null, written, busy || exporting,
+            prepare = { run { recovery = controller.prepareRecovery(); written = false } },
+            saveFile = {
+                exporting = true
+                try {
+                    export.launch(if (kit) "Whumpo recovery kit.txt" else "Whumpo recovery codes.txt")
+                } catch (_: Exception) {
+                    exporting = false
+                    message = "The document picker could not open."
+                }
+            },
+            confirm = {
+                checkNotNull(document)
+                run {
+                    controller.confirmSaved(document.offerId, document.generation)
+                    recovery = null
+                    written = false
+                }
+            },
+        )
+    }
+
+    @Composable
+    fun methodsStep(snapshot: AccountSecurityState) {
+        val passkeySetup = snapshot.setupProfile == SecurityProfile.Passkeys
+        val passkeysInSetup = snapshot.verifiedSetupCount(SecurityMethodKind.Passkey)
+        val hasPassword = snapshot.verifiedSetupCount(SecurityMethodKind.Password) > 0
+        when {
+            passkeySetup -> {
+                val backup = passkeysInSetup > 0
+                StepTitle(if (backup) "Add a backup passkey" else "Create a passkey")
+                Text(if (backup) "Choose a separate credential, ideally on another device or security key." else "Your device will ask you to verify your identity.")
+                StepButton(if (backup) "Add backup passkey" else "Create passkey", !busy && passkeysConfigured) {
+                    run {
+                        val label = if (backup) "Backup passkey" else "First passkey"
+                        if (!controller.registerPasskey(label, passkeys)) message = "Passkey setup cancelled."
+                    }
+                }
+                if (!passkeysConfigured) Text("This build needs a relying-party host to create passkeys.")
+            }
+            !hasPassword -> {
+                StepTitle("Set your password")
+                PasswordStep("Set password", busy) { username, password ->
+                    run { controller.stagePassword(username, password) }
+                }
+            }
+            else -> {
+                StepTitle("Connect an authenticator")
+                val setup = totpSetup
+                if (setup == null) {
+                    StepButton("Get setup key", !busy) { run { totpSetup = controller.prepareTotp() } }
+                } else {
+                    Text("Enter this setup key in your authenticator, then enter its current code here.")
+                    Text(setup.secret, style = MaterialTheme.typography.titleMedium)
+                    TotpStep("Verify code", busy) { code ->
+                        run { controller.verifyTotp(setup.factorId, code); totpSetup = null }
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun finalProofStep(snapshot: AccountSecurityState) {
+        StepTitle("Verify your sign-in method")
+        if (snapshot.setupProfile == SecurityProfile.Passkeys) {
+            StepButton("Verify with a passkey", !busy && passkeysConfigured) {
+                run { if (!controller.complete(passkeys, "", "")) message = "Verification cancelled." }
+            }
+        } else {
+            Text("If you just used the current authenticator code, wait for a new one.")
+            PasswordProofStep(busy) { password, code -> run { controller.complete(passkeys, password, code) } }
+        }
+    }
+
     fun exit() {
-        if (joining && !busy && !exporting) {
+        if (editingReview && retry == null && !busy && !exporting) {
+            editingReview = false
+            message = null
+        } else if (joining && !busy && !exporting) {
             joining = false
             invitation = null
             message = null
         } else if (entry != Entry.Choose && state == null && !busy && !exporting) {
-            controller.clear()
+            restart(Entry.Choose)
             invitation = null
-            entry = Entry.Choose
-            message = null
         } else if (leavingFailed && !busy && !exporting) {
             controller.clear()
             recovery = null
@@ -155,26 +320,54 @@ internal fun AccountSecurityScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Text("Whumpo", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                when (state?.purpose) {
+                val pending = retry
+                if (pending != null) {
+                    StepTitle("Confirm the last step")
+                    Text("This step is still incomplete here. Retry to check for the service’s confirmation.")
+                    StepButton("Retry last step", !busy, ::retryStep)
+                    when (pending) {
+                        CoreAccountSecurityController.Retry.Secure -> WhumpoQuietButton(onClick = {
+                            restart(Entry.Recovery, "Use the replacement kit or a replacement code you just saved to resume recovery.")
+                        }, enabled = !busy) { Text("Resume with replacement material") }
+                        CoreAccountSecurityController.Retry.Complete -> WhumpoQuietButton(onClick = {
+                            controller.checkCompletionThroughSignIn()
+                            clearStepSecrets()
+                            entry = Entry.Choose
+                            checkingCompletion = true
+                            message = "Completion is unconfirmed. Sign in with the credentials for the same account."
+                        }, enabled = !busy) { Text("Return to sign-in") }
+                        else -> Unit
+                    }
+                } else when (state?.purpose) {
                     null -> when (entry) {
                         Entry.Choose -> {
-                            StepTitle("Choose how to secure your account")
-                            Text("Both setup methods give you the same workspace access.")
-                            StepButton("Set up two passkeys", !busy && passkeysConfigured) {
-                                profile = SecurityProfile.Passkeys
-                                entry = Entry.Enrollment
+                            if (checkingCompletion) {
+                                StepTitle("Check account setup")
+                            } else {
+                                StepTitle("Choose how to secure your account")
+                                Text("Both setup methods give you the same workspace access.")
+                                StepButton("Set up two passkeys", !busy && passkeysConfigured) {
+                                    profile = SecurityProfile.Passkeys
+                                    entry = Entry.Enrollment
+                                }
+                                Text("Recommended. Add a backup passkey and save a recovery kit. Either passkey can sign you in.")
+                                if (!passkeysConfigured) Text("Set a relying-party host for this local build to enable passkeys.")
+                                StepButton("Set up password and authenticator", !busy) {
+                                    profile = SecurityProfile.PasswordTotp
+                                    entry = Entry.Enrollment
+                                }
+                                Text("Use a password and authenticator app, then save ten recovery codes.")
                             }
-                            Text("Recommended. Add a backup passkey and save a recovery kit. Either passkey can sign you in.")
-                            if (!passkeysConfigured) Text("Set a relying-party host for this local build to enable passkeys.")
-                            StepButton("Set up password and authenticator", !busy) {
-                                profile = SecurityProfile.PasswordTotp
-                                entry = Entry.Enrollment
-                            }
-                            Text("Use a password and authenticator app, then save ten recovery codes.")
                             WhumpoQuietButton(onClick = {
                                 run { if (!controller.loginPasskey(passkeys)) message = "Passkey sign-in cancelled." }
                             }, enabled = !busy && passkeysConfigured) { Text("Sign in with a passkey") }
                             WhumpoQuietButton(onClick = { entry = Entry.Password }, enabled = !busy) { Text("Sign in with password and authenticator") }
+                            if (checkingCompletion) {
+                                WhumpoQuietButton(onClick = { restart(Entry.Choose) }, enabled = !busy) { Text("Back to account security") }
+                            } else {
+                                WhumpoQuietButton(onClick = { entry = Entry.Recovery }, enabled = !busy) { Text("Recover an account") }
+                                WhumpoQuietButton(onClick = { entry = Entry.Reserved }, enabled = !busy) { Text("Use a reserved invitation") }
+                            }
                         }
                         Entry.Enrollment -> AdmissionStep(profile, invitation?.preview, busy,
                             preview = { code ->
@@ -203,85 +396,18 @@ internal fun AccountSecurityScreen(
                             StepTitle("Enter your authenticator code")
                             TotpStep("Sign in", busy) { code -> run { controller.loginTotp(code) } }
                         }
+                        Entry.Reserved -> ReservedEnrollmentStep(busy, passkeysConfigured) { selectedProfile, token ->
+                            run { controller.enrollReserved(selectedProfile, token) }
+                        }
+                        Entry.Recovery -> SavedRecoveryStep(busy) { locator, proof ->
+                            run { controller.startRecovery(locator, proof) }
+                        }
                     }
 
-                    SecurityPurpose.Enrollment -> {
-                        val passkeySetup = state.setupProfile == SecurityProfile.Passkeys
-                        val stagedPasskeys = state.methods.count { it.kind == SecurityMethodKind.Passkey && it.state == SecurityMethodStatus.Staged && it.verified }
-                        val hasPassword = state.methods.any { it.kind == SecurityMethodKind.Password && it.state == SecurityMethodStatus.Staged && it.verified }
-                        val hasTotp = state.methods.any { it.kind == SecurityMethodKind.Totp && it.state == SecurityMethodStatus.Staged && it.verified }
-                        when {
-                            passkeySetup && stagedPasskeys < 2 -> {
-                                val backup = stagedPasskeys == 1
-                                StepTitle(if (backup) "Add a backup passkey" else "Create your first passkey")
-                                Text(if (backup) "Choose a second credential, ideally on another device or security key." else "Your device will ask you to verify your identity.")
-                                StepButton(if (backup) "Add backup passkey" else "Create passkey", !busy) {
-                                    run {
-                                        val label = if (backup) "Backup passkey" else "First passkey"
-                                        if (!controller.registerPasskey(label, passkeys)) message = "Passkey setup cancelled."
-                                    }
-                                }
-                            }
-                            !passkeySetup && !hasPassword -> {
-                                StepTitle("Set your password")
-                                PasswordStep("Set password", busy) { username, password ->
-                                    run { controller.stagePassword(username, password) }
-                                }
-                            }
-                            !passkeySetup && !hasTotp -> {
-                                StepTitle("Connect an authenticator")
-                                val setup = totpSetup
-                                if (setup == null) {
-                                    StepButton("Get setup key", !busy) { run { totpSetup = controller.prepareTotp() } }
-                                } else {
-                                    Text("Enter this setup key in your authenticator, then enter its current code here.")
-                                    Text(setup.secret, style = MaterialTheme.typography.titleMedium)
-                                    TotpStep("Verify code", busy) { code ->
-                                        run { controller.verifyTotp(setup.factorId, code); totpSetup = null }
-                                    }
-                                }
-                            }
-                            state.recovery.offer?.saved != true -> {
-                                val label = if (passkeySetup) "recovery kit" else "ten recovery codes"
-                                StepTitle("Save your $label")
-                                Text("Choose a trusted location that only you can access. You’ll need this file if you lose your sign-in methods.")
-                                val document = recovery
-                                when {
-                                    document == null -> StepButton("Prepare $label", !busy) {
-                                        run { recovery = controller.prepareRecovery() }
-                                    }
-                                    !written -> StepButton("Save document", !busy && !exporting) {
-                                        exporting = true
-                                        try {
-                                            export.launch(if (passkeySetup) "Whumpo recovery kit.txt" else "Whumpo recovery codes.txt")
-                                        } catch (_: Exception) {
-                                            exporting = false
-                                            message = "The document picker could not open."
-                                        }
-                                    }
-                                    else -> StepButton("I saved my $label", !busy) {
-                                        run {
-                                            controller.confirmSaved(document.offerId, document.generation)
-                                            recovery = null
-                                            written = false
-                                        }
-                                    }
-                                }
-                            }
-                            else -> {
-                                StepTitle("Verify your sign-in method")
-                                if (passkeySetup) {
-                                    StepButton("Verify with a passkey", !busy) {
-                                        run { if (!controller.complete(passkeys, "", "")) message = "Verification cancelled." }
-                                    }
-                                } else {
-                                    Text("If you just used the current authenticator code, wait for a new one.")
-                                    PasswordProofStep(busy) { password, code ->
-                                        run { controller.complete(passkeys, password, code) }
-                                    }
-                                }
-                            }
-                        }
+                    SecurityPurpose.Enrollment -> when {
+                        !state.replacementMethodsReady() -> methodsStep(state)
+                        offer?.saved != true || offerExpired -> materialStep(checkNotNull(state.setupProfile), replacement = false)
+                        else -> finalProofStep(state)
                     }
 
                     SecurityPurpose.Account -> {
@@ -333,8 +459,39 @@ internal fun AccountSecurityScreen(
                     }
 
                     SecurityPurpose.Recovery -> {
-                        StepTitle("Account recovery")
-                        Text("This grant has restricted access.")
+                        val review = reviewedRecovery
+                        when {
+                            state.phase == SecurityPhase.Recovering -> {
+                                if (state.replacementMethodsReady()) finalProofStep(state) else methodsStep(state)
+                            }
+                            review == null || editingReview -> key(state.attemptId, review?.id) {
+                                ReviewRecoveryStep(state, review, busy, passkeysConfigured) { mode, lost, selectedProfile ->
+                                    run {
+                                        controller.reviewRecovery(mode, lost, selectedProfile)
+                                        editingReview = false
+                                    }
+                                }
+                            }
+                            offer?.saved != true || offerExpired -> {
+                                ReviewedRecoveryStep(state, review)
+                                materialStep(review.completionProfile, replacement = true)
+                            }
+                            else -> {
+                                ReviewedRecoveryStep(state, review)
+                                Text("Securing the account replaces your old recovery material and removes the sign-in methods marked lost. You’ll still need to verify your sign-in method.")
+                                StepButton("Secure account", !busy) { run { controller.secureRecovery() } }
+                            }
+                        }
+                        if (review != null && !editingReview && state.phase != SecurityPhase.Recovering) {
+                            WhumpoQuietButton(onClick = {
+                                run {
+                                    controller.refreshRecoveryReview()
+                                    recovery = null
+                                    written = false
+                                    editingReview = true
+                                }
+                            }, enabled = !busy && !exporting) { Text("Edit recovery choices") }
+                        }
                     }
                 }
                 message?.let { Text(it, Modifier.semantics { liveRegion = LiveRegionMode.Polite }, color = MaterialTheme.colorScheme.error) }
@@ -342,7 +499,9 @@ internal fun AccountSecurityScreen(
                 WhumpoQuietButton(onClick = ::exit, enabled = !busy && !exporting) {
                     Text(when {
                         leavingFailed -> "Close and clear local session"
+                        editingReview && retry == null -> "Back"
                         state?.purpose == SecurityPurpose.Enrollment -> "Cancel setup"
+                        state?.purpose == SecurityPurpose.Recovery -> "Close recovery"
                         joining -> "Back to organizations"
                         state?.purpose == SecurityPurpose.Account -> "Sign out"
                         entry != Entry.Choose -> "Back"
@@ -476,4 +635,157 @@ private fun StepTitle(text: String) {
 @Composable
 private fun StepButton(text: String, enabled: Boolean, click: () -> Unit) {
     WhumpoPrimaryButton(onClick = click, enabled = enabled, modifier = Modifier.fillMaxWidth()) { Text(text) }
+}
+
+@Composable
+private fun ReservedEnrollmentStep(busy: Boolean, passkeysConfigured: Boolean, submit: (SecurityProfile, String) -> Unit) {
+    var profile by remember {
+        mutableStateOf(if (passkeysConfigured) SecurityProfile.Passkeys else SecurityProfile.PasswordTotp)
+    }
+    var token by remember { mutableStateOf("") }
+    StepTitle("Use a reserved invitation")
+    Text("Enter the token provided by your operator for your reserved account and organization membership.")
+    SecretField("Reserved invitation token", token, { token = it.take(80) }, busy)
+    ProfileChoices(profile, busy, passkeysConfigured) { profile = it }
+    StepButton("Start reserved setup", !busy && token.trim().length == 43) {
+        val secret = token.trim()
+        token = ""
+        submit(profile, secret)
+    }
+}
+
+@Composable
+private fun SavedRecoveryStep(busy: Boolean, submit: (String, SavedRecoveryProof) -> Unit) {
+    var kit by remember { mutableStateOf(true) }
+    var locator by remember { mutableStateOf("") }
+    StepTitle("Recover an account")
+    Text("Open your saved recovery file and enter the recovery locator and either the kit key or one unused code.")
+    Column(Modifier.selectableGroup()) {
+        SecurityChoice("Recovery kit", kit, !busy) { kit = true }
+        SecurityChoice("Recovery codes", !kit, !busy) { kit = false }
+    }
+    SecretField("Recovery locator", locator, { locator = it.take(160) }, busy)
+    key(kit) {
+        var material by remember { mutableStateOf("") }
+        SecretField(if (kit) "Recovery kit key" else "Unused recovery code", material, { material = it.take(160) }, busy)
+        StepButton("Continue recovery", !busy && locator.isNotBlank() && material.isNotBlank()) {
+            val proof = if (kit) SavedRecoveryProof.Kit(material.trim()) else SavedRecoveryProof.Code(material.trim())
+            val reference = locator.trim()
+            locator = ""
+            material = ""
+            submit(reference, proof)
+        }
+    }
+}
+
+@Composable
+private fun ReviewRecoveryStep(
+    state: AccountSecurityState,
+    previous: RecoveryReview?,
+    busy: Boolean,
+    passkeysConfigured: Boolean,
+    submit: (RecoveryLossMode, Set<String>, SecurityProfile) -> Unit,
+) {
+    val active = state.methods.filter { it.state == SecurityMethodStatus.Active }
+    var lost by remember(active.map { it.id }) { mutableStateOf(previous?.lostIds?.toSet().orEmpty()) }
+    var profile by remember {
+        mutableStateOf(previous?.completionProfile?.takeIf { it != SecurityProfile.Passkeys || passkeysConfigured }
+            ?: if (passkeysConfigured) SecurityProfile.Passkeys else SecurityProfile.PasswordTotp)
+    }
+    StepTitle("Which sign-in methods did you lose?")
+    Text("Select the methods you can no longer use. You’ll review the changes before they take effect.")
+    if (active.isEmpty()) Text("There are no current sign-in methods to mark lost.")
+    active.forEachIndexed { index, method ->
+        key(method.id) {
+            val checked = method.id in lost
+            Row(
+                Modifier.fillMaxWidth().toggleable(
+                    value = checked, enabled = !busy, role = Role.Checkbox,
+                    onValueChange = { selected -> lost = if (selected) lost + method.id else lost - method.id },
+                ).padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked, onCheckedChange = null, enabled = !busy)
+                Text(methodLabel(method.kind, method.label, index))
+            }
+        }
+    }
+    StepTitle("Choose how to sign in after recovery")
+    ProfileChoices(profile, busy, passkeysConfigured) { profile = it }
+    StepButton("Review account changes", !busy) {
+        val mode = when {
+            lost.isEmpty() -> RecoveryLossMode.None
+            lost.size == active.size -> RecoveryLossMode.All
+            else -> RecoveryLossMode.Some
+        }
+        submit(mode, lost, profile)
+    }
+}
+
+@Composable
+private fun ProfileChoices(value: SecurityProfile, busy: Boolean, passkeysConfigured: Boolean, change: (SecurityProfile) -> Unit) {
+    Column(Modifier.selectableGroup()) {
+        SecurityChoice("Two passkeys and a recovery kit", value == SecurityProfile.Passkeys, !busy && passkeysConfigured) {
+            change(SecurityProfile.Passkeys)
+        }
+        SecurityChoice("Password, authenticator and ten recovery codes", value == SecurityProfile.PasswordTotp, !busy) {
+            change(SecurityProfile.PasswordTotp)
+        }
+    }
+    Text("Both methods give you the same workspace access.")
+}
+
+@Composable
+private fun SecurityChoice(label: String, selected: Boolean, enabled: Boolean, click: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = click)
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected, onClick = null, enabled = enabled)
+        Text(label)
+    }
+}
+
+@Composable
+private fun ReviewedRecoveryStep(state: AccountSecurityState, review: RecoveryReview) {
+    StepTitle("Review account changes")
+    val labels = state.methods.associate { it.id to it.label }
+    if (review.lostIds.isEmpty()) Text("No sign-in methods will be removed.")
+    review.inventory.forEachIndexed { index, method ->
+        val name = methodLabel(method.kind, labels[method.id], index)
+        Text(if (method.id in review.lostIds) "Remove $name" else "Keep $name")
+    }
+}
+
+private fun methodLabel(kind: SecurityMethodKind, label: String?, index: Int): String {
+    val type = when (kind) {
+        SecurityMethodKind.Passkey -> "Passkey"
+        SecurityMethodKind.Password -> "Password"
+        SecurityMethodKind.Totp -> "Authenticator"
+    }
+    return label?.takeIf(String::isNotBlank)?.let { "$type · $it" } ?: "$type ${index + 1}"
+}
+
+@Composable
+private fun RecoveryMaterialStep(
+    label: String,
+    replacement: Boolean,
+    prepared: Boolean,
+    written: Boolean,
+    busy: Boolean,
+    prepare: () -> Unit,
+    saveFile: () -> Unit,
+    confirm: () -> Unit,
+) {
+    val material = if (replacement) "replacement $label" else label
+    StepTitle("Save your $material")
+    Text("Choose a trusted location that only you can access. You’ll need this file if you lose your sign-in methods.")
+    when {
+        !prepared -> StepButton("Prepare $material", !busy, prepare)
+        !written -> StepButton("Save document", !busy, saveFile)
+        else -> StepButton("I saved my $material", !busy, confirm)
+    }
 }
