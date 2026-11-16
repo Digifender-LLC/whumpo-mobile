@@ -1,0 +1,498 @@
+{
+  "validCommands": [
+    {
+      "name": "declare-country",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "country",
+        "answer": {
+          "status": "declared",
+          "value": "US"
+        }
+      }
+    },
+    {
+      "name": "declare-existing-site",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "website",
+        "answer": {
+          "status": "declared",
+          "value": "existing"
+        }
+      }
+    },
+    {
+      "name": "declare-public-url",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "websiteURL",
+        "answer": {
+          "status": "declared",
+          "value": "https://example.com/shop"
+        }
+      }
+    },
+    {
+      "name": "explicit-unknown",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "domainAccess",
+        "answer": {
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "name": "explicit-deferral",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "budget",
+        "answer": {
+          "status": "deferred"
+        }
+      }
+    },
+    {
+      "name": "clear-answer",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.clear",
+        "key": "offer"
+      }
+    },
+    {
+      "name": "defer-remaining",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answers.defer_remaining"
+      }
+    },
+    {
+      "name": "refresh-plan",
+      "body": {
+        "schemaVersion": 1,
+        "action": "plan.refresh"
+      }
+    },
+    {
+      "name": "edit-title",
+      "body": {
+        "schemaVersion": 1,
+        "action": "plan.edit",
+        "planRevision": 8,
+        "edit": {
+          "kind": "title",
+          "id": "goal",
+          "value": "Review project scope"
+        }
+      }
+    },
+    {
+      "name": "defer-action",
+      "body": {
+        "schemaVersion": 1,
+        "action": "plan.edit",
+        "planRevision": 9,
+        "edit": {
+          "kind": "defer",
+          "id": "domain",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "select-next",
+      "body": {
+        "schemaVersion": 1,
+        "action": "plan.edit",
+        "planRevision": 10,
+        "edit": {
+          "kind": "select",
+          "id": "goal"
+        }
+      }
+    },
+    {
+      "name": "declared-stage",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "stage",
+        "answer": {
+          "status": "declared",
+          "value": "operating"
+        }
+      }
+    },
+    {
+      "name": "declared-region",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "region",
+        "answer": {
+          "status": "declared",
+          "value": "Illinois"
+        }
+      }
+    },
+    {
+      "name": "declared-customers",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "customers",
+        "answer": {
+          "status": "declared",
+          "value": "Local makers"
+        }
+      }
+    },
+    {
+      "name": "declared-offer",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "offer",
+        "answer": {
+          "status": "declared",
+          "value": "Repair services"
+        }
+      }
+    },
+    {
+      "name": "declared-delivery",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "delivery",
+        "answer": {
+          "status": "declared",
+          "value": "in_person"
+        }
+      }
+    },
+    {
+      "name": "declared-registration",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "registration",
+        "answer": {
+          "status": "declared",
+          "value": "not_registered"
+        }
+      }
+    },
+    {
+      "name": "declared-formationIntent",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "formationIntent",
+        "answer": {
+          "status": "declared",
+          "value": "form_entity"
+        }
+      }
+    },
+    {
+      "name": "declared-entityType",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "entityType",
+        "answer": {
+          "status": "declared",
+          "value": "LLC"
+        }
+      }
+    },
+    {
+      "name": "declared-ein",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "ein",
+        "answer": {
+          "status": "declared",
+          "value": "need_ein"
+        }
+      }
+    },
+    {
+      "name": "declared-websiteIntent",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "websiteIntent",
+        "answer": {
+          "status": "declared",
+          "value": "keep"
+        }
+      }
+    },
+    {
+      "name": "declared-domain",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "domain",
+        "answer": {
+          "status": "declared",
+          "value": "managed_by_other"
+        }
+      }
+    },
+    {
+      "name": "declared-domainName",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "domainName",
+        "answer": {
+          "status": "declared",
+          "value": "studio.example.com"
+        }
+      }
+    },
+    {
+      "name": "declared-domainAccess",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "domainAccess",
+        "answer": {
+          "status": "declared",
+          "value": "other"
+        }
+      }
+    },
+    {
+      "name": "declared-domainHelp",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "domainHelp",
+        "answer": {
+          "status": "declared",
+          "value": "connect_owned"
+        }
+      }
+    },
+    {
+      "name": "declared-registrationHelp",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "registrationHelp",
+        "answer": {
+          "status": "declared",
+          "value": "understand_requirements"
+        }
+      }
+    },
+    {
+      "name": "declared-blocker",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "blocker",
+        "answer": {
+          "status": "declared",
+          "value": "Finding time to plan"
+        }
+      }
+    },
+    {
+      "name": "declared-time",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "time",
+        "answer": {
+          "status": "declared",
+          "value": "under_two_hours"
+        }
+      }
+    },
+    {
+      "name": "declared-budget",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "budget",
+        "answer": {
+          "status": "declared",
+          "value": "A modest initial budget"
+        }
+      }
+    },
+    {
+      "name": "declared-tools",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "tools",
+        "answer": {
+          "status": "declared",
+          "value": "Calendar and notes"
+        }
+      }
+    }
+  ],
+  "invalidCommands": [
+    {
+      "name": "unknown-country",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "country",
+        "answer": {
+          "status": "declared",
+          "value": "ZZ"
+        }
+      },
+      "code": "VALIDATION_FAILED"
+    },
+    {
+      "name": "raw-ein",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "ein",
+        "answer": {
+          "status": "declared",
+          "value": "12-3456789"
+        }
+      },
+      "code": "VALIDATION_FAILED"
+    },
+    {
+      "name": "url-with-sign-in",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "websiteURL",
+        "answer": {
+          "status": "declared",
+          "value": "https://user@example.com/path"
+        }
+      },
+      "code": "VALIDATION_FAILED"
+    },
+    {
+      "name": "url-with-query",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "websiteURL",
+        "answer": {
+          "status": "declared",
+          "value": "https://example.com/?preview=example"
+        }
+      },
+      "code": "VALIDATION_FAILED"
+    },
+    {
+      "name": "unexpected-organization",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "stage",
+        "answer": {
+          "status": "declared",
+          "value": "idea"
+        },
+        "orgId": "example-other-org"
+      },
+      "code": "VALIDATION_FAILED"
+    },
+    {
+      "name": "unknown-with-payload",
+      "body": {
+        "schemaVersion": 1,
+        "action": "answer.set",
+        "key": "domain",
+        "answer": {
+          "status": "unknown",
+          "value": "owned"
+        }
+      },
+      "code": "VALIDATION_FAILED"
+    }
+  ],
+  "examples": {
+    "emptySnapshot": {
+      "schemaVersion": 1,
+      "orgId": "example-org",
+      "revision": 1,
+      "answerRevision": 1,
+      "answers": {},
+      "activeQuestions": [
+        "stage",
+        "country",
+        "customers",
+        "offer",
+        "delivery",
+        "registration",
+        "website",
+        "domain",
+        "domainHelp",
+        "registrationHelp",
+        "blocker",
+        "time",
+        "budget",
+        "tools"
+      ],
+      "planStatus": "missing",
+      "plan": null
+    },
+    "goalChangeSnapshot": {
+      "schemaVersion": 1,
+      "orgId": "example-org",
+      "revision": 2,
+      "answerRevision": 2,
+      "answers": {
+        "stage": {
+          "status": "declared",
+          "source": "owner",
+          "revision": 2,
+          "value": "idea"
+        }
+      },
+      "activeQuestions": [
+        "stage",
+        "country",
+        "customers",
+        "offer",
+        "delivery",
+        "registration",
+        "website",
+        "domain",
+        "domainHelp",
+        "registrationHelp",
+        "blocker",
+        "time",
+        "budget",
+        "tools"
+      ],
+      "planStatus": "stale",
+      "plan": null
+    },
+    "mutationReceipt": {
+      "schemaVersion": 1,
+      "orgId": "example-org",
+      "revision": 8,
+      "answerRevision": 7,
+      "planRevision": 8,
+      "invalidatedKeys": []
+    }
+  }
+}

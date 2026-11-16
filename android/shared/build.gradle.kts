@@ -82,6 +82,8 @@ kotlin {
 tasks.withType<Test>().configureEach {
     inputs.file(rootProject.file("../tests/fixtures/numbers/canonical-decimals.json"))
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.file("../tests/fixtures/business-discovery-v1"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     val record = providers.gradleProperty("screenshots.record").isPresent
     systemProperty(if (record) "roborazzi.test.record" else "roborazzi.test.verify", "true")
 }

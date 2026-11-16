@@ -5,6 +5,7 @@ import android.view.WindowManager
 import com.whumpo.android.BuildConfig
 import com.whumpo.core.auth.CoreAccountSecurityController
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +52,8 @@ import com.whumpo.core.auth.CoreOwnershipController
 import com.whumpo.core.auth.CorePartnerController
 import com.whumpo.core.auth.CoreConnectedOnboardingController
 import com.whumpo.core.auth.CoreConnectedSetupState
+import com.whumpo.core.auth.CoreBusinessDiscoveryController
+import com.whumpo.android.ui.onboarding.BusinessDiscoveryContent
 import com.whumpo.android.ui.onboarding.ConnectedSetupContent
 import com.whumpo.android.ui.ownership.CoreOwnershipSection
 import kotlinx.coroutines.delay
@@ -122,6 +125,10 @@ internal fun CorePreview(
     }
     val setup = remember(controller, active) { active?.let { CoreConnectedOnboardingController(controller, it) } }
     DisposableEffect(setup) { onDispose { setup?.retire() } }
+    val discovery = remember(controller, active) {
+        active?.takeIf { it.session.role == CoreRole.owner }?.let { CoreBusinessDiscoveryController(controller, it) }
+    }
+    DisposableEffect(discovery) { onDispose { discovery?.retire() } }
     val setupState = key(active?.epoch) {
         setup?.state?.collectAsState()?.value ?: CoreConnectedSetupState()
     }
@@ -134,6 +141,7 @@ internal fun CorePreview(
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
     var showPartner by remember(active?.epoch) { mutableStateOf(false) }
+    var showDiscovery by remember(active?.epoch) { mutableStateOf(false) }
     var showPartnerSample by remember(state) { mutableStateOf(false) }
     var showOnboarding by remember(state) { mutableStateOf(false) }
     var showSecurity by remember { mutableStateOf(false) }
@@ -206,6 +214,30 @@ internal fun CorePreview(
         account.clear()
         showSecurity = true
     }
+    val openDiscovery: (() -> Unit)? = if (discovery == null) null else { { showDiscovery = true } }
+    if (active != null && discovery != null && showDiscovery && (ready || setupState.canEdit)) {
+        key(active.epoch) {
+            val discoveryState by discovery.state.collectAsState()
+            val reviewedRevision = discoveryState.snapshot?.revision
+            LaunchedEffect(discovery) { discovery.refresh() }
+            BackHandler { showDiscovery = false }
+            BusinessDiscoveryContent(
+                state = discoveryState,
+                startWithReview = ready,
+                onCommand = { command ->
+                    reviewedRevision?.let { revision ->
+                        actions.launch { discovery.submit(command, revision) }
+                    }
+                },
+                onRefresh = { actions.launch { discovery.refresh() } },
+                onRetry = { actions.launch { discovery.retry() } },
+                onSignIn = freshSignIn,
+                onLater = { showDiscovery = false },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        return
+    }
     if (active != null && setup != null && !ready) {
         key(active.epoch) {
             ConnectedSetupContent(
@@ -223,6 +255,7 @@ internal fun CorePreview(
                     message?.let { Text(it) }
                 },
                 modifier = Modifier.fillMaxSize(),
+                onDiscovery = openDiscovery,
             )
         }
         return
@@ -287,6 +320,7 @@ internal fun CorePreview(
         openToday = { showToday = true },
         openWork = { showWork = true },
         openPartner = { showPartner = true },
+        openDiscovery = openDiscovery,
         tryPartner = { showPartnerSample = true },
         tryOnboarding = { showOnboarding = true },
         signIn = { showSecurity = true },
@@ -306,6 +340,7 @@ private fun CorePreviewContent(
     openToday: () -> Unit,
     openWork: () -> Unit,
     openPartner: () -> Unit,
+    openDiscovery: (() -> Unit)?,
     tryPartner: () -> Unit,
     tryOnboarding: () -> Unit,
     signIn: () -> Unit,
@@ -343,6 +378,11 @@ private fun CorePreviewContent(
                 Button(onClick = openToday) { Text("Open Today") }
                 WhumpoQuietButton(onClick = openPartner, modifier = Modifier.heightIn(min = 48.dp)) { Text("Open Partner") }
                 Button(onClick = openWork) { Text("Open Work") }
+                if (openDiscovery != null) {
+                    WhumpoQuietButton(onClick = openDiscovery, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("Open business discovery")
+                    }
+                }
                 OrganizationActions(memberships, choose, next, signOut)
             }
         }

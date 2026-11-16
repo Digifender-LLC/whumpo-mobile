@@ -84,8 +84,9 @@ enabled agent and create a temporary conversation. Members with write access can
 save messages. Signed-out users can view an offline sample with synthetic data.
 
 The organization needs to finish connected setup before its default project and
-Partner are available. Complete setup in the connected web workspace, then
-refresh Partner. The Android onboarding preview uses local sample data.
+Partner are available. The connected Android harness offers workspace setup
+and [optional business discovery](core-business-discovery.md). Its signed-out
+onboarding sample uses local demo data.
 
 **Save message** writes only the message. Partner confirms an acknowledgment
 against the exact canonical message in history. The confirmation reads a separate
