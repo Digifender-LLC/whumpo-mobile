@@ -48,6 +48,10 @@ import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.coreApiClient
+import com.whumpo.android.ui.domains.SiteDomainActions
+import com.whumpo.android.ui.domains.SiteDomainContent
+import com.whumpo.android.ui.domains.rememberDomainTime
+import com.whumpo.core.auth.CoreSiteDomainController
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import com.whumpo.core.auth.CoreOwnershipController
 import com.whumpo.core.auth.CorePartnerController
@@ -147,6 +151,11 @@ internal fun CorePreview(
     var message by remember(active?.epoch) { mutableStateOf<String?>(null) }
     var memberships by remember(active?.epoch) { mutableStateOf<CoreMembershipPage?>(null) }
     var page by remember(active?.epoch) { mutableStateOf<OrganizationPreview?>(null) }
+    val domains = remember(controller, active) {
+        active?.takeIf { it.session.role == CoreRole.owner }?.let { CoreSiteDomainController(controller, it) }
+    }
+    DisposableEffect(domains) { onDispose { domains?.retire() } }
+    var showDomains by remember(active?.epoch) { mutableStateOf(false) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var discoveryWorkTask by remember(active?.epoch) { mutableStateOf<CoreWorkTask?>(null) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
@@ -331,6 +340,32 @@ internal fun CorePreview(
         AccountSecurityScreen(account, accountState, passkeys, passkeysConfigured) { showSecurity = false }
         return
     }
+    if (active != null && ready && domains != null && showDomains) {
+        key(active.epoch) {
+            val domainState by domains.state.collectAsState()
+            val closeDomain: () -> Unit = {
+                if (domainState.claim == null) showDomains = false else domains.dismissClaim()
+            }
+            LaunchedEffect(domains) { domains.refresh() }
+            BackHandler(onBack = closeDomain)
+            SiteDomainContent(domainState, rememberDomainTime(domainState.claims), SiteDomainActions(
+                refresh = { actions.launch { domains.refresh() } },
+                chooseDifferentProject = { actions.launch { domains.chooseDifferentProject() } },
+                chooseWorkspace = { choice -> actions.launch { domains.chooseWorkspace(choice) } },
+                moreWorkspaces = { actions.launch { domains.moreWorkspaces() } },
+                chooseProject = { choice -> actions.launch { domains.chooseProject(choice) } },
+                moreProjects = { actions.launch { domains.moreProjects() } },
+                inspect = { claim -> actions.launch { domains.inspect(claim) } },
+                prepare = { hostname -> actions.launch { domains.prepare(hostname) } },
+                check = { claim -> actions.launch { domains.check(claim) } },
+                renew = { claim -> actions.launch { domains.renew(claim) } },
+                retry = { actions.launch { domains.retry() } },
+                signIn = freshSignIn,
+                back = closeDomain,
+            ))
+        }
+        return
+    }
     if (active != null && ready && showWork) {
         key(active.epoch) {
             CoreWorkPreview(
@@ -382,6 +417,7 @@ internal fun CorePreview(
         openWork = { showWork = true },
         openPartner = { showPartner = true },
         openDiscovery = openDiscovery,
+        openDomains = if (active != null && ready && domains != null) ({ showDomains = true }) else null,
         tryPartner = { showPartnerSample = true },
         tryOnboarding = { showOnboarding = true },
         signIn = { showSecurity = true },
@@ -402,6 +438,7 @@ private fun CorePreviewContent(
     openWork: () -> Unit,
     openPartner: () -> Unit,
     openDiscovery: (() -> Unit)?,
+    openDomains: (() -> Unit)?,
     tryPartner: () -> Unit,
     tryOnboarding: () -> Unit,
     signIn: () -> Unit,
@@ -442,6 +479,11 @@ private fun CorePreviewContent(
                 if (openDiscovery != null) {
                     WhumpoQuietButton(onClick = openDiscovery, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Open business discovery")
+                    }
+                }
+                if (openDomains != null) {
+                    WhumpoQuietButton(onClick = openDomains, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("Domain ownership")
                     }
                 }
                 OrganizationActions(memberships, choose, next, signOut)

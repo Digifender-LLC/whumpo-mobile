@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Project domain ownership claims v1",
+  "$defs": {
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "prepare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hostname"
+      ],
+      "properties": {
+        "hostname": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 245,
+          "pattern": "^[A-Za-z0-9.-]+$"
+        }
+      }
+    },
+    "generationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation"
+      ],
+      "properties": {
+        "generation": {
+          "$ref": "#/$defs/generation"
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "hostname",
+        "generation",
+        "status",
+        "record",
+        "expiresAt",
+        "checkedAt",
+        "evidenceValidUntil"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$"
+        },
+        "projectId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$"
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 245,
+          "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "status": {
+          "enum": [
+            "awaiting_dns",
+            "ownership_verified",
+            "proof_missing",
+            "resolver_unknown",
+            "expired"
+          ]
+        },
+        "record": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "name",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "TXT"
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^_whumpo\\.[a-z0-9.-]+$",
+              "maxLength": 253
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^whumpo-verification=[0-9a-f]{64}$"
+            }
+          }
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "checkedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidenceValidUntil": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ownership_verified"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "checkedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "evidenceValidUntil": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "evidenceValidUntil": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "orgId",
+        "claims"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "orgId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$"
+        },
+        "claims": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/claim"
+          }
+        }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "orgId",
+        "claim"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "orgId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$"
+        },
+        "claim": {
+          "$ref": "#/$defs/claim"
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "orgId",
+        "operationId",
+        "operationGeneration",
+        "observation",
+        "claim"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "orgId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$"
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$"
+        },
+        "operationGeneration": {
+          "$ref": "#/$defs/generation"
+        },
+        "observation": {
+          "anyOf": [
+            {
+              "enum": [
+                "ownership_verified",
+                "proof_missing",
+                "resolver_unknown"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "claim": {
+          "$ref": "#/$defs/claim"
+        }
+      }
+    }
+  }
+}
