@@ -214,7 +214,7 @@ internal fun decodeDiscoveryReceipt(body: String): CoreDiscoveryReceipt {
         value.field("invalidatedKeys").uniqueList(CoreDiscoveryKey.entries.size) { discoveryKey(it.text(32)) })
 }
 
-private fun discoveryRoot(raw: String): JsonObject {
+internal fun discoveryRoot(raw: String): JsonObject {
     val root = try {
         Json.parseToJsonElement(raw).objectValue()
     } catch (_: IllegalArgumentException) {
@@ -272,22 +272,22 @@ private fun JsonElement.proposal(): CoreDiscoveryProposal {
 }
 
 private fun discoveryKey(code: String) = CoreDiscoveryKey.entries.firstOrNull { it.code == code } ?: badDiscovery()
-private fun actionId(value: JsonElement) = CoreDiscoveryActionId.entries.firstOrNull { it.code == value.text(32) } ?: badDiscovery()
-private fun JsonElement.objectValue() = this as? JsonObject ?: badDiscovery()
-private fun JsonObject.field(name: String) = this[name] ?: badDiscovery()
-private fun JsonObject.closed(vararg names: String): JsonObject = apply { checkDiscovery(keys == names.toSet()) }
-private fun <T> JsonElement.unlessNull(read: (JsonElement) -> T): T? = if (this == JsonNull) null else read(this)
-private fun JsonElement.text(maxLength: Int): String = (this as? JsonPrimitive)
+internal fun actionId(value: JsonElement) = CoreDiscoveryActionId.entries.firstOrNull { it.code == value.text(32) } ?: badDiscovery()
+internal fun JsonElement.objectValue() = this as? JsonObject ?: badDiscovery()
+internal fun JsonObject.field(name: String) = this[name] ?: badDiscovery()
+internal fun JsonObject.closed(vararg names: String): JsonObject = apply { checkDiscovery(keys == names.toSet()) }
+internal fun <T> JsonElement.unlessNull(read: (JsonElement) -> T): T? = if (this == JsonNull) null else read(this)
+internal fun JsonElement.text(maxLength: Int): String = (this as? JsonPrimitive)
     ?.takeIf { it.isString && it.content.hasDiscoveryLength(maxLength) }?.content ?: badDiscovery()
 private fun JsonElement.boolean(): Boolean = when (this) {
     JsonPrimitive(true) -> true
     JsonPrimitive(false) -> false
     else -> badDiscovery()
 }
-private fun JsonElement.revision(): Long = (this as? JsonPrimitive)?.takeUnless { it.isString }
+internal fun JsonElement.revision(): Long = (this as? JsonPrimitive)?.takeUnless { it.isString }
     ?.content?.takeIf(discoveryRevision::matches)?.toLongOrNull()?.takeIf { it in 1..CORE_MAX_VERSION }
     ?: badDiscovery()
-private fun <T> JsonElement.uniqueList(maxSize: Int, read: (JsonElement) -> T): List<T> {
+internal fun <T> JsonElement.uniqueList(maxSize: Int, read: (JsonElement) -> T): List<T> {
     val array = this as? JsonArray ?: badDiscovery()
     checkDiscovery(array.size <= maxSize)
     return array.map(read).also { checkDiscovery(it.toSet().size == it.size) }

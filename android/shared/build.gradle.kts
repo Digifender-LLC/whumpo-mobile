@@ -84,6 +84,8 @@ tasks.withType<Test>().configureEach {
         .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file("../tests/fixtures/business-discovery-v1"))
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.file("../tests/fixtures/discovery-work-handoff-v1"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     val record = providers.gradleProperty("screenshots.record").isPresent
     systemProperty(if (record) "roborazzi.test.record" else "roborazzi.test.verify", "true")
 }

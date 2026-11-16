@@ -46,6 +46,7 @@ import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreOrganizationEntitlements
 import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreOrigin
+import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.coreApiClient
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import com.whumpo.core.auth.CoreOwnershipController
@@ -53,8 +54,12 @@ import com.whumpo.core.auth.CorePartnerController
 import com.whumpo.core.auth.CoreConnectedOnboardingController
 import com.whumpo.core.auth.CoreConnectedSetupState
 import com.whumpo.core.auth.CoreBusinessDiscoveryController
+import com.whumpo.core.auth.CoreDiscoveryHandoffController
+import com.whumpo.core.auth.DiscoveryHandoffState
 import com.whumpo.android.ui.onboarding.BusinessDiscoveryContent
 import com.whumpo.android.ui.onboarding.ConnectedSetupContent
+import com.whumpo.android.ui.onboarding.DiscoveryHandoffContent
+import com.whumpo.android.ui.onboarding.DiscoveryHandoffInventory
 import com.whumpo.android.ui.ownership.CoreOwnershipSection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -129,6 +134,10 @@ internal fun CorePreview(
         active?.takeIf { it.session.role == CoreRole.owner }?.let { CoreBusinessDiscoveryController(controller, it) }
     }
     DisposableEffect(discovery) { onDispose { discovery?.retire() } }
+    val handoff = remember(controller, active, discovery) {
+        if (active != null && discovery != null) CoreDiscoveryHandoffController(controller, active, discovery) else null
+    }
+    DisposableEffect(handoff) { onDispose { handoff?.retire() } }
     val setupState = key(active?.epoch) {
         setup?.state?.collectAsState()?.value ?: CoreConnectedSetupState()
     }
@@ -139,9 +148,11 @@ internal fun CorePreview(
     var memberships by remember(active?.epoch) { mutableStateOf<CoreMembershipPage?>(null) }
     var page by remember(active?.epoch) { mutableStateOf<OrganizationPreview?>(null) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
+    var discoveryWorkTask by remember(active?.epoch) { mutableStateOf<CoreWorkTask?>(null) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
     var showPartner by remember(active?.epoch) { mutableStateOf(false) }
     var showDiscovery by remember(active?.epoch) { mutableStateOf(false) }
+    var showHandoff by remember(active?.epoch) { mutableStateOf(false) }
     var showPartnerSample by remember(state) { mutableStateOf(false) }
     var showOnboarding by remember(state) { mutableStateOf(false) }
     var showSecurity by remember { mutableStateOf(false) }
@@ -215,11 +226,46 @@ internal fun CorePreview(
         showSecurity = true
     }
     val openDiscovery: (() -> Unit)? = if (discovery == null) null else { { showDiscovery = true } }
+    if (active != null && ready && handoff != null && showDiscovery && showHandoff) {
+        key(active.epoch) {
+            val handoffState by handoff.state.collectAsState()
+            BackHandler { showHandoff = false }
+            DiscoveryHandoffContent(
+                state = handoffState,
+                onSubmit = { review -> actions.launch { handoff.submit(review) } },
+                onChooseWorkspace = { choice -> actions.launch { handoff.chooseWorkspace(choice) } },
+                onMoreWorkspaces = { actions.launch { handoff.moreWorkspaces() } },
+                onChooseProject = { choice -> actions.launch { handoff.chooseProject(choice) } },
+                onMoreProjects = { actions.launch { handoff.moreProjects() } },
+                onInspect = { id -> actions.launch { handoff.inspect(id) } },
+                onReviewApproval = { id -> actions.launch { handoff.reviewApproval(id) } },
+                onDecision = { approval, choice -> actions.launch { handoff.decide(approval, choice) } },
+                onRetry = { actions.launch { handoff.retry() } },
+                onOpenWork = { task ->
+                    controller.commitIfCurrent(active.epoch) {
+                        if (handoff.state.value.verifiedTask == task && !handoff.state.value.pending && !handoff.state.value.busy) {
+                            discoveryWorkTask = task
+                            showHandoff = false
+                            showDiscovery = false
+                            showWork = true
+                        }
+                    }
+                },
+                onSignIn = freshSignIn,
+                onBack = { showHandoff = false },
+            )
+        }
+        return
+    }
     if (active != null && discovery != null && showDiscovery && (ready || setupState.canEdit)) {
         key(active.epoch) {
             val discoveryState by discovery.state.collectAsState()
+            val handoffState = handoff?.state?.collectAsState()?.value ?: DiscoveryHandoffState()
             val reviewedRevision = discoveryState.snapshot?.revision
-            LaunchedEffect(discovery) { discovery.refresh() }
+            LaunchedEffect(discovery, handoff, ready) {
+                discovery.refresh()
+                if (ready) handoff?.refreshInventory()
+            }
             BackHandler { showDiscovery = false }
             BusinessDiscoveryContent(
                 state = discoveryState,
@@ -234,6 +280,19 @@ internal fun CorePreview(
                 onSignIn = freshSignIn,
                 onLater = { showDiscovery = false },
                 modifier = Modifier.fillMaxSize(),
+                reviewForWork = if (ready && handoff != null && !handoffState.busy) { action, revision ->
+                    showHandoff = true
+                    actions.launch { handoff.beginReview(action, revision) }
+                } else null,
+                workHandoffs = {
+                    if (ready && handoff != null) {
+                        DiscoveryHandoffInventory(handoffState,
+                            onInspect = { id ->
+                                showHandoff = true
+                                actions.launch { handoff.inspect(id) }
+                            }, onResume = { showHandoff = true })
+                    }
+                },
             )
         }
         return
@@ -278,8 +337,10 @@ internal fun CorePreview(
                 controller, active.epoch, page?.profile?.displayName ?: active.session.orgId,
                 canCreateTask = active.session.role != CoreRole.viewer,
                 canRecoverApplication = active.session.role == CoreRole.owner,
+                initialTask = discoveryWorkTask,
             ) {
                 showWork = false
+                discoveryWorkTask = null
             }
         }
         return

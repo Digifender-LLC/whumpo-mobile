@@ -45,11 +45,12 @@ internal fun CoreWorkPreview(
     organizationName: String,
     canCreateTask: Boolean,
     canRecoverApplication: Boolean,
+    initialTask: CoreWorkTask? = null,
     close: () -> Unit,
 ) {
     var recovering by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
-    var selected by remember { mutableStateOf<CoreWorkTask?>(null) }
+    var selected by remember(initialTask) { mutableStateOf(initialTask) }
     var openedFromCreation by remember { mutableStateOf(false) }
     var receipts by remember { mutableStateOf(false) }
     var workCursor by remember { mutableStateOf<String?>(null) }

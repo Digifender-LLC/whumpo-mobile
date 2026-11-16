@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
 import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.core.api.CoreDiscoveryCommand
+import com.whumpo.core.api.CoreDiscoveryActionId
 import com.whumpo.core.api.CoreDiscoveryEdit
 import com.whumpo.core.api.CoreDiscoveryKey
 import com.whumpo.core.api.CoreDiscoveryPlan
@@ -55,6 +56,8 @@ fun BusinessDiscoveryContent(
     onSignIn: () -> Unit,
     onLater: () -> Unit,
     modifier: Modifier = Modifier,
+    reviewForWork: ((CoreDiscoveryActionId, Long) -> Unit)? = null,
+    workHandoffs: @Composable () -> Unit = {},
 ) {
     val snapshot = state.snapshot
     var reviewing by remember { mutableStateOf(startWithReview) }
@@ -131,8 +134,15 @@ fun BusinessDiscoveryContent(
                         ProposalMessage(plan, action, state.canEdit) { edit ->
                             onCommand(CoreDiscoveryCommand.EditPlan(plan.revision, edit))
                         }
+                        if (reviewForWork != null && !action.deferred) {
+                            val title = action.titleOverride ?: action.title
+                            DiscoveryQuiet("Review $title for Work", state.canEdit) {
+                                reviewForWork(action.id, snapshot.revision)
+                            }
+                        }
                     }
                 }
+                item { workHandoffs() }
                 item { Text("Saved answers", Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium) }
                 items(questions, key = { "review-" + it.code }) { field ->
                     val answer = answers[field]?.value

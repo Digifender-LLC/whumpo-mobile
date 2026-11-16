@@ -69,6 +69,10 @@ class CoreBusinessDiscoveryController(
         mutableState.value = CoreConnectedDiscoveryState()
     }
 
+    internal fun hideAfterDeniedRead() {
+        update { copy(snapshot = null, invalidatedKeys = emptyList(), requiresRefresh = true) }
+    }
+
     suspend fun refresh() = perform {
         val attempt = pending
         when {
@@ -109,7 +113,7 @@ class CoreBusinessDiscoveryController(
         }
     } catch (error: CoreHttpException) {
         if (error.status == 403 || error.status == 423) {
-            update { copy(snapshot = null, invalidatedKeys = emptyList()) }
+            hideAfterDeniedRead()
         }
         throw error
     }

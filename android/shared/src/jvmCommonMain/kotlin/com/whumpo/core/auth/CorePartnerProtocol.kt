@@ -155,6 +155,56 @@ internal class CorePartnerProtocol(
         }
     }
 
+    suspend fun discoveryApproval(handoff: CoreDiscoveryHandoff): PartnerApproval {
+        checkWire(handoff.orgId == active.session.orgId && handoff.state == CoreHandoffState.WaitingApproval &&
+            handoff.lineage == CoreHandoffLineage.Current)
+        val id = handoff.approvalId ?: throw CoreProtocolException()
+        val effect = discoveryEffect(handoff)
+        return read<PartnerApproval>(PartnerRoute.Approval, id).also {
+            checkWire(it.id == id && it.effectId == effect.id && it.runId == effect.runId &&
+                it.payloadHash == handoff.payloadHash && it.policyRevision == effect.policyRevision &&
+                it.version.isVersion() && coreIdentifier.matches(it.requesterId) &&
+                it.status == PartnerApprovalStatus.pending && it.proposal.operation == PartnerTool.Create &&
+                it.errorCode.validCode())
+            it.expiresAt.instant()
+            it.proposal.check()
+            val body = it.proposal.payload
+            checkWire(body.text("projectId") == handoff.projectId &&
+                listOf("parentTaskId", "description", "dueAt").all { field -> body[field] == JsonNull })
+        }
+    }
+
+    suspend fun verifyDiscoveryTask(handoff: CoreDiscoveryHandoff): CoreWorkTask {
+        checkWire(handoff.orgId == active.session.orgId && handoff.state == CoreHandoffState.Confirmed)
+        val expected = handoff.task ?: throw CoreProtocolException()
+        val effect = discoveryEffect(handoff)
+        val receipt = read<PartnerReceipts>(PartnerRoute.Receipts, effect.id).items.singleOrNull()
+            ?: throw CoreProtocolException()
+        val evidence = receipt.taskEvidence
+        checkWire(receipt.schemaVersion == 1 && receipt.receiptId == expected.receiptId &&
+            receipt.orgId == handoff.orgId && receipt.runId == effect.runId && receipt.effectId == effect.id &&
+            evidence.taskId == expected.taskId && evidence.taskVersion == expected.taskVersion &&
+            coreDigest.matches(evidence.taskDigest) && receipt.completion == null &&
+            partnerText(receipt.redactedSummary, 8_000) && receipt.verifiedAt.instant() <= receipt.createdAt.instant())
+        return sessions.canonicalTaskForPartner(active, expected.taskId).also {
+            checkWire(it.projectId == handoff.projectId && it.version >= expected.taskVersion)
+        }
+    }
+
+    private suspend fun discoveryEffect(handoff: CoreDiscoveryHandoff): PartnerEffect {
+        val state = when (handoff.state) {
+            CoreHandoffState.WaitingApproval -> CoreEffectState.WaitingApproval
+            CoreHandoffState.Confirmed -> CoreEffectState.Confirmed
+            else -> throw CoreProtocolException()
+        }
+        return read<PartnerEffect>(PartnerRoute.Effect, handoff.id).also {
+            checkWire(it.id == handoff.id && it.state == state && it.version == handoff.effectVersion &&
+                it.payloadHash == handoff.payloadHash && it.approvalId == handoff.approvalId &&
+                it.taskId == handoff.task?.taskId && coreIdentifier.matches(it.runId) &&
+                it.errorCode.validCode() && it.policyRevision in 0..CORE_MAX_VERSION)
+        }
+    }
+
     suspend fun decide(approval: PartnerApproval, choice: PartnerDecision, command: PartnerWrite) {
         checkWire(active.session.role == CoreRole.owner)
         val result = write<PartnerApprovalResult>(PartnerRoute.Decide, command, approval.id)
