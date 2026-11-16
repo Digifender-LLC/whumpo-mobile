@@ -13,6 +13,7 @@ import com.whumpo.core.api.RecoveryLossMode
 import com.whumpo.core.api.RecoveryReview
 import com.whumpo.core.api.RecoveryReviewedMethod
 import com.whumpo.core.api.ReservedEnrollmentResume
+import com.whumpo.core.api.ReservedEnrollmentStart
 import com.whumpo.core.api.SavedRecoveryProof
 import com.whumpo.core.api.SecurityAccess
 import com.whumpo.core.api.SecurityAdmission
@@ -89,6 +90,12 @@ class AccountSecurityIdentityMismatch : Exception("Signed-in identity does not m
 class PendingTotp internal constructor(val factorId: String, val secret: String)
 class PendingRecoveryDocument internal constructor(val offerId: String, val generation: Long, val text: String)
 
+class ReservedSetupStart internal constructor(
+    val continuationKey: String,
+    internal val profile: SecurityProfile,
+    internal val invitationToken: String,
+)
+
 sealed interface AccountSecurityRetryResult {
     data object Updated : AccountSecurityRetryResult
     class Totp(val setup: PendingTotp) : AccountSecurityRetryResult
@@ -109,6 +116,7 @@ class CoreAccountSecurityController(
     private var login: SecurityPasswordChallenge? = null
     private var pendingEnrollment: EnrollmentStart? = null
     private var pendingPublicStart: PublicStart? = null
+    private var pendingReservedSetup: ReservedSetup? = null
     private var pendingMutation: PendingMutation? = null
     private var pendingCancellation: PendingMutation? = null
     private var reservedEnrollment = false
@@ -125,7 +133,29 @@ class CoreAccountSecurityController(
     val recoveryReview = mutableRecoveryReview.asStateFlow()
 
     private class PublicStart(val route: String, val payload: JsonObject, val key: String)
-    private class ExpectedSignIn(val accountId: String, val method: SecurityProof)
+    private class ExpectedSignIn(
+        val accountId: String,
+        val method: SecurityProof,
+        val reservedCompletion: AccountSecurityState?,
+    )
+
+    private class ReservedSetup(val key: String, val token: String, val startProfile: SecurityProfile?) {
+        var identity: ReservedIdentity? = null
+        var issued: SecurityGrant? = null
+    }
+
+    private class ReservedIdentity(
+        val accountId: String,
+        val attemptId: String,
+        val generation: Long,
+        val profile: SecurityProfile,
+        val minimumInventoryRevision: Long,
+    ) {
+        fun matches(snapshot: AccountSecurityState) = snapshot.accountId == accountId &&
+            snapshot.attemptId == attemptId && snapshot.generation == generation && snapshot.setupProfile == profile &&
+            snapshot.inventoryRevision >= minimumInventoryRevision && snapshot.candidateId == null &&
+            snapshot.workspaceAccess == SecurityAccess.Restricted
+    }
 
     private class PendingMutation(
         val route: String,
@@ -156,6 +186,7 @@ class CoreAccountSecurityController(
             login = null
             pendingEnrollment = null
             pendingPublicStart = null
+            pendingReservedSetup = null
             pendingMutation = null
             pendingCancellation = null
             reservedEnrollment = false
@@ -171,7 +202,8 @@ class CoreAccountSecurityController(
         synchronized(lock) {
             check(mutableRetry.value == Retry.Complete)
             val state = mutableState.value ?: invalid()
-            val expected = ExpectedSignIn(state.accountId ?: invalid(), state.setupProfile?.proofMethod() ?: invalid())
+            val expected = ExpectedSignIn(state.accountId ?: invalid(), state.setupProfile?.proofMethod() ?: invalid(),
+                state.takeIf { reservedEnrollment })
             clear()
             expectedSignIn = expected
         }
@@ -206,7 +238,7 @@ class CoreAccountSecurityController(
     }
 
     suspend fun enroll(profile: SecurityProfile, admission: SecurityAdmission) = exclusive { operation ->
-        check(state.value == null)
+        checkPublicEntry(operation)
         val wireAdmission = admission.wire()
         val pending = synchronized(lock) {
             checkEpoch(operation)
@@ -236,12 +268,19 @@ class CoreAccountSecurityController(
         install(operation, credentials, SecurityPurpose.Enrollment)
     }
 
-    suspend fun enrollReserved(profile: SecurityProfile, invitationToken: String) = exclusive { operation ->
+    fun prepareReservedSetup(profile: SecurityProfile, invitationToken: String): ReservedSetupStart {
         require(reservedInvitationToken.matches(invitationToken))
-        val pending = publicStart(operation, "enrollment/reserved/start", body {
-            put("profile", accountSecurityJson.encodeToJsonElement(profile))
-            put("invitationToken", invitationToken)
-        })
+        return ReservedSetupStart(key(), profile, invitationToken)
+    }
+
+    suspend fun enrollReserved(start: ReservedSetupStart) = exclusive { operation ->
+        val pending = reservedSetup(operation, start.continuationKey, start.invitationToken, start.profile)
+        enterReserved(operation, pending)
+    }
+
+    suspend fun resumeReserved(invitationToken: String, startRequestKey: String) = exclusive { operation ->
+        require(reservedInvitationToken.matches(invitationToken) && recoveryId.matches(startRequestKey))
+        val pending = reservedSetup(operation, startRequestKey, invitationToken, null)
         enterReserved(operation, pending)
     }
 
@@ -271,34 +310,112 @@ class CoreAccountSecurityController(
 
     private fun publicStart(operation: Long, route: String, payload: JsonObject): PublicStart =
         synchronized(lock) {
-            checkEpoch(operation)
-            check(mutableState.value == null && pendingPublicStart == null)
+            checkPublicEntry(operation)
+            check(expectedSignIn == null)
             PublicStart(route, payload, key()).also { pendingPublicStart = it }
         }
 
-    private suspend fun enterReserved(operation: Long, pending: PublicStart) {
-        val result = sendPublicStart<SecurityAttemptResult>(operation, pending)
-        val credentials = when {
-            result.authority != null && result.state != null -> SecurityGrant(result.authority, result.state)
-            result.authority == null && result.state == null -> {
-                val resumed = api.accountSecurity<ReservedEnrollmentResume>("enrollment/reserved/resume", body = body {
-                    put("startRequestKey", pending.key)
-                    put("invitationToken", pending.payload.getValue("invitationToken"))
-                })
-                if (!securityOpaqueId.matches(resumed.attemptId) || resumed.attemptExpiresAt !in (now() + 1)..CORE_MAX_VERSION ||
-                    resumed.state.attemptId?.let { it != resumed.attemptId } == true) invalid()
-                SecurityGrant(resumed.authority, resumed.state)
+    private fun checkPublicEntry(operation: Long) = synchronized(lock) {
+        checkEpoch(operation)
+        check(mutableState.value == null && pendingPublicStart == null && pendingReservedSetup == null)
+    }
+
+    private fun reservedSetup(operation: Long, key: String, token: String, profile: SecurityProfile?): ReservedSetup =
+        synchronized(lock) {
+            checkPublicEntry(operation)
+            check(expectedSignIn == null)
+            login = null
+            ReservedSetup(key, token, profile).also {
+                pendingReservedSetup = it
+                mutableRetry.value = Retry.ReservedStart
             }
-            else -> invalid()
         }
-        checkAttemptReceipt(result.receipt, "enrollment.reserved.start", credentials.state, replay = result.state == null)
-        if (accountSecurityJson.encodeToJsonElement(credentials.state.setupProfile) != pending.payload["profile"] ||
-            !credentials.state.hasAttemptRevisions()) invalid()
-        install(operation, credentials, SecurityPurpose.Enrollment) {
+
+    private suspend fun enterReserved(operation: Long, pending: ReservedSetup) {
+        val profile = pending.startProfile
+        val credentials = pending.issued?.takeIf { it.authority.expiresAt > now() }
+            ?: (if (profile != null && pending.identity == null) startReserved(operation, pending, profile) else null)
+            ?: requestReservedGrant(operation, pending)
+        val identity = pending.identity ?: invalid()
+        pending.issued = credentials
+        val snapshot = try {
+            readState(operation, credentials.authority).also {
+                validateGrant(SecurityGrant(credentials.authority, it), SecurityPurpose.Enrollment)
+                if (!identity.matches(it) || !it.hasAttemptRevisions() ||
+                    it.inventoryRevision < credentials.state.inventoryRevision ||
+                    (it.attemptRevision ?: 0) < (credentials.state.attemptRevision ?: 0)) invalid()
+            }
+        } catch (error: CoreHttpException) {
+            if (error.status == 401 || error.status == 403) pending.issued = null
+            throw error
+        } catch (error: CoreProtocolException) {
+            pending.issued = null
+            throw error
+        }
+        install(operation, SecurityGrant(credentials.authority, snapshot), SecurityPurpose.Enrollment) {
             reservedEnrollment = true
-            pendingPublicStart = null
+            pendingReservedSetup = null
             mutableRetry.value = null
         }
+    }
+
+    private suspend fun startReserved(operation: Long, pending: ReservedSetup, profile: SecurityProfile): SecurityGrant? {
+        verify(operation)
+        val start = try {
+            api.accountSecurity<ReservedEnrollmentStart>("enrollment/reserved/start", key = pending.key, body = body {
+                put("profile", accountSecurityJson.encodeToJsonElement(profile))
+                put("invitationToken", pending.token)
+            })
+        } catch (error: CoreHttpException) {
+            if (error.status in definitiveRejection) synchronized(lock) {
+                checkEpoch(operation)
+                pendingReservedSetup = null
+                mutableRetry.value = null
+            }
+            throw error
+        }
+        verify(operation)
+        val receipt = start.receipt
+        val accountId = receipt.accountId?.takeIf(coreIdentifier::matches) ?: invalid()
+        val attemptId = receipt.attemptId?.takeIf(securityOpaqueId::matches) ?: invalid()
+        if (receipt.operation != "enrollment.reserved.start" || receipt.candidateId != null ||
+            !recoveryId.matches(receipt.operationId) || receipt.confirmedAt !in 0..CORE_MAX_VERSION ||
+            receipt.generationAfter !in 1..CORE_MAX_VERSION || receipt.generationBefore != receipt.generationAfter ||
+            receipt.inventoryRevision !in 0..CORE_MAX_VERSION || receipt.recoveryGeneration !in 0..CORE_MAX_VERSION) invalid()
+        val identity = ReservedIdentity(accountId, attemptId, receipt.generationAfter, profile, receipt.inventoryRevision)
+        pending.identity = identity
+        if (start.authority == null && start.state == null) return null
+        val result = try {
+            SecurityGrant(
+                accountSecurityJson.decodeFromJsonElement(SecurityAuthority.serializer(), start.authority ?: invalid()),
+                accountSecurityJson.decodeFromJsonElement(AccountSecurityState.serializer(), start.state ?: invalid()),
+            )
+        } catch (_: IllegalArgumentException) {
+            invalid()
+        }
+        if (!identity.matches(result.state) || !result.state.hasAttemptRevisions()) invalid()
+        checkAttemptReceipt(receipt, "enrollment.reserved.start", result.state)
+        validateGrant(result, SecurityPurpose.Enrollment)
+        return result
+    }
+
+    private suspend fun requestReservedGrant(operation: Long, pending: ReservedSetup): SecurityGrant {
+        verify(operation)
+        val resumed = api.accountSecurity<ReservedEnrollmentResume>("enrollment/reserved/resume", body = body {
+            put("startRequestKey", pending.key)
+            put("invitationToken", pending.token)
+        })
+        verify(operation)
+        val snapshot = resumed.state
+        val result = SecurityGrant(resumed.authority, snapshot)
+        validateGrant(result, SecurityPurpose.Enrollment)
+        if (!snapshot.hasAttemptRevisions() || snapshot.attemptId != resumed.attemptId ||
+            resumed.attemptExpiresAt !in snapshot.expiresAt..CORE_MAX_VERSION) invalid()
+        val identity = pending.identity ?: ReservedIdentity(snapshot.accountId?.takeIf(coreIdentifier::matches) ?: invalid(),
+            resumed.attemptId, snapshot.generation, snapshot.setupProfile ?: invalid(), snapshot.inventoryRevision)
+        if (!identity.matches(snapshot)) invalid()
+        pending.identity = identity
+        return result
     }
 
     private suspend fun enterRecovery(operation: Long, pending: PublicStart) {
@@ -337,7 +454,7 @@ class CoreAccountSecurityController(
         verify(operation)
         synchronized(lock) {
             checkEpoch(operation)
-            mutableRetry.value = if (pending.route == "recovery/start") Retry.RecoveryStart else Retry.ReservedStart
+            mutableRetry.value = Retry.RecoveryStart
         }
         val result = try {
             api.accountSecurity<T>(pending.route, body = pending.payload, key = pending.key)
@@ -507,7 +624,7 @@ class CoreAccountSecurityController(
     }
 
     suspend fun loginPasskey(passkeys: AccountPasskeys): Boolean = exclusive { operation ->
-        check(state.value == null)
+        checkPublicEntry(operation)
         synchronized(lock) { checkEpoch(operation); login = null }
         val challenge = api.accountSecurity<SecurityChallenge>("passkey/login/options", body = body())
         val assertion = proof(operation, passkeys, challenge.challengeId, challenge.options, registration = false)
@@ -521,7 +638,7 @@ class CoreAccountSecurityController(
     }
 
     suspend fun loginPassword(username: String, password: String) = exclusive { operation ->
-        check(state.value == null)
+        checkPublicEntry(operation)
         synchronized(lock) { checkEpoch(operation); login = null }
         val challenge = api.accountSecurity<SecurityPasswordChallenge>("password/login/start", body = body {
             put("username", username)
@@ -533,6 +650,7 @@ class CoreAccountSecurityController(
     }
 
     suspend fun loginTotp(totp: String) = exclusive { operation ->
+        checkPublicEntry(operation)
         val challenge = synchronized(lock) { checkEpoch(operation); checkNotNull(login) }
         check(challenge.expiresAt > now()) { "Sign-in challenge expired" }
         val result = api.accountSecurity<SecurityGrant>("password/login/verify", body = body {
@@ -774,6 +892,7 @@ class CoreAccountSecurityController(
         val previous = state.value ?: invalid()
         val strict = authority.purpose == SecurityPurpose.Recovery || reservedEnrollment
         var pending: PendingMutation? = null
+        var reservedReady: SecurityGrant? = null
         try {
             val result = if (strict) {
                 val (request, response) = keyed<SecurityAttemptResult>(operation, authority, route, payload)
@@ -796,15 +915,20 @@ class CoreAccountSecurityController(
                 (strict && (result.state.approvedMethod != previous.setupProfile?.proofMethod() ||
                     result.state.recovery.kind != previous.setupProfile?.recoveryKind() ||
                     result.state.workspaceAccess == SecurityAccess.Restricted)) ||
-                (reservedEnrollment && result.state.workspaceAccess != SecurityAccess.Available)) invalid()
-            install(operation, result, SecurityPurpose.Account) {
+                (reservedEnrollment && !reservedCompletionMatches(result.state, previous))) invalid()
+            val confirmed = if (reservedEnrollment) {
+                validateGrant(result, SecurityPurpose.Account)
+                reservedReady = result
+                readReservedCompletion(operation, result, previous)
+            } else result
+            install(operation, confirmed, SecurityPurpose.Account) {
                 mutableRecoveryReview.value = null
                 reservedEnrollment = false
             }
             forget(operation, checkNotNull(pending))
         } catch (error: CoreProtocolException) {
             if (strict) {
-                pending?.let { rejectedResponse(operation, it, error) }
+                if (reservedReady == null) pending?.let { rejectedResponse(operation, it, error) }
                 throw error
             }
             // A malformed successful response may follow an already-settled enrollment.
@@ -814,6 +938,7 @@ class CoreAccountSecurityController(
         } catch (error: CoreHttpException) {
             if (error.status != 401) throw error
             if (strict) {
+                if (reservedReady != null) throw RecoveryAcknowledgementLost()
                 if (completionStillRestricted(operation, authority, previous)) {
                     val request = synchronized(lock) { checkEpoch(operation); pendingMutation } ?: invalid()
                     forget(operation, request)
@@ -825,6 +950,27 @@ class CoreAccountSecurityController(
             synchronized(lock) { checkEpoch(operation); clear() }
             throw EnrollmentAcknowledgementLost()
         }
+    }
+
+    private fun reservedCompletionMatches(snapshot: AccountSecurityState, previous: AccountSecurityState): Boolean {
+        val profile = previous.setupProfile ?: return false
+        val offer = previous.recovery.offer ?: return false
+        return snapshot.accountId == previous.accountId && snapshot.candidateId == null && snapshot.attemptId == null &&
+            snapshot.phase == SecurityPhase.Ready && snapshot.generation == previous.generation + 1 &&
+            snapshot.inventoryRevision >= previous.inventoryRevision && snapshot.approvedMethod == profile.proofMethod() &&
+            snapshot.workspaceAccess == SecurityAccess.Available && snapshot.recovery.kind == profile.recoveryKind() &&
+            snapshot.recovery.generation == offer.generation && previous.replacementMethodsReady() &&
+            previous.methods.filter { it.state == SecurityMethodStatus.Staged && it.verified }.all { staged ->
+                val activeId = if (staged.kind == SecurityMethodKind.Passkey) "passkey:${staged.id}" else staged.id
+                snapshot.methods.any { it.id == activeId && it.kind == staged.kind &&
+                    it.state == SecurityMethodStatus.Active && it.verified }
+            }
+    }
+
+    private suspend fun readReservedCompletion(operation: Long, result: SecurityGrant, previous: AccountSecurityState): SecurityGrant {
+        val snapshot = readState(operation, result.authority)
+        if (!reservedCompletionMatches(snapshot, previous) || snapshot.inventoryRevision < result.state.inventoryRevision) invalid()
+        return SecurityGrant(result.authority, snapshot)
     }
 
     private suspend fun completionStillRestricted(
@@ -869,16 +1015,20 @@ class CoreAccountSecurityController(
     }
 
     suspend fun retryPending(): AccountSecurityRetryResult = exclusive { operation ->
-        val (public, request) = synchronized(lock) {
+        val (reserved, public, request) = synchronized(lock) {
             checkEpoch(operation)
-            pendingPublicStart to pendingMutation
+            Triple(pendingReservedSetup, pendingPublicStart, pendingMutation)
         }
-        if (public != null) {
-            if (public.route == "recovery/start") enterRecovery(operation, public) else enterReserved(operation, public)
+        if (reserved != null) {
+            enterReserved(operation, reserved)
+        } else if (public != null) {
+            enterRecovery(operation, public)
         } else {
             val pending = request ?: invalid()
             val authority = pending.authority
-            check(authority(operation, authority.purpose) === authority)
+            if (reservedEnrollment && pending.route == "enrollment/complete/verify" && pending.response != null) {
+                synchronized(lock) { checkEpoch(operation); check(grant === authority) }
+            } else check(authority(operation, authority.purpose) === authority)
             val payload = pending.payload
             when (pending.route) {
                 "recovery/review" -> reviewRecovery(operation, authority, payload)
@@ -959,7 +1109,7 @@ class CoreAccountSecurityController(
 
     private suspend fun readState(operation: Long, authority: SecurityAuthority): AccountSecurityState {
         verify(operation)
-        return api.accountSecurity("state", authority)
+        return api.accountSecurity<AccountSecurityState>("state", authority).also { verify(operation) }
     }
 
     private suspend fun refresh(operation: Long, authority: SecurityAuthority) {
@@ -989,7 +1139,12 @@ class CoreAccountSecurityController(
         operation: Long, result: SecurityGrant, purpose: SecurityPurpose, onInstall: () -> Unit = {},
     ) {
         validateGrant(result, purpose)
-        val (authority, snapshot) = result.let { it.authority to it.state }
+        val authority = result.authority
+        val reservedCompletion = synchronized(lock) { checkEpoch(operation); expectedSignIn?.reservedCompletion }
+        val snapshot = if (purpose == SecurityPurpose.Account && reservedCompletion != null) {
+            if (!reservedCompletionMatches(result.state, reservedCompletion)) throw AccountSecurityIdentityMismatch()
+            readReservedCompletion(operation, result, reservedCompletion).also { validateGrant(it, purpose) }.state
+        } else result.state
         verify(operation)
         synchronized(lock) {
             checkEpoch(operation)
@@ -1000,6 +1155,9 @@ class CoreAccountSecurityController(
                 prior.attemptId != snapshot.attemptId ||
                 (prior.attemptRevision ?: 0) > (snapshot.attemptRevision ?: 0) ||
                 (prior.intentRevision ?: 0) > (snapshot.intentRevision ?: 0))) invalid()
+            if (reservedEnrollment && purpose == SecurityPurpose.Enrollment && prior != null &&
+                (prior.generation != snapshot.generation || prior.setupProfile != snapshot.setupProfile ||
+                    snapshot.workspaceAccess != SecurityAccess.Restricted)) invalid()
             expectedSignIn?.let { expected ->
                 if (purpose != SecurityPurpose.Account || snapshot.accountId != expected.accountId ||
                     snapshot.phase != SecurityPhase.Ready || snapshot.approvedMethod != expected.method) {

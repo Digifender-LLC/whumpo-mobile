@@ -3,6 +3,7 @@ package com.whumpo.core.api
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -89,6 +90,13 @@ internal class SecurityAttemptReceipt(
     val inventoryRevision: Long,
     val recoveryGeneration: Long,
     val confirmedAt: Long,
+)
+
+@Serializable
+internal class ReservedEnrollmentStart(
+    val receipt: SecurityAttemptReceipt,
+    val authority: JsonElement? = null,
+    val state: JsonElement? = null,
 )
 
 @Serializable
