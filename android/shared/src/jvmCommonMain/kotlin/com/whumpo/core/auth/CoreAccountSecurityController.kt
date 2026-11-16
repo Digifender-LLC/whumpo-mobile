@@ -379,10 +379,12 @@ class CoreAccountSecurityController(
         val accountId = receipt.accountId?.takeIf(coreIdentifier::matches) ?: invalid()
         val attemptId = receipt.attemptId?.takeIf(securityOpaqueId::matches) ?: invalid()
         if (receipt.operation != "enrollment.reserved.start" || receipt.candidateId != null ||
-            !recoveryId.matches(receipt.operationId) || receipt.confirmedAt !in 0..CORE_MAX_VERSION ||
+            !recoveryId.matches(receipt.operationId) || receipt.confirmedAt !in 1..CORE_MAX_VERSION ||
             receipt.generationAfter !in 1..CORE_MAX_VERSION || receipt.generationBefore != receipt.generationAfter ||
-            receipt.inventoryRevision !in 0..CORE_MAX_VERSION || receipt.recoveryGeneration !in 0..CORE_MAX_VERSION) invalid()
+            receipt.revision != 1L || receipt.inventoryRevision !in 0..CORE_MAX_VERSION ||
+            receipt.recoveryGeneration !in 0..CORE_MAX_VERSION) invalid()
         val identity = ReservedIdentity(accountId, attemptId, receipt.generationAfter, profile, receipt.inventoryRevision)
+        // Keep the confirmed attempt even when the rest of the response cannot be decoded.
         pending.identity = identity
         if (start.authority == null && start.state == null) return null
         val result = try {
@@ -963,7 +965,8 @@ class CoreAccountSecurityController(
             previous.methods.filter { it.state == SecurityMethodStatus.Staged && it.verified }.all { staged ->
                 val activeId = if (staged.kind == SecurityMethodKind.Passkey) "passkey:${staged.id}" else staged.id
                 snapshot.methods.any { it.id == activeId && it.kind == staged.kind &&
-                    it.state == SecurityMethodStatus.Active && it.verified }
+                    it.state == SecurityMethodStatus.Active && it.verified &&
+                    (staged.kind == SecurityMethodKind.Passkey || it.version >= staged.version) }
             }
     }
 

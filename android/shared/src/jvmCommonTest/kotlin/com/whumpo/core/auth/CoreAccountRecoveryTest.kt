@@ -84,9 +84,10 @@ class CoreAccountRecoveryTest {
         val generation = state.field("generation")
         val revision = receiptRevision?.toString() ?: state.field("inventoryRevision")
         val bundle = state.getValue("recovery").jsonObject.field("generation")
+        val attemptRevision = if (operation == "enrollment.reserved.start") """, "revision":1""" else ""
         return """{"operation":"$operation","accountId":"account-1","candidateId":null,"attemptId":"attempt-1",
             "operationId":"00000000-0000-0000-0000-000000000001","confirmedAt":1,
-            "generationBefore":$priorGeneration,"generationAfter":$generation,"inventoryRevision":$revision,"recoveryGeneration":$bundle}"""
+            "generationBefore":$priorGeneration,"generationAfter":$generation,"inventoryRevision":$revision,"recoveryGeneration":$bundle$attemptRevision}"""
     }
 
     private fun method(id: String, kind: String, status: String = "active", verified: Boolean = true) =
@@ -383,6 +384,50 @@ class CoreAccountRecoveryTest {
             assertEquals("account-1", controller.state.value?.accountId)
             assertEquals("attempt-1", controller.state.value?.attemptId)
             assertNull(controller.retry.value)
+        }
+    }
+
+    @Test
+    fun invalidReservedStartReceiptNeverInitiatesResume() = runTest {
+        val request = ExactRequest()
+        var startCalls = 0
+        var resumeCalls = 0
+        val enrollment = snapshot("enrollment", "enrolling", "password_totp")
+        val receipt = receipt("enrollment.reserved.start", enrollment)
+        val engine = MockEngine { call ->
+            when (call.url.encodedPath.substringAfter("/v1/account-security/")) {
+                "enrollment/reserved/start" -> {
+                    request.record(call.headers["Idempotency-Key"], payload(call.body.toByteArray()))
+                    val acknowledgement = when (++startCalls) {
+                        1 -> receipt.replace("\"confirmedAt\":1", "\"confirmedAt\":0")
+                        2 -> receipt.replace("\"revision\":1", "\"revision\":2")
+                        else -> receipt
+                    }
+                    respond("""{"authority":null,"state":null,"receipt":$acknowledgement}""")
+                }
+                "enrollment/reserved/resume" -> {
+                    resumeCalls++
+                    assertEquals(3, startCalls)
+                    assertEquals(request.key, payload(call.body.toByteArray()).field("startRequestKey"))
+                    val result = grant(enrollment, purpose = "enrollment").dropLast(1)
+                    respond("""$result,"attemptId":"attempt-1","attemptExpiresAt":9000}""")
+                }
+                "state" -> respond(enrollment)
+                else -> error("Unexpected account request")
+            }
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val workspace = CoreOrganizationSessionController(api) { 1 }
+            val controller = CoreAccountSecurityController(api, workspace, rp) { 1 }
+            val draft = controller.prepareReservedSetup(SecurityProfile.PasswordTotp, invitation)
+            assertFailsWith<CoreProtocolException> { controller.enrollReserved(draft) }
+            assertFailsWith<CoreProtocolException> { controller.retryPending() }
+            assertEquals(0, resumeCalls)
+            assertNull(controller.state.value)
+            assertEquals(CoreAccountSecurityController.Retry.ReservedStart, controller.retry.value)
+            controller.retryPending()
+            assertEquals(1, resumeCalls)
+            assertEquals("attempt-1", controller.state.value?.attemptId)
         }
     }
 

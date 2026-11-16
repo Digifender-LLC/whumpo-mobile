@@ -90,6 +90,7 @@ internal class SecurityAttemptReceipt(
     val inventoryRevision: Long,
     val recoveryGeneration: Long,
     val confirmedAt: Long,
+    val revision: Long? = null,
 )
 
 @Serializable
