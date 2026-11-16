@@ -155,8 +155,15 @@ Enroll with a person invitation or an operator-issued bootstrap token entered at
 runtime. The app previews an invitation with the service, shows the organization
 and role, and submits consent only after acceptance. **Use a reserved invitation**
 starts setup for an identity and membership assigned by the operator. Enter the
-reserved token and choose a sign-in profile. After a missing start response,
-**Retry last step** uses the original request key to resume the same reservation.
+reserved token and choose a sign-in profile. Save the continuation key to a
+private location with the Android document picker before starting setup. Keep
+the key and the original invitation token until you finish. The key file contains
+only the continuation key, and Android gives the chosen document provider access
+to that file. After an interruption, open **Resume reserved setup** and enter
+the original token and saved key to continue the same reservation with its
+original sign-in profile. **Retry last step** checks an unconfirmed request in
+the current session. **Pause reserved setup** returns to account entry and
+leaves the reservation available for continuation while it is valid.
 Membership and role come from the service after setup. An enrollment grant stages
 the selected sign-in method. Passkey enrollment adds two distinct credential
 records and a recovery kit. The password path stages a password and verifies an

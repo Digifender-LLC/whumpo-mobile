@@ -68,6 +68,7 @@ import com.whumpo.core.auth.OneTimeMaterialUnavailable
 import com.whumpo.core.auth.PendingRecoveryDocument
 import com.whumpo.core.auth.PendingTotp
 import com.whumpo.core.auth.RecoveryAcknowledgementLost
+import com.whumpo.core.auth.ReservedSetupStart
 import com.whumpo.core.auth.replacementMethodsReady
 import com.whumpo.core.auth.verifiedSetupCount
 import kotlinx.coroutines.CancellationException
@@ -76,7 +77,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class Entry { Choose, Enrollment, Reserved, Recovery, Password, Totp }
+private enum class Entry { Choose, Enrollment, Reserved, ResumeReserved, Recovery, Password, Totp }
 
 @Composable
 internal fun AccountSecurityScreen(
@@ -104,6 +105,8 @@ internal fun AccountSecurityScreen(
     var organizations by remember { mutableStateOf<SecurityMembershipPage?>(null) }
     var editingReview by remember { mutableStateOf(false) }
     var checkingCompletion by remember { mutableStateOf(false) }
+    var reservedStart by remember { mutableStateOf<ReservedSetupStart?>(null) }
+    var reservedKeySaved by remember { mutableStateOf(false) }
     val offer = state?.recovery?.offer
     var offerExpired by remember(offer?.id, offer?.expiresAt) { mutableStateOf(false) }
     LaunchedEffect(offer?.id, offer?.expiresAt) {
@@ -162,11 +165,27 @@ internal fun AccountSecurityScreen(
         }
     }
 
+    val exportReservedKey = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        exporting = false
+        val draft = reservedStart
+        if (uri != null && draft != null) run {
+            check(uri.scheme == ContentResolver.SCHEME_CONTENT)
+            withContext(Dispatchers.IO) {
+                checkNotNull(resolver.openOutputStream(uri, "wt")).bufferedWriter(Charsets.UTF_8).use {
+                    it.write(draft.continuationKey)
+                }
+            }
+            reservedKeySaved = true
+        }
+    }
+
     fun clearStepSecrets() {
         recovery = null
         totpSetup = null
         written = false
         organizations = null
+        reservedStart = null
+        reservedKeySaved = false
     }
 
     fun restart(next: Entry, explanation: String? = null) {
@@ -322,8 +341,13 @@ internal fun AccountSecurityScreen(
                 Text("Whumpo", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                 val pending = retry
                 if (pending != null) {
-                    StepTitle("Confirm the last step")
-                    Text("This step is still incomplete here. Retry to check for the service’s confirmation.")
+                    if (pending == CoreAccountSecurityController.Retry.ReservedStart) {
+                        StepTitle("Continue reserved setup")
+                        Text("Retry this request or use your saved continuation key and original invitation token to resume later.")
+                    } else {
+                        StepTitle("Confirm the last step")
+                        Text("This step is still incomplete here. Retry to check for the service’s confirmation.")
+                    }
                     StepButton("Retry last step", !busy, ::retryStep)
                     when (pending) {
                         CoreAccountSecurityController.Retry.Secure -> WhumpoQuietButton(onClick = {
@@ -367,6 +391,7 @@ internal fun AccountSecurityScreen(
                             } else {
                                 WhumpoQuietButton(onClick = { entry = Entry.Recovery }, enabled = !busy) { Text("Recover an account") }
                                 WhumpoQuietButton(onClick = { entry = Entry.Reserved }, enabled = !busy) { Text("Use a reserved invitation") }
+                                WhumpoQuietButton(onClick = { entry = Entry.ResumeReserved }, enabled = !busy) { Text("Resume reserved setup") }
                             }
                         }
                         Entry.Enrollment -> AdmissionStep(profile, invitation?.preview, busy,
@@ -396,8 +421,31 @@ internal fun AccountSecurityScreen(
                             StepTitle("Enter your authenticator code")
                             TotpStep("Sign in", busy) { code -> run { controller.loginTotp(code) } }
                         }
-                        Entry.Reserved -> ReservedEnrollmentStep(busy, passkeysConfigured) { selectedProfile, token ->
-                            run { controller.enrollReserved(selectedProfile, token) }
+                        Entry.Reserved -> if (reservedStart == null) {
+                            ReservedEnrollmentStep(busy, passkeysConfigured) { selectedProfile, token ->
+                                run { reservedStart = controller.prepareReservedSetup(selectedProfile, token) }
+                            }
+                        } else {
+                            SaveReservedKeyStep(reservedKeySaved, busy || exporting, save = {
+                                exporting = true
+                                message = null
+                                try {
+                                    exportReservedKey.launch("Whumpo setup continuation key.txt")
+                                } catch (_: Exception) {
+                                    exporting = false
+                                    message = "The document picker could not open."
+                                }
+                            }, start = {
+                                val draft = checkNotNull(reservedStart)
+                                run {
+                                    reservedStart = null
+                                    reservedKeySaved = false
+                                    controller.enrollReserved(draft)
+                                }
+                            })
+                        }
+                        Entry.ResumeReserved -> ResumeReservedStep(busy) { token, continuationKey ->
+                            run { controller.resumeReserved(token, continuationKey) }
                         }
                         Entry.Recovery -> SavedRecoveryStep(busy) { locator, proof ->
                             run { controller.startRecovery(locator, proof) }
@@ -493,6 +541,12 @@ internal fun AccountSecurityScreen(
                             }, enabled = !busy && !exporting) { Text("Edit recovery choices") }
                         }
                     }
+                }
+                if (pending == CoreAccountSecurityController.Retry.ReservedStart ||
+                    (state?.purpose == SecurityPurpose.Enrollment && state.attemptId != null)) {
+                    WhumpoQuietButton(onClick = {
+                        restart(Entry.Choose, "Resume with your saved continuation key and original invitation token.")
+                    }, enabled = !busy && !exporting) { Text("Pause reserved setup") }
                 }
                 message?.let { Text(it, Modifier.semantics { liveRegion = LiveRegionMode.Polite }, color = MaterialTheme.colorScheme.error) }
                 if (busy) Text("Working…", Modifier.semantics { liveRegion = LiveRegionMode.Polite })
@@ -647,10 +701,39 @@ private fun ReservedEnrollmentStep(busy: Boolean, passkeysConfigured: Boolean, s
     Text("Enter the token provided by your operator for your reserved account and organization membership.")
     SecretField("Reserved invitation token", token, { token = it.take(80) }, busy)
     ProfileChoices(profile, busy, passkeysConfigured) { profile = it }
-    StepButton("Start reserved setup", !busy && token.trim().length == 43) {
+    StepButton("Continue", !busy && token.trim().length == 43) {
         val secret = token.trim()
         token = ""
         submit(profile, secret)
+    }
+}
+
+@Composable
+private fun SaveReservedKeyStep(saved: Boolean, busy: Boolean, save: () -> Unit, start: () -> Unit) {
+    StepTitle("Save your continuation key")
+    Text("Choose a private location for the key. To resume setup, you’ll need this key and your original invitation token.")
+    if (saved) {
+        Text("Continuation key saved.", Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+        StepButton("Start reserved setup", !busy, start)
+    } else {
+        StepButton("Save continuation key", !busy, save)
+    }
+}
+
+@Composable
+private fun ResumeReservedStep(busy: Boolean, submit: (String, String) -> Unit) {
+    var token by remember { mutableStateOf("") }
+    var continuationKey by remember { mutableStateOf("") }
+    StepTitle("Resume reserved setup")
+    Text("Open your saved continuation key file and enter the key and your original invitation token.")
+    SecretField("Reserved invitation token", token, { token = it.take(80) }, busy)
+    SecretField("Continuation key", continuationKey, { continuationKey = it.take(80) }, busy)
+    StepButton("Continue setup", !busy && token.trim().length == 43 && continuationKey.trim().length == 36) {
+        val originalToken = token.trim()
+        val originalKey = continuationKey.trim()
+        token = ""
+        continuationKey = ""
+        submit(originalToken, originalKey)
     }
 }
 
