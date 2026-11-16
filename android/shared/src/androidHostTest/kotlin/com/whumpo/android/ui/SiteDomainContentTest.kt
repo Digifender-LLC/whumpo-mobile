@@ -7,6 +7,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.whumpo.android.ui.domains.SiteDomainActions
 import com.whumpo.android.ui.domains.SiteDomainContent
 import com.whumpo.android.ui.domains.rememberDomainTime
@@ -80,18 +84,32 @@ class SiteDomainContentTest : RobolectricUiTest() {
     }
 
     @Test
-    fun compactLightFormRequiresExplicitPrepare() {
-        var submitted: String? = null
+    fun compactLightFormKeepsInputEditableAfterDefinitiveValidation() {
+        val rejected = "reserved-example.test"
+        val submitted = mutableListOf<String>()
+        var state by mutableStateOf(CoreSiteDomainState(project = project))
         launch(Screen.Compact, fontScale = 2f) {
             WhumpoEntryTheme(darkTheme = false) {
-                SiteDomainContent(CoreSiteDomainState(project = project), start, actions(prepare = { submitted = it }))
+                SiteDomainContent(state, start, actions(prepare = {
+                    submitted += it
+                    state = state.copy(pending = true)
+                }))
             }
         }.use {
-            compose.onNodeWithText("Get TXT instructions").performScrollTo().assertIsNotEnabled()
-            compose.onNodeWithText("Domain name").performScrollTo().performTextInput(claim.hostname)
-            assertEquals(null, submitted)
-            compose.onNodeWithText("Get TXT instructions").performScrollTo().performClick()
-            assertEquals(claim.hostname, submitted)
+            val submit = compose.onNodeWithText("Get TXT instructions")
+            val field = compose.onNodeWithText("Domain name")
+            submit.performScrollTo().assertIsNotEnabled()
+            field.performScrollTo().performTextInput(rejected)
+            assertEquals(emptyList<String>(), submitted)
+            submit.performScrollTo().performClick()
+            compose.onNodeWithText("Retry original request").performScrollTo().assertIsDisplayed()
+
+            compose.runOnIdle { state = state.copy(pending = false, notice = DomainNotice.InvalidHostname) }
+            compose.onNodeWithText(rejected).assertExists()
+            compose.onNodeWithText("Retry original request").assertDoesNotExist()
+            field.performScrollTo().performTextReplacement(claim.hostname)
+            submit.performScrollTo().performClick()
+            assertEquals(listOf(rejected, claim.hostname), submitted)
         }
     }
 

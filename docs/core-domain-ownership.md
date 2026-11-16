@@ -16,8 +16,10 @@ expires, select **Renew TXT challenge** and replace the previous value at your
 DNS provider. Website routing and certificates have a separate setup flow.
 
 If a request is interrupted, **Retry original request** reuses the same body
-and key while the originating session is active. After acknowledgement or a
-version conflict, **Read saved claim** performs a GET. The client checks
+and key while the originating session is active. If the server rejects an
+initial hostname, correct the existing entry. After acknowledgement, a
+version conflict, or a validation rejection following an uncertain write,
+**Read saved claim** performs a GET. The client checks
 the organization, project, claim identity and generation before showing
 updated instructions. Denied reads clear the visible claim. A new session
 loads current claims without replaying a previous session's request.

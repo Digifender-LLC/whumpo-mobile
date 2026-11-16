@@ -86,6 +86,7 @@ fun SiteDomainContent(
     actions: SiteDomainActions,
     modifier: Modifier = Modifier,
 ) {
+    var hostname by remember(state.project?.id) { mutableStateOf("") }
     Box(modifier.fillMaxSize().imePadding(), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 600.dp).fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -107,7 +108,7 @@ fun SiteDomainContent(
                     DomainAction(label, actions.retry, enabled = !state.busy, primary = true)
                 }
                 state.claim != null -> DomainClaimContent(state.claim, now, !state.busy, actions)
-                state.project != null -> DomainClaimsContent(state, now, actions)
+                state.project != null -> DomainClaimsContent(state, now, actions, hostname) { hostname = it }
                 else -> DomainProjectContent(state, actions)
             }
         }
@@ -138,9 +139,14 @@ private fun DomainProjectContent(state: CoreSiteDomainState, actions: SiteDomain
 }
 
 @Composable
-private fun DomainClaimsContent(state: CoreSiteDomainState, now: Instant, actions: SiteDomainActions) {
+private fun DomainClaimsContent(
+    state: CoreSiteDomainState,
+    now: Instant,
+    actions: SiteDomainActions,
+    hostname: String,
+    onHostnameChange: (String) -> Unit,
+) {
     val project = checkNotNull(state.project)
-    var hostname by remember(project.id) { mutableStateOf("") }
     val enabled = !state.busy
     Text(project.name ?: "Workspace project", style = MaterialTheme.typography.titleLarge,
         modifier = Modifier.semantics { heading() })
@@ -149,7 +155,7 @@ private fun DomainClaimsContent(state: CoreSiteDomainState, now: Instant, action
     if (state.claims.size < 5) {
         OutlinedTextField(
             value = hostname,
-            onValueChange = { if (it.length <= 245) hostname = it },
+            onValueChange = { if (it.length <= 245) onHostnameChange(it) },
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Domain name") },
             singleLine = true,

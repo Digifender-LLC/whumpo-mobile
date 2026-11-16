@@ -11,6 +11,7 @@ import com.whumpo.core.api.CoreProjectChoices
 import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreWorkspaceChoice
 import com.whumpo.core.api.CoreWorkspaceChoices
+import com.whumpo.core.api.PartnerHttpException
 import com.whumpo.core.api.coreIdentifier
 import com.whumpo.core.api.normalizeCoreDomainHostname
 import com.whumpo.core.api.requireDomain
@@ -57,11 +58,13 @@ class CoreSiteDomainController(
     private var job: Job? = null
     private var retired = false
 
+    private enum class Recheck { Conflict, ValidationRejected }
+
     private class Attempt(val project: DomainProject, val command: CoreDomainCommand) {
         val write = PartnerWrite(partnerOperationKey(), command.encode())
         var acknowledgement: CoreDomainClaim? = null
-        var conflict = false
-        val readbackOnly get() = acknowledgement != null || conflict
+        var recheck: Recheck? = null
+        val readbackOnly get() = acknowledgement != null || recheck != null
     }
 
     fun retire() {
@@ -171,11 +174,16 @@ class CoreSiteDomainController(
                 }
             } catch (error: CoreHttpException) {
                 when {
-                    error.status == 409 -> operation.conflict = true
-                    error.status == 400 && !retrying && operation.command.kind == CoreDomainOperationKind.Prepare -> {
-                        attempt = null
-                        update { copy(pending = false, notice = DomainNotice.InvalidHostname) }
-                        return
+                    error.status == 409 -> operation.recheck = Recheck.Conflict
+                    error is PartnerHttpException && error.status == 422 && error.rejectsWrite &&
+                        operation.command.kind == CoreDomainOperationKind.Prepare -> {
+                        if (retrying) {
+                            operation.recheck = Recheck.ValidationRejected
+                        } else {
+                            attempt = null
+                            update { copy(pending = false, notice = DomainNotice.InvalidHostname) }
+                            return
+                        }
                     }
                     else -> throw error
                 }
@@ -194,7 +202,12 @@ class CoreSiteDomainController(
             }
         } else {
             showClaims(operation.project, operation.command.claim)
-            update { copy(notice = DomainNotice.Changed) }
+            update {
+                val knownClaim = claims.any { it.hostname == operation.command.expectedHostname }
+                copy(notice = if (operation.recheck == Recheck.ValidationRejected && !knownClaim) {
+                    DomainNotice.InvalidHostname
+                } else DomainNotice.Changed)
+            }
         }
         attempt = null
         update { copy(pending = false, readbackOnly = false) }

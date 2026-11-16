@@ -141,6 +141,105 @@ class CoreSiteDomainTest {
     }
 
     @Test
+    fun firstStructuredValidationReleasesPrepareSoTheHostnameCanBeCorrected() = runTest {
+        val writes = mutableListOf<Write>()
+        var listReads = 0
+        fixture(routes = { request ->
+            when (request.url.encodedPath) {
+                "/v1/organization/readiness" -> json(readiness(project))
+                path -> if (request.method == HttpMethod.Get) {
+                    listReads++
+                    json(list())
+                } else {
+                    writes += request.write()
+                    if (writes.size == 1) validationFailure() else json(operation(awaiting, 1))
+                }
+                detailPath -> json(detail(awaiting))
+                else -> error("Unexpected fixture request")
+            }
+        }) { _, controller ->
+            controller.refresh()
+            controller.prepare("reserved-example.test")
+            assertEquals(DomainNotice.InvalidHostname, controller.state.value.notice)
+            assertFalse(controller.state.value.pending)
+            assertFalse(controller.state.value.readbackOnly)
+            controller.retry()
+            assertEquals(1, writes.size)
+            assertEquals(1, listReads)
+
+            controller.prepare(hostname)
+            assertEquals("""{"hostname":"reserved-example.test"}""", writes[0].body)
+            assertEquals("""{"hostname":"$hostname"}""", writes[1].body)
+            assertTrue(writes[0].key != writes[1].key)
+            assertEquals(hostname, controller.state.value.claim?.hostname)
+        }
+    }
+
+    @Test
+    fun validationAfterUncertainPrepareUsesExactReplayThenOnlyCanonicalReads() = runTest {
+        val writes = mutableListOf<Write>()
+        var listReads = 0
+        fixture(routes = { request ->
+            when (request.url.encodedPath) {
+                "/v1/organization/readiness" -> json(readiness(project))
+                path -> if (request.method == HttpMethod.Get) {
+                    when (++listReads) {
+                        1 -> json(list())
+                        2 -> fail(503)
+                        else -> json(list(awaiting))
+                    }
+                } else {
+                    writes += request.write()
+                    if (writes.size == 1) fail(503) else validationFailure()
+                }
+                else -> error("Unexpected fixture request")
+            }
+        }) { _, controller ->
+            controller.refresh()
+            controller.prepare(hostname)
+            assertTrue(controller.state.value.pending)
+            assertFalse(controller.state.value.readbackOnly)
+            controller.retry()
+            assertEquals(writes.first(), writes[1])
+            assertTrue(controller.state.value.pending)
+            assertTrue(controller.state.value.readbackOnly)
+            assertEquals(DomainNotice.CheckSaved, controller.state.value.notice)
+            assertNull(controller.state.value.claim)
+
+            controller.retry()
+            assertEquals(2, writes.size)
+            assertEquals(3, listReads)
+            assertFalse(controller.state.value.pending)
+            assertEquals(DomainNotice.Changed, controller.state.value.notice)
+            assertEquals(hostname, controller.state.value.claims.single().hostname)
+            assertNull(controller.state.value.claim)
+        }
+    }
+
+    @Test
+    fun unrelated422DoesNotReleaseAnUnconfirmedPrepare() = runTest {
+        var writes = 0
+        fixture(routes = { request ->
+            when (request.url.encodedPath) {
+                "/v1/organization/readiness" -> json(readiness(project))
+                path -> if (request.method == HttpMethod.Get) json(list()) else {
+                    writes++
+                    validationFailure("UNRECOGNIZED_ERROR")
+                }
+                else -> error("Unexpected fixture request")
+            }
+        }) { _, controller ->
+            controller.refresh()
+            controller.prepare(hostname)
+            assertTrue(controller.state.value.pending)
+            assertFalse(controller.state.value.readbackOnly)
+            assertEquals(DomainNotice.Unconfirmed, controller.state.value.notice)
+            controller.prepare("other-example.com")
+            assertEquals(1, writes)
+        }
+    }
+
+    @Test
     fun acknowledgedRenewRejectsOlderGenerationAlteredTxtAndCheckedAtRegression() = runTest {
         val writes = mutableListOf<Write>()
         val renewed = proof.changed("generation", JsonPrimitive(2))
@@ -335,6 +434,11 @@ class CoreSiteDomainTest {
         respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
 
     private fun MockRequestHandleScope.fail(status: Int) = respond("{}", HttpStatusCode.fromValue(status))
+
+    private fun MockRequestHandleScope.validationFailure(code: String = "VALIDATION_FAILED") = respond(
+        """{"error":{"code":"$code","message":"Synthetic validation response","requestId":"test-request","retryable":false}}""",
+        HttpStatusCode.UnprocessableEntity, headersOf(HttpHeaders.ContentType, "application/json"),
+    )
 
     private data class Write(val path: String, val body: String, val key: String)
     private suspend fun HttpRequestData.write() = Write(url.encodedPath,
