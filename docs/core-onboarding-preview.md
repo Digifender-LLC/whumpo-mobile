@@ -3,8 +3,8 @@
 The `localDebug` launcher offers **Explore setup preview** below its passkey
 sign-in. The native Compose walkthrough covers plan selection, demo checkout,
 demo account security, business questions, editable review, and a starter plan
-in the preview workspace. The harness also offers **Sign in to local test
-service** for separately configured testing.
+in the preview workspace. The harness also offers **Account security and sign-in** for a separately
+configured local service.
 
 ## Open and leave
 
@@ -127,6 +127,73 @@ verify erasure. Repeat with the IME visible, compact dimensions, enlarged text,
 light/dark themes and TalkBack. Compilation and domain tests alone do not
 qualify those UI behaviors. Real payment, passkey enrollment, connected backend,
 release signing and physical-device acceptance remain separate work.
+
+## Connected account security in localDebug
+
+Open **Explore setup preview**, then **Account security and sign-in**. The same
+harness still offers **Try onboarding** for the offline business and checkout
+preview above. The connected route has its own core origin, separate from the
+legacy mobile API. By default it uses `http://127.0.0.1:5173` on the device. For
+a compatible test service, configure the public endpoint and relying-party host
+with Gradle properties.
+
+```sh
+./gradlew assembleLocalDebug -Pwhumpo.localCoreOrigin=https://core.example.test \
+  -Pwhumpo.localCoreRp=core.example.test
+```
+
+For HTTPS, the endpoint host and configured RP must match exactly. An
+explicitly configured RP can also be used with the existing debug-only
+loopback transport. Passkeys require native Credential Manager registration and
+assertion support, Digital Asset Links for the installed build's package and
+signing certificate, and backend verification of the Android WebAuthn origin.
+Use a configured test service for those checks. The default loopback build
+leaves real passkeys disabled until an RP is supplied. Deployed builds retain
+their existing account entry.
+
+Enroll with a person invitation or an operator-issued bootstrap token entered at
+runtime. The app previews an invitation with the service, shows the organization
+and role, and submits consent only after acceptance. An enrollment grant stages
+the selected sign-in method. Passkey enrollment adds two distinct credential
+records and a recovery kit. The password path stages a password and verifies an
+authenticator code before preparing ten recovery codes. The app uses the
+service's verified factor state to distinguish a prepared setup key from a
+working authenticator.
+
+Save recovery material with the Android document picker, then acknowledge the
+successful write in the app. Choose a trusted private destination. The chosen
+document provider receives the text of the kit or codes. The app holds the
+material in memory through the write, masks typed secrets, and blocks
+screenshots of this activity. Its account bearer, recovery material, pending
+proofs and enrollment continuation stay in memory and clear when this
+activity is destroyed. The service gives one-time material only to the
+original prepare response. If that response is lost, retry to reconcile the
+receipt, then prepare fresh material. If enrollment completion committed but
+its acknowledgement was lost, use normal sign-in with the newly enrolled
+method. The app has no enrollment continuation after activity destruction.
+Contact the local operator if interrupted enrollment requires new admission.
+
+The final credential proof moves enrollment to a regular account grant.
+Sign-in also issues an account grant, using either a single existing passkey or
+password plus TOTP. A signed-in member can also review and accept a person
+invitation. The account keeps its existing sign-in method and returns to
+organization selection after acceptance. The organization picker requires an explicit choice and
+verifies the returned workspace session against the account and selected
+organization before opening Today or Work. This connected route covers setup,
+sign-in and workspace selection. The recovery files are real for the connected
+test account. Applying them to recover an account, managing methods, and
+production provider acceptance are separate work.
+
+```sh
+./gradlew :shared:jvmTest --tests 'com.whumpo.core.auth.CoreAccountSecurityControllerTest'
+```
+
+The synthetic tests cover both enrollment profiles, public invitation consent,
+the verified TOTP distinction, replay after a lost response, restricted grant
+boundaries, explicit scope handoff, ordinary login, RP mismatch and credential
+prompt cancellation by epoch. Use a separately configured provider/device to
+verify OS credential prompts, Digital Asset Links, recovery document storage
+and native accessibility end to end.
 
 ## Earlier security-choice integration evidence — November 15, 2026
 

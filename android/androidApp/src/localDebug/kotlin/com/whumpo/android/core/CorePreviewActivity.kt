@@ -1,6 +1,9 @@
 package com.whumpo.android.core
 
 import android.os.Bundle
+import android.view.WindowManager
+import com.whumpo.android.BuildConfig
+import com.whumpo.core.auth.CoreAccountSecurityController
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -32,7 +35,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.whumpo.android.auth.ActivityTracker
-import com.whumpo.android.auth.CredentialManagerPasskeys
 import com.whumpo.android.ui.theme.WhumpoEntryTheme
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
 import com.whumpo.android.ui.theme.WhumpoQuietButton
@@ -44,7 +46,6 @@ import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.coreApiClient
 import com.whumpo.core.auth.CoreOrganizationSessionController
-import com.whumpo.core.auth.PasskeyAuthenticator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -53,19 +54,24 @@ import kotlinx.coroutines.launch
 class CorePreviewActivity : ComponentActivity() {
     private lateinit var api: CoreApiClient
     private lateinit var controller: CoreOrganizationSessionController
+    private lateinit var account: CoreAccountSecurityController
     private val activities = ActivityTracker()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        api = coreApiClient(CoreOrigin.allowlisted("http://127.0.0.1:5173", emptySet(), debugLoopback = true))
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        val origin = BuildConfig.WHUMPO_LOCAL_CORE_ORIGIN
+        val rpId = BuildConfig.WHUMPO_LOCAL_CORE_RP.takeIf(String::isNotBlank)
+        api = coreApiClient(CoreOrigin.allowlisted(origin, setOfNotNull(rpId?.let { "https://$it" }), debugLoopback = true))
         controller = CoreOrganizationSessionController(api)
-        val passkeys = CredentialManagerPasskeys(applicationContext, activities)
+        account = CoreAccountSecurityController(api, controller, rpId)
+        val passkeys = NativeAccountPasskeys(applicationContext, activities)
         setContent {
             WhumpoEntryTheme {
                 Surface {
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                        CorePreview(controller, passkeys)
+                        CorePreview(controller, account, passkeys, passkeysConfigured = rpId != null)
                     }
                 }
             }
@@ -83,7 +89,7 @@ class CorePreviewActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        controller.clear()
+        account.clear()
         api.close()
         super.onDestroy()
     }
@@ -96,7 +102,12 @@ private data class OrganizationPreview(
 )
 
 @Composable
-internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys: PasskeyAuthenticator) {
+internal fun CorePreview(
+    controller: CoreOrganizationSessionController,
+    account: CoreAccountSecurityController,
+    passkeys: NativeAccountPasskeys,
+    passkeysConfigured: Boolean,
+) {
     val state by controller.state.collectAsState()
     val active = state as? CoreOrganizationSessionController.State.Active
     val actions = rememberCoroutineScope()
@@ -105,6 +116,8 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
     var showOnboarding by remember(state) { mutableStateOf(false) }
+    var showSecurity by remember { mutableStateOf(false) }
+    val accountState by account.state.collectAsState()
     var cursor by remember(active?.epoch) { mutableStateOf<String?>(null) }
     LaunchedEffect(active?.epoch) {
         if (active != null) {
@@ -134,6 +147,10 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
         CoreOnboardingPreview { showOnboarding = false }
         return
     }
+    if (active == null && showSecurity) {
+        AccountSecurityScreen(account, accountState, passkeys, passkeysConfigured) { showSecurity = false }
+        return
+    }
     if (active != null && showWork) {
         key(active.epoch) {
             CoreWorkPreview(
@@ -158,23 +175,7 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
         openToday = { showToday = true },
         openWork = { showWork = true },
         tryOnboarding = { showOnboarding = true },
-        signIn = {
-            message = null
-            actions.launch {
-                try {
-                    message = when (controller.signIn(passkeys)) {
-                        CoreOrganizationSessionController.SignInResult.SignedIn,
-                        CoreOrganizationSessionController.SignInResult.Cancelled -> null
-                        CoreOrganizationSessionController.SignInResult.NoCredential -> "Enroll a test passkey for this relying party first."
-                        CoreOrganizationSessionController.SignInResult.Unavailable -> "Sign-in unavailable on this device. Check the passkey provider and app association."
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (_: Exception) {
-                    message = "Sign-in unavailable. Check the local service and Android passkey origin."
-                }
-            }
-        },
+        signIn = { showSecurity = true },
         choose = { org ->
             message = null
             actions.launch {
@@ -188,7 +189,20 @@ internal fun CorePreview(controller: CoreOrganizationSessionController, passkeys
             }
         },
         next = { cursor = it },
-        signOut = { controller.clear(); message = null },
+        signOut = {
+            message = null
+            actions.launch {
+                try {
+                    account.leave()
+                    showSecurity = false
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    account.clear()
+                    showSecurity = false
+                }
+            }
+        },
     )
 }
 
@@ -216,7 +230,7 @@ private fun CorePreviewContent(
                     Text("Try onboarding")
                 }
                 WhumpoQuietButton(onClick = signIn, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text("Sign in to local test service")
+                    Text("Account security and sign-in")
                 }
             }
             CoreOrganizationSessionController.State.Transitioning -> Text("Checking session…")

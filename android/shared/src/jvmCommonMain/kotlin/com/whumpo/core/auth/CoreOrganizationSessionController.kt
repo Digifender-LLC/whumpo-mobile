@@ -82,6 +82,18 @@ class CoreOrganizationSessionController(
         return verifyAndActivate(transition, bearer)
     }
 
+    internal suspend fun establishAccountSession(
+        scoped: CoreSessionToken,
+        accountId: String,
+        organizationId: String,
+        validGrant: () -> Boolean,
+    ): State.Active {
+        require(coreBearer.matches(scoped.token))
+        if (!validGrant()) throw CancellationException("Account grant changed")
+        val transition = synchronized(lock) { beginTransition() }
+        return verifyAndActivate(transition, scoped.token, accountId, organizationId, scoped.expiresAt, validGrant)
+    }
+
     /** Returns the platform outcome without exposing the assertion or bearer to presentation code. */
     suspend fun signIn(passkeys: PasskeyAuthenticator): SignInResult {
         val transition = synchronized(lock) { beginTransition() }
@@ -648,6 +660,7 @@ class CoreOrganizationSessionController(
         userId: String? = null,
         orgId: String? = null,
         expiresAt: Long? = null,
+        validGrant: () -> Boolean = { true },
     ): State.Active {
         try {
             val session = api.session(token)
@@ -656,6 +669,7 @@ class CoreOrganizationSessionController(
                 (userId != null && session.userId != userId) || (orgId != null && session.orgId != orgId) ||
                 (expiresAt != null && session.expiresAt != expiresAt)) throw CoreProtocolException()
             currentCoroutineContext().ensureActive()
+            if (!validGrant()) throw CancellationException("Account grant changed")
             return synchronized(lock) {
                 if (epoch != transition) throw CancellationException("Core session changed")
                 val scope = CoreAccountScope.of(api.origin, session.userId, session.orgId)
