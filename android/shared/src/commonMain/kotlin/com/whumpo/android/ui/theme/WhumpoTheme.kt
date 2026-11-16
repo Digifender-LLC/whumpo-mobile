@@ -28,16 +28,18 @@ import com.whumpo.shared.resources.poppins_bold
 import com.whumpo.shared.resources.poppins_medium
 
 /** Roles Material 3 lacks, plus the fixed brand six for illustration. Values come from [WhumpoTokens]. */
-class WhumpoColors(p: WhumpoPalette) {
-    val actionHover = Color(p.actionHover)
+class WhumpoColors(
+    p: WhumpoPalette,
+    val actionHover: Color = Color(p.actionHover),
+    val surfaceSunken: Color = Color(p.surfaceSunken),
+    val inkMuted: Color = Color(p.inkMuted),
+    val line: Color = Color(p.line),
+    val focusRing: Color = Color(p.focusRing),
+) {
     val readySoft = Color(p.readySoft)
     val readyInk = Color(p.readyInk)
     val sparkSoft = Color(p.sparkSoft)
     val sparkInk = Color(p.sparkInk)
-    val surfaceSunken = Color(p.surfaceSunken)
-    val inkMuted = Color(p.inkMuted)
-    val line = Color(p.line)
-    val focusRing = Color(p.focusRing)
     val skyBlue = Color(WhumpoTokens.BrandSkyBlue)
     val deepSky = Color(WhumpoTokens.BrandDeepSky)
     val cloudCoral = Color(WhumpoTokens.BrandCloudCoral)

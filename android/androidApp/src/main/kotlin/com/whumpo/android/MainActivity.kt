@@ -20,10 +20,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        val openPreview: (() -> Unit)? = if (BuildConfig.DEBUG && BuildConfig.WHUMPO_ENVIRONMENT == "local") {
+            {
+                startActivity(Intent().setClassName(packageName, "com.whumpo.android.core.CorePreviewActivity"))
+            }
+        } else null
         setContent {
             val preference by container.themes.preference.collectAsState()
             WhumpoTheme(darkTheme = preference.isDark(isSystemInDarkTheme())) {
-                WhumpoApp(container)
+                WhumpoApp(container, openPreview)
             }
         }
         // Only a fresh launch carries a share or link. A recreation (rotation, process restore) re-delivers the same intent,

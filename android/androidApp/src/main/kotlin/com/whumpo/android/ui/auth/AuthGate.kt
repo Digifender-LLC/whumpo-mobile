@@ -8,7 +8,7 @@ import com.whumpo.core.auth.AuthState
 
 /** Shows the app only for a signed-in account that finished the welcome; otherwise the sign-in screens. */
 @Composable
-fun AuthGate(auth: AuthController, content: @Composable () -> Unit) {
+fun AuthGate(auth: AuthController, openPreview: (() -> Unit)? = null, content: @Composable () -> Unit) {
     val state by auth.state.collectAsStateWithLifecycle()
-    if (state == AuthState.Ready) content() else AuthFlow(state, auth)
+    if (state == AuthState.Ready) content() else AuthFlow(state, auth, openPreview = openPreview)
 }

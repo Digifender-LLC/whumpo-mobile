@@ -1,0 +1,280 @@
+package com.whumpo.android.core
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.whumpo.core.api.CoreHttpException
+import com.whumpo.core.api.CoreProjectChoice
+import com.whumpo.core.api.CoreTaskCommandAcceptance
+import com.whumpo.core.api.CoreTaskCommandStatus
+import com.whumpo.core.api.CoreTaskOutcome
+import com.whumpo.core.api.CoreWorkTask
+import com.whumpo.core.api.CoreWorkspaceChoice
+import com.whumpo.core.auth.CoreOrganizationSessionController
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+
+private sealed interface SubmissionState {
+    data object Editing : SubmissionState
+    data class Sending(val request: CoreOrganizationSessionController.TaskCreation) : SubmissionState
+    data class Uncertain(val request: CoreOrganizationSessionController.TaskCreation, val message: String) : SubmissionState
+    data class Accepted(
+        val request: CoreOrganizationSessionController.TaskCreation,
+        val response: CoreTaskCommandAcceptance,
+        val outcome: CoreTaskOutcome? = null,
+        val checking: Boolean = false,
+        val message: String? = null,
+    ) : SubmissionState
+}
+
+@Composable
+internal fun CoreTaskCreationPreview(
+    controller: CoreOrganizationSessionController,
+    epoch: Long,
+    organizationName: String,
+    openTask: (CoreWorkTask) -> Unit,
+    close: () -> Unit,
+) {
+    var selection by remember { mutableStateOf<CoreWorkspaceChoice?>(null) }
+    var project by remember { mutableStateOf<CoreProjectChoice?>(null) }
+    var workspaceCursor by remember { mutableStateOf<String?>(null) }
+    var projectCursor by remember { mutableStateOf<String?>(null) }
+    var title by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    var feedback by remember { mutableStateOf<String?>(null) }
+    var submission by remember { mutableStateOf<SubmissionState>(SubmissionState.Editing) }
+    val requests = rememberCoroutineScope()
+    val current = submission
+    val canClose = current is SubmissionState.Editing || current is SubmissionState.Accepted
+    BackHandler { if (canClose) close() }
+
+    LaunchedEffect(current) {
+        if (current is SubmissionState.Sending) {
+            try {
+                val accepted = controller.createTask(current.request)
+                controller.commitIfCurrent(epoch) { submission = SubmissionState.Accepted(current.request, accepted) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                controller.commitIfCurrent(epoch) {
+                    val status = (error as? CoreHttpException)?.status
+                    val rejection = when (status) {
+                        400, 422 -> "Check the task details and try again."
+                        403 -> "Your organization access does not allow task creation."
+                        404 -> "This project is no longer available. Choose another project."
+                        else -> null
+                    }
+                    if (rejection != null) {
+                        feedback = rejection
+                        submission = SubmissionState.Editing
+                    } else {
+                        submission = SubmissionState.Uncertain(
+                            current.request,
+                            if (status == 409) "The task request conflicts with the current state."
+                            else "The server did not confirm whether it accepted the task.",
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun checkTask(accepted: SubmissionState.Accepted) {
+        if (submission != accepted || accepted.checking) return
+        submission = accepted.copy(checking = true, message = null)
+        requests.launch {
+            try {
+                val outcome = controller.taskOutcome(accepted.request)
+                controller.commitIfCurrent(epoch) { submission = accepted.copy(outcome = outcome, checking = false, message = null) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                controller.commitIfCurrent(epoch) {
+                    val message = when ((error as? CoreHttpException)?.status) {
+                        403 -> "Your organization access does not allow checking this task."
+                        404 -> "The task status is no longer available."
+                        else -> "Could not check the task status."
+                    }
+                    submission = accepted.copy(checking = false, message = message)
+                }
+            }
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (canClose) TextButton(onClick = close) { Text("Back to Work") }
+        Text(organizationName, style = MaterialTheme.typography.labelLarge)
+        Text("New task", style = MaterialTheme.typography.headlineMedium)
+        when (current) {
+            SubmissionState.Editing -> {
+                val workspace = selection
+                val chosen = project
+                when {
+                    workspace == null -> key(workspaceCursor) {
+                        Text("Choose a workspace", style = MaterialTheme.typography.titleMedium)
+                        WorkRead(controller, epoch, { controller.workspaceChoices(workspaceCursor) }) { page ->
+                            if (page.items.isEmpty()) Text("No workspaces available.")
+                            page.items.forEach { item ->
+                                OutlinedButton(onClick = {
+                                    selection = item
+                                    projectCursor = null
+                                }) { Text(item.name) }
+                            }
+                            page.nextCursor?.let { next ->
+                                TextButton(onClick = { workspaceCursor = next }) { Text("More workspaces") }
+                            }
+                            if (workspaceCursor != null) {
+                                TextButton(onClick = { workspaceCursor = null }) { Text("First page") }
+                            }
+                        }
+                    }
+                    chosen == null -> key(workspace.id, projectCursor) {
+                        Text("Choose a project", style = MaterialTheme.typography.titleMedium)
+                        Text(workspace.name)
+                        TextButton(onClick = { selection = null }) { Text("Change workspace") }
+                        WorkRead(controller, epoch, { controller.projectChoices(workspace.id, projectCursor) }) { page ->
+                            if (page.items.isEmpty()) Text("No projects available in this workspace.")
+                            page.items.forEach { item ->
+                                OutlinedButton(onClick = { project = item }) { Text(item.name) }
+                            }
+                            page.nextCursor?.let { next ->
+                                TextButton(onClick = { projectCursor = next }) { Text("More projects") }
+                            }
+                            if (projectCursor != null) {
+                                TextButton(onClick = { projectCursor = null }) { Text("First page") }
+                            }
+                        }
+                    }
+                    else -> TaskDetails(
+                        workspace = workspace.name,
+                        project = chosen.name,
+                        title = title,
+                        description = description,
+                        changeProject = { project = null; feedback = null },
+                        changeTitle = { title = it; feedback = null },
+                        changeDescription = { description = it; feedback = null },
+                        submit = {
+                            // This callback can fire twice before recomposition.
+                            if (submission == SubmissionState.Editing) {
+                                controller.commitIfCurrent(epoch) {
+                                    try {
+                                        val request = controller.prepareTaskCreation(epoch, chosen, title, description)
+                                        submission = SubmissionState.Sending(request)
+                                    } catch (error: CoreHttpException) {
+                                        if (error.status == 403) feedback = "Your organization access does not allow task creation."
+                                        else throw error
+                                    } catch (_: IllegalArgumentException) {
+                                        feedback = "Enter a title of up to 200 characters and a description of up to 10,000."
+                                    }
+                                }
+                            }
+                        },
+                    )
+                }
+                feedback?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+            is SubmissionState.Sending -> Text("Submitting task…")
+            is SubmissionState.Uncertain -> {
+                Text(current.message, color = MaterialTheme.colorScheme.error)
+                Text("Retry sends the same task request. If you leave, check Work for the task before creating it again.")
+                Button(onClick = { submission = SubmissionState.Sending(current.request) }) { Text("Retry same request") }
+                TextButton(onClick = close) { Text("Leave without confirmation") }
+            }
+            is SubmissionState.Accepted -> {
+                val outcome = current.outcome
+                Text(
+                    when (outcome) {
+                        null -> if (current.response.status == CoreTaskCommandStatus.WaitingApproval) {
+                            "Task awaiting approval."
+                        } else "Task creation queued."
+                        CoreTaskOutcome.Queued -> "Task creation queued."
+                        CoreTaskOutcome.WaitingApproval -> "Task awaiting approval."
+                        CoreTaskOutcome.Failed -> "Task creation failed."
+                        CoreTaskOutcome.Canceled -> "Task creation was canceled."
+                        is CoreTaskOutcome.Confirmed -> "Task created."
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                if (outcome is CoreTaskOutcome.Confirmed) {
+                    CreatedTaskContent(outcome.task) { openTask(outcome.task) }
+                }
+                current.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                when {
+                    current.checking -> CircularProgressIndicator()
+                    outcome == null || outcome == CoreTaskOutcome.Queued || outcome == CoreTaskOutcome.WaitingApproval ->
+                        OutlinedButton(onClick = { checkTask(current) }) {
+                            Text(if (outcome == null) "Check task status" else "Refresh task status")
+                        }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreatedTaskContent(task: CoreWorkTask, open: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(task.title, style = MaterialTheme.typography.titleMedium)
+            Text(task.status.label, style = MaterialTheme.typography.bodyMedium)
+            Button(onClick = open) { Text("Open task") }
+        }
+    }
+}
+
+@Composable
+private fun TaskDetails(
+    workspace: String,
+    project: String,
+    title: String,
+    description: String,
+    changeProject: () -> Unit,
+    changeTitle: (String) -> Unit,
+    changeDescription: (String) -> Unit,
+    submit: () -> Unit,
+) {
+    Text("$workspace / $project", style = MaterialTheme.typography.titleMedium)
+    TextButton(onClick = changeProject) { Text("Change project") }
+    OutlinedTextField(
+        value = title,
+        onValueChange = changeTitle,
+        label = { Text("Task title") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = description,
+        onValueChange = changeDescription,
+        label = { Text("Description (optional)") },
+        minLines = 3,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Button(enabled = title.isNotEmpty(), onClick = submit) { Text("Create task") }
+}

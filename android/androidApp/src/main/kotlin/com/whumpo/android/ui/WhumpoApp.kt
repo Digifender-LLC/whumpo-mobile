@@ -32,9 +32,9 @@ import com.whumpo.android.ui.shell.WhumpoShell
  * (the review sheet is its detail pane on expanded widths); Projects, Activity and Settings are in :shared and lay out theirs.
  */
 @Composable
-fun WhumpoApp(container: AppContainer) {
+fun WhumpoApp(container: AppContainer, openPreview: (() -> Unit)? = null) {
     // The shell only shows for a signed-in account; signed out, the sign-in screens (WP5) take its place.
-    AuthGate(container.auth) {
+    AuthGate(container.auth, openPreview) {
         // No connectivity source yet, so the offline banner stays off until the API client reports one.
         val link by container.deepLinks.pending.collectAsStateWithLifecycle()
         val shared by container.shares.pending.collectAsStateWithLifecycle()
