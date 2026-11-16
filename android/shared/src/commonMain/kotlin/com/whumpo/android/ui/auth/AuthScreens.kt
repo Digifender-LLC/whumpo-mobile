@@ -19,10 +19,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
@@ -35,6 +37,7 @@ import com.whumpo.android.ui.state.Skeleton
 import com.whumpo.android.ui.state.UpdateRequiredScreen
 import com.whumpo.android.ui.state.WhumpoIcons
 import com.whumpo.android.ui.state.WhumpoMascot
+import com.whumpo.android.ui.theme.WhumpoEntryTheme
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
 import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.android.ui.theme.WhumpoSecondaryButton
@@ -50,12 +53,12 @@ private val QuietTarget = 48.dp
  * Stateless: the caller passes the current [AuthState] and the [AuthActions]. Nothing here shows for [AuthState.Ready].
  */
 @Composable
-fun AuthFlow(state: AuthState, actions: AuthActions, modifier: Modifier = Modifier) {
+fun AuthFlow(state: AuthState, actions: AuthActions, modifier: Modifier = Modifier, openPreview: (() -> Unit)? = null) {
     when (state) {
         AuthState.Restoring -> AuthPage(modifier) {
             Skeleton(label = "Opening Whumpo", rows = 3, modifier = Modifier.padding(top = 24.dp))
         }
-        is AuthState.SignedOut -> WelcomeScreen(state, actions, modifier)
+        is AuthState.SignedOut -> WelcomeScreen(state, actions, modifier, openPreview)
         is AuthState.WaitingForBrowser -> WaitingForBrowserScreen(state, actions, modifier)
         is AuthState.FinishSetup -> FinishSetupScreen(state, actions, modifier)
         AuthState.UpdateRequired -> UpdateRequiredScreen(onUpdate = actions::openStore, onHelp = actions::openHelp, modifier = modifier)
@@ -65,48 +68,61 @@ fun AuthFlow(state: AuthState, actions: AuthActions, modifier: Modifier = Modifi
 
 /** Welcome (signed out): one primary action, with the invite and help as quiet links. */
 @Composable
-fun WelcomeScreen(state: AuthState.SignedOut, actions: AuthActions, modifier: Modifier = Modifier) {
+fun WelcomeScreen(state: AuthState.SignedOut, actions: AuthActions, modifier: Modifier = Modifier, openPreview: (() -> Unit)? = null) {
     val noPasskey = state.problem == AuthProblem.NoPasskey
     val browserOffered = state.problem in BrowserOffered
-    AuthPage(modifier.testTag("auth-welcome")) {
-        WhumpoMascot()
-        Title("Welcome back to Whumpo.", display = true)
-        Body("Sign in with the passkey on this phone. There is no password to remember.")
-        state.problem?.let { ProblemCard(it) }
-        WhumpoPrimaryButton(
-            onClick = actions::signInWithPasskey,
-            enabled = !state.busy,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = Target)
-                .testTag("auth-sign-in")
-                .semantics {
-                    liveRegion = LiveRegionMode.Polite
-                    if (state.busy) stateDescription = "Signing in"
-                },
-        ) {
-            Text(
-                when {
-                    state.busy -> "Signing in…"
-                    noPasskey -> "Use a passkey from another device"
-                    else -> "Sign in with passkey"
-                },
-            )
-        }
-        if (browserOffered) {
-            WhumpoSecondaryButton(
-                onClick = actions::signInWithBrowser,
-                enabled = !state.busy,
-                modifier = Modifier.fillMaxWidth().heightIn(min = Target).testTag("auth-browser"),
-            ) { Text("Sign in through the browser") }
-        }
-        WhumpoQuietButton(
-            onClick = actions::startInvite,
-            enabled = !state.busy,
-            modifier = Modifier.heightIn(min = QuietTarget).testTag("auth-invite"),
-        ) { Text("New to Whumpo? Start with an invite") }
-        WhumpoQuietButton(onClick = actions::openHelp, modifier = Modifier.heightIn(min = QuietTarget).testTag("auth-help")) {
-            Text("Get help")
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    WhumpoEntryTheme(darkTheme = dark) {
+        Surface(Modifier.fillMaxSize()) {
+            AuthPage(modifier.testTag("auth-welcome")) {
+                Text("Whumpo", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                Title("Welcome back to Whumpo.", display = true)
+                Body("Use your passkey to return to your workspace.")
+                state.problem?.let { ProblemCard(it) }
+                WhumpoPrimaryButton(
+                    onClick = actions::signInWithPasskey,
+                    enabled = !state.busy,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = Target)
+                        .testTag("auth-sign-in")
+                        .semantics {
+                            liveRegion = LiveRegionMode.Polite
+                            if (state.busy) stateDescription = "Signing in"
+                        },
+                ) {
+                    Text(
+                        when {
+                            state.busy -> "Signing in…"
+                            noPasskey -> "Use a passkey from another device"
+                            else -> "Sign in with passkey"
+                        },
+                    )
+                }
+                if (browserOffered) {
+                    WhumpoSecondaryButton(
+                        onClick = actions::signInWithBrowser,
+                        enabled = !state.busy,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = Target).testTag("auth-browser"),
+                    ) { Text("Sign in through the browser") }
+                }
+                WhumpoQuietButton(
+                    onClick = actions::startInvite,
+                    enabled = !state.busy,
+                    modifier = Modifier.heightIn(min = QuietTarget).testTag("auth-invite"),
+                ) { Text("New to Whumpo? Start with an invite") }
+                WhumpoQuietButton(onClick = actions::openHelp, modifier = Modifier.heightIn(min = QuietTarget).testTag("auth-help")) {
+                    Text("Get help")
+                }
+                if (openPreview != null) {
+                    WhumpoQuietButton(
+                        onClick = openPreview, enabled = !state.busy,
+                        modifier = Modifier.heightIn(min = QuietTarget).testTag("auth-preview"),
+                    ) {
+                        Text("Explore setup preview")
+                    }
+                }
+            }
         }
     }
 }

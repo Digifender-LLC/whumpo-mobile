@@ -1,41 +1,29 @@
 # Offline conversational onboarding preview
 
-The `localDebug` core harness includes **Try onboarding** while signed out. It
-opens a native Compose walkthrough: welcome, plan, demo checkout, demo account security,
-scripted conversation, editable review, and a personalized offline workspace.
-The existing connected sign-in, organizations, Today, Work and recovery flows
-remain available through the harness.
+The `localDebug` launcher offers **Explore setup preview** below its passkey
+sign-in. The native Compose walkthrough covers plan selection, demo checkout,
+demo account security, business questions, editable review, and a starter plan
+in the preview workspace. The harness also offers **Sign in to local test
+service** for separately configured testing.
 
 ## Open and leave
 
-Build and install the local debug APK using the toolchain in
-[Android build notes](android-build.md). The existing harness is non-exported.
-On a disposable userdebug emulator that supports `adb root`, select its serial
-explicitly and launch the harness:
+Build and install the local debug APK as described in the
+[Android build notes](android-build.md). Open Whumpo and choose
+**Explore setup preview**, **Try onboarding**, then **Start**. Deployed builds
+keep their existing sign-in and invite actions. The preview activity is
+non-exported.
 
-```sh
-adb -s emulator-5580 root
-adb -s emulator-5580 shell am start -n com.whumpo.android.local/com.whumpo.android.core.CorePreviewActivity
-```
-
-Use your emulator's actual serial. A regular non-root shell cannot launch this
-non-exported Activity; `run-as ... am start` also fails on API 36 because the
-shell package does not match the application UID. This command is for a
-disposable emulator, not a physical-device setup step.
-
-Choose **Try onboarding**, then **Start**. No backend or sign-in is needed for
-this journey. **Exit preview** returns to the signed-out harness and clears all
-preview data. Android Back closes a sheet, conflict or edit first. Within security,
-Back from a focused task returns to method choice; Back from method choice returns
-to checkout. Dismissing a sheet does not also leave its task. Elsewhere Back goes to
-the preceding step; Back at welcome or in the workspace exits. Activity
-recreation and process death also discard the preview. There is no saved state
-or persistence.
+The journey works offline. **Exit preview** clears the answers and returns to
+the harness. Android Back closes an open sheet, conflict or edit first. In
+security, it then returns from the task to method choice, and from method choice
+to checkout. At welcome or in the workspace, Back exits the walkthrough.
+Activity recreation and process death clear the preview as well.
 
 ## What is simulated
 
-The persistent **Onboarding preview** label and explicitly labelled demo bottom
-sheets distinguish this walkthrough from real payment and credential operations.
+The entry screen, demo checkout and credential sheets, and preview-workspace
+header identify the simulated journey.
 Each sheet supports confirm, cancellation, simulated failure and retry. No
 payment method or credential is collected. The total is **$0.00 demo**; each
 plan says **Plan price to be confirmed**. There are no actual price, quota or
@@ -49,8 +37,8 @@ credential task at a time. Both choices provide the same preview workspace acces
   is not a second distinct credential. Either passkey suffices for ordinary
   sign-in; this preview cannot verify physical independence.
 - **Use a password and authenticator instead** simulates password setup and
-  authenticator-app TOTP verification, followed by a simulated one-time-recovery-code
-  save and a separate acknowledgement. This path never requires a passkey.
+  authenticator-app TOTP verification, followed by a simulated save of ten
+  one-time recovery codes and a separate acknowledgement. This path never requires a passkey.
 
 Every setup step supports cancellation, failure and retry. Password and TOTP
 steps have no fields for real secrets. Recovery panels contain only **NOT A REAL
@@ -68,11 +56,16 @@ account security. Review and Account show the selected method.
 - Solo and Growth serve one person across devices. Business and Business Plus
   permit a team. Billing belongs to the organization; the account belongs
   to the person, who may later join multiple organizations.
-- The scripted conversation asks for owner name (1–60 trimmed characters),
-  organization name (1–80), business description (1–280), just-me/team intent,
-  and first priority (1–160). Optional business and priority suggestions remain
-  editable. Invalid input stays in the field with an inline error; it is never
-  silently truncated.
+- The guide asks one question at a time. It starts with the person's name,
+  workspace name, business description, team intent and first priority. The
+  description and priority can wait. Optional questions cover stage, location,
+  customers and offers, registration and declared entity type, websites and
+  domain access, help, and capacity. Choose **Not sure**, **Skip for now** or
+  **Skip remaining details** to leave decisions open.
+- The United States registration branch asks only for EIN status. Website and
+  domain fields accept a public address and a bare hostname. The preview never
+  opens the address. Review can reopen earlier answers. A changed country,
+  registration, website or domain answer reopens the dependent questions.
 - Team intent on a single-person plan requires an explicit team-plan change or
   **Keep just me**. Changing the plan invalidates the previous demo payment and
   requires confirmation again, while retaining answers and the person's demo
@@ -82,12 +75,16 @@ account security. Review and Account show the selected method.
   acknowledgement. Repeated or racing create actions produce only one in-memory
   organization.
 
-Today greets the entered owner and shows their first priority as a draft. Work
-shows that local draft. Account shows the entered organization, description,
-owner, plan, team intent and selected security method. Reviews and website start
-empty. No members, history, invitations, published website or scheduled work
-are invented. Today
-contains no mascot artwork.
+Review presents starter actions with reasons. It lets the person edit titles
+and select a next action whose prerequisites are clear. An existing site can
+lead to a migration review before a domain connection. A US EIN guidance draft
+can follow a registration review when the person plans to form an entity.
+The preview creates local drafts for review. It performs no purchase, filing
+or connection.
+
+Today shows the chosen next action. Work shows the complete starter plan and
+its prerequisites. Account shows the person, organization, plan, team intent and
+security method. Reviews and the website start empty.
 
 ## Ownership and verification
 
@@ -97,15 +94,15 @@ and passes snapshots and callbacks to rendering. It resets on exit/disposal.
 The preview never enters the authenticated session controller and calls no
 network, inference, payment, credential or storage API.
 
-The UI scopes neutral black/white surfaces and the existing gold token to the
-preview, retaining existing typography, controls and semantic error colors. It
-uses labelled controls and scrolling content. The conversation composer shares
-its scrolling surface with the transcript and applies IME insets, including when text is enlarged.
+Account entry and the preview use warm light and dark surfaces, native system
+type, and the existing Material controls. The conversation shows the latest
+answer and a single prompt. The composer scrolls and applies system bar and
+keyboard insets.
 
 From `android/`, run the focused state-machine tests and native build checks:
 
 ```sh
-./gradlew :shared:jvmTest --tests 'com.whumpo.core.onboarding.CoreOnboardingPreviewTest'
+./gradlew :shared:jvmTest --tests 'com.whumpo.core.onboarding.*'
 ./gradlew :shared:jvmTest :shared:compileKotlinJvm :androidApp:assembleLocalDebug :androidApp:lintLocalDebug :androidApp:testLocalDebugUnitTest
 ```
 

@@ -70,7 +70,9 @@ enum class CoreOnboardingQuestion(val maxLength: Int?) {
     OrganizationName(80),
     BusinessDescription(280),
     TeamIntent(null),
-    FirstPriority(160),
+    FirstPriority(160);
+
+    val optional: Boolean get() = this == BusinessDescription || this == FirstPriority
 }
 
 enum class CoreOnboardingInputProblem { Empty, TooLong }
@@ -88,6 +90,7 @@ data class CoreOnboardingAnswers(
     val businessDescription: String? = null,
     val teamIntent: CoreOnboardingTeamIntent? = null,
     val firstPriority: String? = null,
+    val deferred: Set<CoreOnboardingQuestion> = emptySet(),
 ) {
     fun text(question: CoreOnboardingQuestion): String? = when (question) {
         CoreOnboardingQuestion.OwnerName -> ownerName
@@ -98,7 +101,7 @@ data class CoreOnboardingAnswers(
     }
 
     fun isAnswered(question: CoreOnboardingQuestion): Boolean =
-        if (question == CoreOnboardingQuestion.TeamIntent) teamIntent != null else text(question) != null
+        if (question == CoreOnboardingQuestion.TeamIntent) teamIntent != null else text(question) != null || question in deferred
 
     val firstUnanswered: CoreOnboardingQuestion? get() = CoreOnboardingQuestion.entries.firstOrNull { !isAnswered(it) }
     val complete: Boolean get() = firstUnanswered == null
@@ -106,9 +109,9 @@ data class CoreOnboardingAnswers(
     internal fun withText(question: CoreOnboardingQuestion, value: String) = when (question) {
         CoreOnboardingQuestion.OwnerName -> copy(ownerName = value)
         CoreOnboardingQuestion.OrganizationName -> copy(organizationName = value)
-        CoreOnboardingQuestion.BusinessDescription -> copy(businessDescription = value)
+        CoreOnboardingQuestion.BusinessDescription -> copy(businessDescription = value, deferred = deferred - question)
         CoreOnboardingQuestion.TeamIntent -> throw IllegalArgumentException("Team intent is not a text answer.")
-        CoreOnboardingQuestion.FirstPriority -> copy(firstPriority = value)
+        CoreOnboardingQuestion.FirstPriority -> copy(firstPriority = value, deferred = deferred - question)
     }
 }
 
@@ -119,11 +122,15 @@ data class CoreOnboardingTeamConflict(val singlePersonPlan: CoreOnboardingPlan)
 data class CoreOnboardingOrganization(
     val ownerName: String,
     val name: String,
-    val businessDescription: String,
+    val businessDescription: String?,
     val teamIntent: CoreOnboardingTeamIntent,
     val plan: CoreOnboardingPlan,
-    val firstGoalDraft: String,
+    val firstGoalDraft: String?,
     val securityMethod: CoreOnboardingSecurityMethod,
+    val starterActions: List<CoreStarterAction>,
+    val nextAction: CoreStarterKind,
+    val websiteStatus: String? = null,
+    val websiteAddress: String? = null,
 )
 
 data class CoreOnboardingSnapshot(
@@ -141,15 +148,32 @@ data class CoreOnboardingSnapshot(
     val editing: CoreOnboardingQuestion? = null,
     val inputError: CoreOnboardingInputError? = null,
     val organization: CoreOnboardingOrganization? = null,
+    val discovery: CoreBusinessDiscovery = CoreBusinessDiscovery(),
+    val discoveryEdit: CoreDiscoveryQuestion? = null,
+    val starterChoice: CoreStarterKind? = null,
+    val starterTitles: Map<CoreStarterKind, String> = emptyMap(),
 ) {
     val securitySetupComplete: Boolean get() = security.complete
     val paymentConfirmed: Boolean get() = plan != null && paidPlan == plan
     val currentQuestion: CoreOnboardingQuestion? get() = answers.firstUnanswered
+    val starterActions: List<CoreStarterAction>
+        get() {
+            val priority = answers.firstPriority
+            val candidates = discovery.starterActions().map { action ->
+                val contextual = if (action.kind == CoreStarterKind.PlanPriority && priority != null) {
+                    action.copy(title = priority, reason = "Start with the priority you chose during setup.")
+                } else action
+                starterTitles[action.kind]?.let { contextual.copy(title = it) } ?: contextual
+            }
+            return if (priority == null) candidates else candidates.sortedBy { it.kind != CoreStarterKind.PlanPriority }
+        }
+    val nextAction: CoreStarterKind get() = starterActions.filter { it.requires.isEmpty() }
+        .let { ready -> ready.firstOrNull { it.kind == starterChoice } ?: ready.first() }.kind
     val teamPlanConflict: Boolean
         get() = answers.teamIntent == CoreOnboardingTeamIntent.Team && plan?.allowsTeam == false
     val canCreate: Boolean
         get() = step == CoreOnboardingStep.Review && organization == null && editing == null && conflict == null &&
-            paymentConfirmed && securitySetupComplete && answers.complete && !teamPlanConflict
+            paymentConfirmed && securitySetupComplete && answers.complete && discovery.next == null && discoveryEdit == null && !teamPlanConflict
 }
 
 /**
@@ -198,7 +222,7 @@ class CoreOnboardingFlow {
         val satisfied = when (step) {
             CoreOnboardingStep.Payment -> paymentConfirmed
             CoreOnboardingStep.Security -> securitySetupComplete && !securityChoiceVisible
-            CoreOnboardingStep.Conversation -> answers.complete
+            CoreOnboardingStep.Conversation -> answers.complete && discovery.next == null
             else -> false
         }
         if (satisfied && conflict == null) proceed() else null
@@ -234,7 +258,7 @@ class CoreOnboardingFlow {
     }
 
     fun editSecurity(): Boolean = transition {
-        if (step == CoreOnboardingStep.Review && editing == null && conflict == null) {
+        if (step == CoreOnboardingStep.Review && editing == null && discoveryEdit == null && conflict == null) {
             copy(step = CoreOnboardingStep.Security, securityChoiceVisible = true, inputError = null)
         } else null
     }
@@ -282,11 +306,29 @@ class CoreOnboardingFlow {
     }
 
     /** Answers the current text question in the conversation. Invalid input keeps the previous state plus an error. */
-    fun answer(raw: String): Boolean = transition {
-        val question = currentQuestion
-        if (step != CoreOnboardingStep.Conversation || conflict != null || question == null || question.maxLength == null) {
+    fun answer(raw: String): Boolean = mutable.value.currentQuestion?.let { answer(it, raw) } ?: false
+
+    fun answer(question: CoreOnboardingQuestion, raw: String): Boolean = transition {
+        if (step != CoreOnboardingStep.Conversation || conflict != null || question != currentQuestion || question.maxLength == null) {
             null
         } else submitText(question, raw)
+    }
+
+    fun deferCoreQuestion(): Boolean = transition {
+        val question = when (step) {
+            CoreOnboardingStep.Conversation -> currentQuestion
+            CoreOnboardingStep.Review -> editing
+            else -> null
+        }
+        if (conflict != null || question?.optional != true) return@transition null
+        if (question in answers.deferred) return@transition copy(editing = null, inputError = null)
+        val kept = when (question) {
+            CoreOnboardingQuestion.BusinessDescription -> answers.copy(businessDescription = null)
+            CoreOnboardingQuestion.FirstPriority -> answers.copy(firstPriority = null)
+            else -> answers
+        }
+        copy(answers = kept.copy(deferred = kept.deferred + question), editing = null, inputError = null)
+            .refinePriorityAction(question)
     }
 
     /** Answers the team question in the conversation, or the team edit in review. */
@@ -319,13 +361,13 @@ class CoreOnboardingFlow {
 
     /** From review, reopen the plan step. Choosing the same plan returns to review without re-payment. */
     fun editPlan(): Boolean = transition {
-        if (step == CoreOnboardingStep.Review && editing == null && conflict == null) {
+        if (step == CoreOnboardingStep.Review && editing == null && discoveryEdit == null && conflict == null) {
             copy(step = CoreOnboardingStep.Plan, inputError = null)
         } else null
     }
 
     fun startEdit(question: CoreOnboardingQuestion): Boolean = transition {
-        if (step == CoreOnboardingStep.Review && editing == null && conflict == null) copy(editing = question, inputError = null) else null
+        if (step == CoreOnboardingStep.Review && editing == null && discoveryEdit == null && conflict == null) copy(editing = question, inputError = null) else null
     }
 
     fun submitEdit(raw: String): Boolean = transition {
@@ -334,7 +376,52 @@ class CoreOnboardingFlow {
         else submitText(question, raw)
     }
 
-    fun cancelEdit(): Boolean = transition { if (editing != null) copy(editing = null, inputError = null) else null }
+    fun deferDiscovery(): Boolean = transition {
+        if (step != CoreOnboardingStep.Conversation || !answers.complete || conflict != null || discovery.next == null) null
+        else copy(discovery = discovery.deferRemaining())
+    }
+
+    fun startDiscoveryEdit(question: CoreDiscoveryQuestion): Boolean = transition {
+        if (step != CoreOnboardingStep.Review || editing != null || discoveryEdit != null ||
+            conflict != null || question !in discovery.questions()) null
+        else copy(discoveryEdit = question)
+    }
+
+    fun answerDiscovery(question: CoreDiscoveryQuestion, answer: CoreDiscoveryAnswer): Boolean = transition {
+        val editing = step == CoreOnboardingStep.Review && discoveryEdit == question
+        if (!editing && (step != CoreOnboardingStep.Conversation || !answers.complete || discovery.next != question || conflict != null)) {
+            return@transition null
+        }
+        val next = discovery.answer(question, answer) ?: return@transition null
+        if (next == discovery) return@transition copy(discoveryEdit = null)
+        val previous = discovery.starterActions().associateBy { it.kind }
+        val compatible = next.starterActions().filter { it == previous[it.kind] && it.kind !in question.affectedActions() }
+            .map { it.kind }.toSet()
+        copy(
+            discovery = next,
+            discoveryEdit = null,
+            step = if (editing && next.next != null) CoreOnboardingStep.Conversation else step,
+            starterChoice = starterChoice?.takeIf(compatible::contains),
+            starterTitles = starterTitles.filterKeys(compatible::contains),
+        )
+    }
+
+    fun selectNextAction(kind: CoreStarterKind): Boolean = transition {
+        if (step != CoreOnboardingStep.Review || editing != null || discoveryEdit != null || conflict != null ||
+            starterActions.none { it.kind == kind && it.requires.isEmpty() }) null
+        else copy(starterChoice = kind)
+    }
+
+    fun editStarterTitle(kind: CoreStarterKind, raw: String): Boolean = transition {
+        val title = raw.trim()
+        if (step != CoreOnboardingStep.Review || discoveryEdit != null || editing != null || conflict != null ||
+            starterActions.none { it.kind == kind } || !safeDiscoveryText(title, 160)) null
+        else copy(starterTitles = starterTitles + (kind to title))
+    }
+
+    fun cancelEdit(): Boolean = transition {
+        if (editing != null || discoveryEdit != null) copy(editing = null, discoveryEdit = null, inputError = null) else null
+    }
 
     /**
      * Creates the single in-memory organization. Returns it only to the one call that performed the
@@ -348,11 +435,15 @@ class CoreOnboardingFlow {
             val organization = CoreOnboardingOrganization(
                 ownerName = answers.ownerName!!,
                 name = answers.organizationName!!,
-                businessDescription = answers.businessDescription!!,
+                businessDescription = answers.businessDescription,
                 teamIntent = answers.teamIntent!!,
                 plan = current.plan!!,
-                firstGoalDraft = answers.firstPriority!!,
+                firstGoalDraft = answers.firstPriority,
                 securityMethod = current.security.method!!,
+                starterActions = current.starterActions,
+                nextAction = current.nextAction,
+                websiteStatus = current.discovery.declared(CoreDiscoveryQuestion.Website),
+                websiteAddress = current.discovery.declared(CoreDiscoveryQuestion.WebsiteUrl),
             )
             if (mutable.compareAndSet(current, current.copy(step = CoreOnboardingStep.Workspace, organization = organization))) {
                 return organization
@@ -367,7 +458,7 @@ class CoreOnboardingFlow {
     fun back(): Boolean = transition {
         when {
             conflict != null -> copy(conflict = null)
-            editing != null -> copy(editing = null, inputError = null)
+            editing != null || discoveryEdit != null -> copy(editing = null, discoveryEdit = null, inputError = null)
             step == CoreOnboardingStep.Payment && payment.visible -> copy(payment = CoreOnboardingSheet.Cancelled)
             step == CoreOnboardingStep.Security && security.sheet.visible ->
                 copy(security = security.copy(sheet = CoreOnboardingSheet.Cancelled))
@@ -400,7 +491,7 @@ private fun CoreOnboardingSnapshot.proceed() = copy(
         plan == null -> CoreOnboardingStep.Plan
         !paymentConfirmed -> CoreOnboardingStep.Payment
         !securitySetupComplete -> CoreOnboardingStep.Security
-        !answers.complete -> CoreOnboardingStep.Conversation
+        !answers.complete || discovery.next != null -> CoreOnboardingStep.Conversation
         else -> CoreOnboardingStep.Review
     },
     inputError = null,
@@ -421,4 +512,25 @@ private fun CoreOnboardingSnapshot.submitText(question: CoreOnboardingQuestion, 
     val (value, error) = question.validate(raw)
     return if (value == null) copy(inputError = error)
     else copy(answers = answers.withText(question, value), editing = null, inputError = null)
+        .let { if (answers.text(question) == value) it else it.refinePriorityAction(question) }
+}
+
+private fun CoreOnboardingSnapshot.refinePriorityAction(question: CoreOnboardingQuestion): CoreOnboardingSnapshot =
+    if (question != CoreOnboardingQuestion.FirstPriority) this else copy(
+        starterChoice = starterChoice?.takeUnless { it == CoreStarterKind.PlanPriority },
+        starterTitles = starterTitles - CoreStarterKind.PlanPriority,
+    )
+
+private fun CoreDiscoveryQuestion.affectedActions(): Set<CoreStarterKind> = when (this) {
+    CoreDiscoveryQuestion.Country, CoreDiscoveryQuestion.CountryName, CoreDiscoveryQuestion.Region,
+    CoreDiscoveryQuestion.Registration, CoreDiscoveryQuestion.Entity, CoreDiscoveryQuestion.Formation,
+    CoreDiscoveryQuestion.Ein -> setOf(CoreStarterKind.Registration, CoreStarterKind.EinGuidance)
+    CoreDiscoveryQuestion.Website, CoreDiscoveryQuestion.WebsiteUrl, CoreDiscoveryQuestion.WebsiteIntent ->
+        setOf(CoreStarterKind.ReviewSite, CoreStarterKind.SiteBrief, CoreStarterKind.DomainMigration, CoreStarterKind.DomainConnection)
+    CoreDiscoveryQuestion.Domain, CoreDiscoveryQuestion.Hostname, CoreDiscoveryQuestion.DomainHelp, CoreDiscoveryQuestion.DomainAccess ->
+        setOf(CoreStarterKind.DomainAccess, CoreStarterKind.DomainOptions, CoreStarterKind.DomainMigration, CoreStarterKind.DomainConnection)
+    CoreDiscoveryQuestion.Customers, CoreDiscoveryQuestion.Offer, CoreDiscoveryQuestion.Delivery ->
+        setOf(CoreStarterKind.ClarifyOffer, CoreStarterKind.SiteBrief)
+    CoreDiscoveryQuestion.Tools -> setOf(CoreStarterKind.ReviewTools)
+    else -> emptySet()
 }

@@ -3,13 +3,19 @@ package com.whumpo.android.core
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -22,10 +28,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.whumpo.android.auth.ActivityTracker
 import com.whumpo.android.auth.CredentialManagerPasskeys
-import com.whumpo.android.ui.theme.WhumpoTheme
+import com.whumpo.android.ui.theme.WhumpoEntryTheme
+import com.whumpo.android.ui.theme.WhumpoPrimaryButton
+import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.core.api.CoreApiClient
 import com.whumpo.core.api.CoreMembershipPage
 import com.whumpo.core.api.CoreRole
@@ -46,13 +56,18 @@ class CorePreviewActivity : ComponentActivity() {
     private val activities = ActivityTracker()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         api = coreApiClient(CoreOrigin.allowlisted("http://127.0.0.1:5173", emptySet(), debugLoopback = true))
         controller = CoreOrganizationSessionController(api)
         val passkeys = CredentialManagerPasskeys(applicationContext, activities)
         setContent {
-            WhumpoTheme {
-                Surface { CorePreview(controller, passkeys) }
+            WhumpoEntryTheme {
+                Surface {
+                    Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+                        CorePreview(controller, passkeys)
+                    }
+                }
             }
         }
     }
@@ -191,16 +206,22 @@ private fun CorePreviewContent(
     signOut: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Whumpo organizations")
         when (state) {
             CoreOrganizationSessionController.State.SignedOut -> {
-                Button(onClick = signIn) { Text("Sign in with a passkey") }
-                Button(onClick = tryOnboarding) { Text("Try onboarding") }
-                Text("Offline preview. No account, payment or saved data.")
+                Text("Whumpo", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                Text("Explore setup", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
+                Text("Walk through setting up an account and planning your first steps.")
+                Text("This offline preview uses no account or payment. It clears when you exit.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                WhumpoPrimaryButton(onClick = tryOnboarding, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Text("Try onboarding")
+                }
+                WhumpoQuietButton(onClick = signIn, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Sign in to local test service")
+                }
             }
             CoreOrganizationSessionController.State.Transitioning -> Text("Checking session…")
             is CoreOrganizationSessionController.State.Active -> {
-                Text(page?.profile?.displayName ?: state.session.orgId)
+                Text(page?.profile?.displayName ?: "Organization", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
                 Text("Role: ${state.session.role}")
                 if (page == null) {
                     Text("Loading organization…")

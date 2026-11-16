@@ -21,6 +21,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.whumpo.core.api.CoreTodayDecisionAccess
 import com.whumpo.core.api.CoreTodayDueState
@@ -96,7 +98,7 @@ internal fun CoreTodayPreview(
                     }
                 }
                 else -> {
-                    Text("Today", style = MaterialTheme.typography.headlineMedium)
+                    Text("Today", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
                     OutlinedButton(onClick = { refresh += 1 }) { Text("Refresh") }
                     WorkRead(controller, epoch, { controller.today() }) { today ->
                         TodayBriefing(
@@ -127,7 +129,10 @@ private fun TodayBriefing(
     val hasOmittedItems = listOf(sections.blocked, sections.deadlines, sections.approvals, sections.verified).any { it.truncated } ||
         sections.siteActivity?.truncated == true
     if (briefing.empty && !hasOmittedItems) {
-        Text("Nothing needs attention in this window.", style = MaterialTheme.typography.titleMedium)
+        TodayCard {
+            Text("You’re caught up", style = MaterialTheme.typography.titleMedium)
+            Text("There are no due tasks or decisions waiting in this briefing.")
+        }
         return
     }
     TodaySection("Blocked priorities", sections.blocked, "Nothing is blocked.") { item ->

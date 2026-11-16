@@ -60,9 +60,21 @@ class AuthScreensTest : RobolectricUiTest() {
             compose.onNodeWithTag("auth-sign-in").assertHeightIsAtLeast(48.dp).assertIsEnabled().performClick()
             compose.onNodeWithTag("auth-invite").assertHeightIsAtLeast(48.dp).performClick()
             compose.onNodeWithTag("auth-help").assertHeightIsAtLeast(48.dp).performClick()
-            absent("auth-problem"); absent("auth-browser")
+            absent("auth-problem"); absent("auth-browser"); absent("auth-preview")
         }
         assertEquals(listOf("passkey", "invite", "help"), actions.calls)
+    }
+
+    @Test
+    fun optionalPreviewActionIsSeparateFromPasskeySignIn() {
+        val actions = RecordingActions()
+        var previews = 0
+        launch(Screen.Compact) { AuthFlow(AuthState.SignedOut(), actions, openPreview = { previews += 1 }) }.use {
+            compose.onNodeWithTag("auth-sign-in").performClick()
+            compose.onNodeWithTag("auth-preview").assertHeightIsAtLeast(48.dp).performScrollTo().performClick()
+        }
+        assertEquals(listOf("passkey"), actions.calls)
+        assertEquals(1, previews)
     }
 
     @Test

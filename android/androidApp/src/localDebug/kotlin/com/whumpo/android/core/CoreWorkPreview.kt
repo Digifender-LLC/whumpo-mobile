@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -23,7 +24,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.whumpo.android.ui.theme.WhumpoPrimaryButton
+import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.core.api.CoreHttpException
 import com.whumpo.core.api.CoreWebsiteHistoryItem
 import com.whumpo.core.api.CoreWebsiteOperation
@@ -92,11 +99,21 @@ internal fun CoreWorkPreview(
             Text(organizationName, style = MaterialTheme.typography.labelLarge)
             when {
                 task == null -> {
-                    Text("Work", style = MaterialTheme.typography.headlineMedium)
-                    if (canRecoverApplication) OutlinedButton(onClick = { recovering = true }) { Text("Application recovery") }
-                    if (canCreateTask) Button(onClick = { creating = true }) { Text("New task") }
+                    Text("Work", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
+                    if (canCreateTask) {
+                        WhumpoPrimaryButton(onClick = { creating = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                            Text("New task")
+                        }
+                    }
                     WorkRead(controller, epoch, { controller.work(workCursor) }) { page ->
-                        if (page.items.isEmpty()) Text("No tasks on this page.")
+                        if (page.items.isEmpty()) {
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text("No tasks here", style = MaterialTheme.typography.titleMedium)
+                                    Text(if (canCreateTask) "Create a task to plan your next step." else "Tasks for this organization will appear here.")
+                                }
+                            }
+                        }
                         page.items.forEach { item ->
                             Card(onClick = { selected = item; openedFromCreation = false }, modifier = Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -110,6 +127,7 @@ internal fun CoreWorkPreview(
                         }
                         if (workCursor != null) OutlinedButton(onClick = { workCursor = null }) { Text("First page") }
                     }
+                    if (canRecoverApplication) WhumpoQuietButton(onClick = { recovering = true }) { Text("Application recovery") }
                 }
                 receipts -> {
                     Text("Website receipts", style = MaterialTheme.typography.headlineMedium)
@@ -196,11 +214,19 @@ internal fun <T> WorkRead(
         WorkReadResult.Loading -> CircularProgressIndicator()
         is WorkReadResult.Ready -> content(current.value)
         is WorkReadResult.Failed -> {
-            Text(current.message, color = MaterialTheme.colorScheme.error)
-            OutlinedButton(onClick = {
-                result = WorkReadResult.Loading
-                attempt += 1
-            }) { Text("Retry") }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        current.message,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                    OutlinedButton(onClick = {
+                        result = WorkReadResult.Loading
+                        attempt += 1
+                    }) { Text("Retry") }
+                }
+            }
         }
     }
 }

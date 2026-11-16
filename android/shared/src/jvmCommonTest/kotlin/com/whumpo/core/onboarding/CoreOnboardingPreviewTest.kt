@@ -37,6 +37,7 @@ class CoreOnboardingPreviewTest {
         assertTrue(answer("Synthetic bookkeeping studio"))
         assertTrue(chooseTeamIntent(intent))
         assertTrue(answer("Plan this week's priorities"))
+        assertTrue(deferDiscovery())
     }
 
     private fun readyForReview(plan: CoreOnboardingPlan = CoreOnboardingPlan.Solo) = paidAndRegistered(plan).apply {
@@ -338,6 +339,7 @@ class CoreOnboardingPreviewTest {
         assertEquals(CoreOnboardingStep.Conversation, flow.snapshot().step)
         assertEquals(CoreOnboardingQuestion.FirstPriority, flow.snapshot().currentQuestion)
         assertTrue(flow.answer("Organize customer follow-ups"))
+        assertTrue(flow.deferDiscovery())
         assertTrue(flow.proceedFromCompletedStep())
         assertEquals(CoreOnboardingPlan.Business, assertNotNull(flow.createOrganization()).plan)
     }
@@ -443,6 +445,10 @@ class CoreOnboardingPreviewTest {
                 plan = CoreOnboardingPlan.Solo,
                 firstGoalDraft = "Plan this week's priorities",
                 securityMethod = CoreOnboardingSecurityMethod.Passkeys,
+                starterActions = CoreBusinessDiscovery().starterActions().map {
+                    it.copy(title = "Plan this week's priorities", reason = "Start with the priority you chose during setup.")
+                },
+                nextAction = CoreStarterKind.PlanPriority,
             ),
             created.single(),
         )
@@ -451,6 +457,35 @@ class CoreOnboardingPreviewTest {
         assertFalse(flow.back(), "The workspace exits instead of reopening review")
         assertFalse(flow.startEdit(CoreOnboardingQuestion.OwnerName))
         assertFalse(flow.editPlan())
+    }
+
+    @Test
+    fun expectedQuestionGuardsDelayedAnswersAndReviewEditsInvalidateOnlyDependentDrafts() {
+        val flow = paidAndRegistered(CoreOnboardingPlan.Solo)
+        assertFalse(flow.deferCoreQuestion())
+        assertTrue(flow.answer(CoreOnboardingQuestion.OwnerName, "Avery"))
+        assertFalse(flow.answer(CoreOnboardingQuestion.OwnerName, "Avery"))
+        assertEquals(CoreOnboardingQuestion.OrganizationName, flow.snapshot().currentQuestion)
+        assertTrue(flow.answer("Example Studio"))
+        assertTrue(flow.deferCoreQuestion())
+        assertTrue(flow.chooseTeamIntent(CoreOnboardingTeamIntent.JustMe))
+        assertTrue(flow.answer("Update the shop"))
+        assertFalse(flow.answerDiscovery(CoreDiscoveryQuestion.Country, CoreDiscoveryAnswer.Declared("United States")))
+        assertTrue(flow.deferDiscovery())
+        assertTrue(flow.proceedFromCompletedStep())
+        assertTrue(flow.editStarterTitle(CoreStarterKind.PlanPriority, "Review the shop"))
+        assertTrue(flow.startDiscoveryEdit(CoreDiscoveryQuestion.Country))
+        assertTrue(flow.answerDiscovery(CoreDiscoveryQuestion.Country, CoreDiscoveryAnswer.Declared("United States")))
+        assertEquals(CoreDiscoveryQuestion.Region, flow.snapshot().discovery.next)
+        assertEquals("Review the shop", flow.snapshot().starterActions.first().title)
+        assertTrue(flow.deferDiscovery())
+        assertTrue(flow.proceedFromCompletedStep())
+        assertTrue(flow.startEdit(CoreOnboardingQuestion.FirstPriority))
+        assertTrue(flow.submitEdit("Organize the intake"))
+        assertEquals("Organize the intake", flow.snapshot().starterActions.first().title)
+        val organization = requireNotNull(flow.createOrganization())
+        assertNull(organization.businessDescription)
+        assertEquals("Organize the intake", organization.firstGoalDraft)
     }
 
     @Test
