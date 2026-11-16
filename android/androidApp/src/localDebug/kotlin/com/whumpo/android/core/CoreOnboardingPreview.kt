@@ -88,6 +88,7 @@ private data class PreviewActions(
     val cancelPayment: () -> Boolean,
     val selectSecurityMethod: (CoreOnboardingSecurityMethod) -> Boolean,
     val editSecurity: () -> Boolean,
+    val acknowledgeRecovery: (CoreOnboardingSecurityMethod) -> Boolean,
     val confirmSecurityTask: (CoreOnboardingSecurityTask) -> Boolean,
     val failSecurityTask: (CoreOnboardingSecurityTask) -> Boolean,
     val openSecuritySheet: (CoreOnboardingSecurityTask) -> Boolean,
@@ -129,6 +130,7 @@ internal fun CoreOnboardingPreview(close: () -> Unit) {
             cancelPayment = flow::cancelPayment,
             selectSecurityMethod = flow::selectSecurityMethod,
             editSecurity = flow::editSecurity,
+            acknowledgeRecovery = flow::acknowledgeRecovery,
             confirmSecurityTask = flow::confirmSecurityTask,
             failSecurityTask = flow::failSecurityTask,
             openSecuritySheet = flow::openSecuritySheet,
@@ -196,7 +198,9 @@ private fun CoreOnboardingPreviewContent(state: CoreOnboardingSnapshot, actions:
                     CoreOnboardingStep.Welcome -> WelcomeStep(start = { actions.start() }, exit = exit)
                     CoreOnboardingStep.Plan -> PlanStep(state, actions)
                     CoreOnboardingStep.Payment -> PaymentStep(state, actions)
-                    CoreOnboardingStep.Security -> SecurityStep(state, actions)
+                    CoreOnboardingStep.Security -> key(state.securityChoiceVisible, state.security.nextTask, state.security.recoverySaved) {
+                        SecurityStep(state, actions)
+                    }
                     CoreOnboardingStep.Conversation -> ConversationStep(state, actions)
                     CoreOnboardingStep.Review -> ReviewStep(state, actions)
                     CoreOnboardingStep.Workspace -> state.organization?.let { OfflineWorkspace(it, exit) }
@@ -360,41 +364,49 @@ private fun PaymentStep(state: CoreOnboardingSnapshot, actions: PreviewActions) 
 
 @Composable
 private fun SecurityStep(state: CoreOnboardingSnapshot, actions: PreviewActions) = StepPage("Secure your account") {
-    Text("Choose a method for your own account. You can later join multiple organizations with that account.")
+    Text(if (state.securityChoiceVisible) "Choose a method for your own account. You can later join multiple organizations with that account." else state.security.method?.label.orEmpty())
     Notice("Demo only. No passwords, authenticator secrets, passkeys or recovery files are collected, created or saved.")
-    CoreOnboardingSecurityMethod.entries.forEach { method ->
-        Card(
-            onClick = { actions.selectSecurityMethod(method) },
-            modifier = Modifier.fillMaxWidth().semantics { selected = method == state.security.method },
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    if (method == CoreOnboardingSecurityMethod.Passkeys) "Recommended: two passkeys"
-                    else "Use a password and authenticator instead",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    if (method == CoreOnboardingSecurityMethod.Passkeys) {
-                        "Register two distinct passkeys and save a recovery kit. Use either passkey to sign in; you do not need both each time."
-                    } else "Set a password, verify an authenticator app, and save one-time recovery codes. No passkey is required.",
-                )
-                if (method == state.security.method) Text("Selected", style = MaterialTheme.typography.labelLarge)
+    if (state.securityChoiceVisible) {
+        CoreOnboardingSecurityMethod.entries.forEach { method ->
+            Card(
+                onClick = { actions.selectSecurityMethod(method) },
+                modifier = Modifier.fillMaxWidth().semantics { selected = method == state.security.method },
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        if (method == CoreOnboardingSecurityMethod.Passkeys) "Recommended: two passkeys"
+                        else "Use a password and authenticator instead",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        if (method == CoreOnboardingSecurityMethod.Passkeys) {
+                            "Register two distinct passkeys and save a recovery kit. Use either passkey to sign in; you do not need both each time."
+                        } else "Set a password, verify an authenticator app, and save one-time recovery codes. No passkey is required.",
+                    )
+                    if (method == state.security.method) Text("Continue with this method", style = MaterialTheme.typography.labelLarge)
+                }
             }
         }
+        Text("Choosing a different method clears its demo setup progress. Your plan, payment and organization answers are kept.", style = MaterialTheme.typography.bodySmall)
+        WhumpoQuietButton(onClick = { actions.back() }) { Text("Back to checkout") }
+        return@StepPage
     }
-    Text("Choosing a different method clears its demo setup progress. Your plan, payment and organization answers are kept.", style = MaterialTheme.typography.bodySmall)
     val security = state.security
     if (state.securitySetupComplete) {
         Notice("Demo security setup complete: ${security.method?.label}.")
         WhumpoPrimaryButton(onClick = { actions.proceedFromCompletedStep() }, modifier = Modifier.fillMaxWidth()) { Text("Continue") }
+    } else if (security.recoverySaved) {
+        Text("Acknowledge the simulated save", style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
+        Text("The demo save step is complete. In real setup, check that you can access your saved recovery material before continuing. This preview has not created or saved a file.")
+        val method = requireNotNull(security.method)
+        Notice(if (method == CoreOnboardingSecurityMethod.Passkeys) "NOT A REAL RECOVERY KEY" else "NOT REAL RECOVERY CODES")
+        WhumpoPrimaryButton(onClick = { actions.acknowledgeRecovery(method) }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (method == CoreOnboardingSecurityMethod.Passkeys) "Acknowledge demo kit saved" else "Acknowledge demo codes saved")
+        }
     } else security.nextTask?.let { task ->
         val details = securityTaskDetails(task, security.method)
         Text(details.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
         Text(details.explanation)
-        if (security.firstPasskey) Notice("First demo passkey confirmed.")
-        if (security.backupPasskey) Notice("Distinct backup demo passkey confirmed.")
-        if (security.password) Notice("Demo password setup confirmed. No password was entered.")
-        if (security.authenticator) Notice("Demo authenticator setup confirmed. No secret or code was entered.")
         when (security.sheet) {
             CoreOnboardingSheet.Open, CoreOnboardingSheet.Failed -> DemoSheet(
                 title = details.title,
@@ -415,7 +427,7 @@ private fun SecurityStep(state: CoreOnboardingSnapshot, actions: PreviewActions)
             }
         }
     }
-    WhumpoQuietButton(onClick = { actions.back() }) { Text("Back to checkout") }
+    WhumpoQuietButton(onClick = { actions.back() }) { Text("Back to security choices") }
 }
 
 private data class SecurityTaskDetails(val title: String, val explanation: String, val openLabel: String, val confirmLabel: String)
@@ -439,11 +451,11 @@ private fun securityTaskDetails(task: CoreOnboardingSecurityTask, method: CoreOn
         "Simulate authenticator setup", "Confirm demo authenticator setup",
     )
     CoreOnboardingSecurityTask.Recovery -> if (method == CoreOnboardingSecurityMethod.Passkeys) SecurityTaskDetails(
-        "Demo recovery kit", "NOT A REAL RECOVERY KEY. In real setup you must save your recovery kit. Here, acknowledge the simulated save; no usable key or downloadable file exists.",
-        "Review demo recovery kit", "Acknowledge demo kit saved",
+        "Demo recovery kit", "NOT A REAL RECOVERY KEY. In real setup you must save your recovery kit. Here, simulate saving, then acknowledge in a separate step; no usable key or downloadable file exists.",
+        "Review demo recovery kit", "Simulate saving demo kit",
     ) else SecurityTaskDetails(
-        "Demo recovery codes", "NOT REAL RECOVERY CODES. In real setup you must save one-time recovery codes. Here, acknowledge the simulated save; no usable codes or downloadable file exists.",
-        "Review demo recovery codes", "Acknowledge demo codes saved",
+        "Demo recovery codes", "NOT REAL RECOVERY CODES. In real setup you must save one-time recovery codes. Here, simulate saving, then acknowledge in a separate step; no usable codes or downloadable file exists.",
+        "Review demo recovery codes", "Simulate saving demo codes",
     )
 }
 

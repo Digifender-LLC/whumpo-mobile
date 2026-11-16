@@ -25,7 +25,9 @@ disposable emulator, not a physical-device setup step.
 
 Choose **Try onboarding**, then **Start**. No backend or sign-in is needed for
 this journey. **Exit preview** returns to the signed-out harness and clears all
-preview data. Android Back closes a sheet, conflict or edit first, then goes to
+preview data. Android Back closes a sheet, conflict or edit first. Within security,
+Back from a focused task returns to method choice; Back from method choice returns
+to checkout. Dismissing a sheet does not also leave its task. Elsewhere Back goes to
 the preceding step; Back at welcome or in the workspace exits. Activity
 recreation and process death also discard the preview. There is no saved state
 or persistence.
@@ -39,23 +41,26 @@ payment method or credential is collected. The total is **$0.00 demo**; each
 plan says **Plan price to be confirmed**. There are no actual price, quota or
 seat promises.
 
-Account security offers two explicit choices before enrollment:
+Account security shows method choice alone before enrollment, then one unfinished
+credential task at a time. Both choices provide the same preview workspace access:
 
 - **Recommended: two passkeys** simulates separate first and distinct backup
-  registrations, followed by a saved-recovery-kit acknowledgement. A synced copy
+  registrations, followed by a simulated recovery-kit save and a separate acknowledgement. A synced copy
   is not a second distinct credential. Either passkey suffices for ordinary
   sign-in; this preview cannot verify physical independence.
 - **Use a password and authenticator instead** simulates password setup and
-  authenticator-app TOTP verification, followed by a saved-one-time-recovery-code
-  acknowledgement. This path never requires a passkey.
+  authenticator-app TOTP verification, followed by a simulated one-time-recovery-code
+  save and a separate acknowledgement. This path never requires a passkey.
 
 Every setup step supports cancellation, failure and retry. Password and TOTP
 steps have no fields for real secrets. Recovery panels contain only **NOT A REAL
 RECOVERY KEY** or **NOT REAL RECOVERY CODES** placeholders: no usable-looking
-secrets, QR codes or downloads exist. Saving is a deliberate demo acknowledgement,
-not a claim that a real recovery file was saved.
+secrets, QR codes or downloads exist. The save action closes the demo sheet and
+shows a separate acknowledgement screen. Security remains incomplete until that
+acknowledgement; neither action claims that a real recovery file was saved.
 
-Review can reopen account security. Selecting a different method discards all
+Review reopens method choice. Selecting the same method resumes its unfinished
+task or completed summary, retaining progress. Selecting a different method discards all
 previous security confirmations and requires the replacement setup in full,
 while preserving organization answers and payment. Plan changes retain completed
 account security. Review and Account show the selected method.
@@ -107,12 +112,17 @@ From `android/`, run the focused state-machine tests and native build checks:
 The domain tests cover invalid ordering, cancellation/failure/retry, input
 limits, retained answers, plan re-payment, team conflicts, review edits,
 exactly-once creation and reset. Security cases cover both methods, partial setup,
-unsaved recovery, stale/repeated confirmations, method changes, retained payment
+unsaved and unacknowledged recovery, hidden-task actions, sheet/task/choice Back,
+same-method resume, stale/repeated confirmations, method changes, retained payment
 and answers, and plan changes after security setup. App unit tasks reporting
 `NO-SOURCE` are not UI coverage. Check the full credential-free gate in
 [Android verification](android-verification.md) before pushing.
 
-For a manual emulator or device check, complete both security methods, cancel
+For a manual emulator or device check, verify that choices disappear after selection
+and only the unfinished task is shown. Back must dismiss a sheet before returning
+to choices; reselecting the same method must resume its progress. Verify that
+simulated recovery save does not advance until the separate acknowledgement.
+Complete both security methods, cancel
 and retry each setup step, switch methods from review and verify the old setup
 is cleared, choose team on Solo and re-confirm a Business plan, edit answers
 and plans from review, inspect all three workspace tabs, and exit/re-enter to
@@ -121,8 +131,41 @@ light/dark themes and TalkBack. Compilation and domain tests alone do not
 qualify those UI behaviors. Real payment, passkey enrollment, connected backend,
 release signing and physical-device acceptance remain separate work.
 
-## Local integration evidence — November 15, 2026
+## Earlier security-choice integration evidence — November 15, 2026
 
 The integrated client passed 423 shared JVM tests and 524 shared Android host tests, with zero failures/errors/skips. Both debug variants and their AndroidTest APKs assembled, both lint tasks passed, and both app unit tasks reported `NO-SOURCE`. Policy/source checks and whitespace checks passed. Native API 36 manual walkthroughs completed both security choices through organization creation, Account and exit, including cancellation, failure/retry and method switching.
 
 The new security screens have not been qualified with TalkBack, API 28, physical devices or enlarged text. Automated instrumentation was not run for this increment. These are local preview results, not real authentication, recovery, billing or release acceptance.
+
+## Focused security-step integration verification — November 15, 2026
+
+The focused-step candidate passed all 15 onboarding state-machine tests, 424
+shared JVM tests and 525 shared Android host tests, with zero failures, errors
+or skips. `:androidApp:assembleLocalDebug` and `:androidApp:lintLocalDebug`
+passed. `:androidApp:testLocalDebugUnitTest` reported `NO-SOURCE`. Host tests
+verified the existing committed screenshot baselines; no baselines were updated.
+The additional host command is `./gradlew :shared:testAndroidHostTest`.
+
+A fresh disposable API 36 ARM64 emulator (1080 × 2400, density 420, font scale
+1.0) completed both methods through review, creation, method-specific Account
+summary and exit. Manual synthetic checks covered choice-only presentation,
+one unfinished task at a time, system Back dismissing a sheet without leaving
+its task, task Back to choice, choice Back to the retained checkout, same-method
+resume, cancellation and simulated failure/retry, separate recovery save and
+acknowledgement, and changing methods from review. The review text before and
+after replacement security setup retained the same payment and organization
+answers. Exiting and reopening returned to welcome. Captured choice, task,
+recovery acknowledgement and Account screens were inspected locally.
+
+This is bounded local preview evidence. No new instrumented test was added:
+the existing full instrumentation inventory is shared by both flavors, while
+this screen is local-debug-only. The full two-flavor/API instrumentation gate
+was not run for this increment. TalkBack, API 28, enlarged text, physical devices,
+real authentication/recovery/payment and signed-release acceptance remain
+unqualified. There are no theme, typography, animation or production-auth changes.
+
+Integration review verified the source and captured-evidence hashes, inspected the
+choice, task and recovery-acknowledgement screenshots, and independently reran
+all 424 JVM and 525 Android host tests against the integrated files. Local debug
+assemble and lint passed again; the app unit task remained `NO-SOURCE`. This
+review adds no new emulator or assistive-technology coverage to the scope above.

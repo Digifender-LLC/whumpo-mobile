@@ -15,11 +15,12 @@ class CoreOnboardingPreviewTest {
 
     private fun CoreOnboardingFlow.completeSecurity(method: CoreOnboardingSecurityMethod = CoreOnboardingSecurityMethod.Passkeys) {
         assertTrue(selectSecurityMethod(method))
-        while (!snapshot().securitySetupComplete) {
+        while (snapshot().security.nextTask != null) {
             val task = assertNotNull(snapshot().security.nextTask)
             assertTrue(openSecuritySheet(task))
             assertTrue(confirmSecurityTask(task))
         }
+        assertTrue(acknowledgeRecovery(method))
     }
 
     private fun paidAndRegistered(plan: CoreOnboardingPlan) = CoreOnboardingFlow().apply {
@@ -96,7 +97,7 @@ class CoreOnboardingPreviewTest {
             assertTrue(flow.confirmPayment())
             assertFalse(flow.confirmPayment())
             assertTrue(flow.selectSecurityMethod(method))
-            while (!flow.snapshot().securitySetupComplete) {
+            while (flow.snapshot().security.nextTask != null) {
                 val task = assertNotNull(flow.snapshot().security.nextTask)
                 assertFalse(flow.confirmSecurityTask(task))
                 assertTrue(flow.openSecuritySheet(task))
@@ -111,6 +112,8 @@ class CoreOnboardingPreviewTest {
                 assertTrue(flow.confirmSecurityTask(task))
                 assertFalse(flow.confirmSecurityTask(task), "Repeated confirmation cannot complete the next task")
             }
+            assertFalse(flow.snapshot().securitySetupComplete)
+            assertTrue(flow.acknowledgeRecovery(method))
             assertEquals(CoreOnboardingStep.Conversation, flow.snapshot().step)
         }
     }
@@ -141,6 +144,15 @@ class CoreOnboardingPreviewTest {
             assertNull(flow.createOrganization())
             flow.openSecuritySheet(CoreOnboardingSecurityTask.Recovery)
             assertTrue(flow.confirmSecurityTask(CoreOnboardingSecurityTask.Recovery))
+            assertFalse(flow.snapshot().securitySetupComplete)
+            assertTrue(flow.snapshot().security.recoverySaved)
+            assertFalse(flow.snapshot().security.recoveryAcknowledged)
+            assertEquals(CoreOnboardingStep.Security, flow.snapshot().step)
+            assertFalse(flow.proceedFromCompletedStep())
+            assertNull(flow.createOrganization())
+            assertFalse(flow.acknowledgeRecovery(CoreOnboardingSecurityMethod.entries.first { it != method }))
+            assertTrue(flow.acknowledgeRecovery(method))
+            assertFalse(flow.acknowledgeRecovery(method))
             assertTrue(flow.snapshot().securitySetupComplete)
             if (method == CoreOnboardingSecurityMethod.PasswordAuthenticator) {
                 assertFalse(flow.snapshot().security.firstPasskey)
@@ -164,13 +176,19 @@ class CoreOnboardingPreviewTest {
         flow.openSecuritySheet(CoreOnboardingSecurityTask.Password)
         assertTrue(flow.confirmSecurityTask(CoreOnboardingSecurityTask.Password))
         flow.openSecuritySheet(CoreOnboardingSecurityTask.Authenticator)
+        assertFalse(flow.selectSecurityMethod(CoreOnboardingSecurityMethod.Passkeys))
+        assertTrue(flow.back()) // Sheet closes first.
+        assertFalse(flow.snapshot().securityChoiceVisible)
+        assertTrue(flow.back()) // Then return to method choice.
         assertTrue(flow.selectSecurityMethod(CoreOnboardingSecurityMethod.Passkeys))
         assertFalse(flow.confirmSecurityTask(CoreOnboardingSecurityTask.Authenticator), "An old method's callback cannot complete a new setup")
         assertEquals(CoreOnboardingSecurity(method = CoreOnboardingSecurityMethod.Passkeys), flow.snapshot().security)
+        assertTrue(flow.back())
         assertTrue(flow.selectSecurityMethod(CoreOnboardingSecurityMethod.PasswordAuthenticator))
         for (task in listOf(CoreOnboardingSecurityTask.Password, CoreOnboardingSecurityTask.Authenticator, CoreOnboardingSecurityTask.Recovery)) {
             assertTrue(flow.openSecuritySheet(task)); assertTrue(flow.confirmSecurityTask(task))
         }
+        assertTrue(flow.acknowledgeRecovery(CoreOnboardingSecurityMethod.PasswordAuthenticator))
         assertEquals(CoreOnboardingStep.Review, flow.snapshot().step)
         assertTrue(flow.snapshot().canCreate)
         val security = flow.snapshot().security
@@ -179,6 +197,58 @@ class CoreOnboardingPreviewTest {
         assertNull(flow.createOrganization(), "New plan still needs payment")
         flow.openPaymentSheet(); flow.confirmPayment()
         assertEquals(CoreOnboardingSecurityMethod.PasswordAuthenticator, assertNotNull(flow.createOrganization()).securityMethod)
+    }
+
+    @Test
+    fun choiceAndFocusedTaskBackResumeBothMethodsWithoutSkippingRecoveryAcknowledgement() {
+        for (method in CoreOnboardingSecurityMethod.entries) {
+            val flow = CoreOnboardingFlow()
+            flow.start(); flow.selectPlan(CoreOnboardingPlan.Solo)
+            flow.openPaymentSheet(); flow.confirmPayment()
+            assertTrue(flow.snapshot().securityChoiceVisible)
+            assertFalse(flow.acknowledgeRecovery(method))
+            assertTrue(flow.selectSecurityMethod(method))
+            assertFalse(flow.snapshot().securityChoiceVisible)
+            assertFalse(flow.selectSecurityMethod(method), "Choice is not visible during a task")
+            while (flow.snapshot().security.nextTask != null) {
+                val task = assertNotNull(flow.snapshot().security.nextTask)
+                assertFalse(flow.acknowledgeRecovery(method))
+                assertTrue(flow.openSecuritySheet(task))
+                assertTrue(flow.back())
+                assertFalse(flow.snapshot().securityChoiceVisible, "Sheet dismissal cannot also navigate")
+                assertFalse(flow.confirmSecurityTask(task))
+                assertTrue(flow.back())
+                assertTrue(flow.snapshot().securityChoiceVisible)
+                val retained = flow.snapshot().security
+                assertFalse(flow.openSecuritySheet(task), "Hidden task cannot open a sheet")
+                assertFalse(flow.confirmSecurityTask(task))
+                assertFalse(flow.proceedFromCompletedStep())
+                assertTrue(flow.selectSecurityMethod(method))
+                assertEquals(retained, flow.snapshot().security)
+                assertTrue(flow.openSecuritySheet(task))
+                assertTrue(flow.confirmSecurityTask(task))
+            }
+            assertTrue(flow.back())
+            assertTrue(flow.snapshot().securityChoiceVisible)
+            assertFalse(flow.acknowledgeRecovery(method), "Hidden acknowledgement cannot advance")
+            assertTrue(flow.selectSecurityMethod(method))
+            assertTrue(flow.snapshot().security.recoverySaved)
+            assertFalse(flow.snapshot().securitySetupComplete)
+            assertTrue(flow.acknowledgeRecovery(method))
+            flow.answerAll(); flow.proceedFromCompletedStep()
+            val before = flow.snapshot()
+            assertTrue(flow.editSecurity())
+            assertTrue(flow.snapshot().securityChoiceVisible)
+            assertFalse(flow.proceedFromCompletedStep())
+            assertTrue(flow.selectSecurityMethod(method))
+            assertEquals(before.security, flow.snapshot().security)
+            assertTrue(flow.proceedFromCompletedStep())
+            assertTrue(flow.snapshot().canCreate)
+            assertEquals(before.answers, flow.snapshot().answers)
+            assertEquals(before.paidPlan, flow.snapshot().paidPlan)
+            flow.reset()
+            assertEquals(CoreOnboardingSnapshot(), flow.snapshot())
+        }
     }
 
     @Test

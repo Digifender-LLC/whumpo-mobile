@@ -38,6 +38,7 @@ data class CoreOnboardingSecurity(
     val password: Boolean = false,
     val authenticator: Boolean = false,
     val recoverySaved: Boolean = false,
+    val recoveryAcknowledged: Boolean = false,
     val sheet: CoreOnboardingSheet = CoreOnboardingSheet.Idle,
 ) {
     val credentialsComplete: Boolean get() = when (method) {
@@ -45,7 +46,7 @@ data class CoreOnboardingSecurity(
         CoreOnboardingSecurityMethod.PasswordAuthenticator -> password && authenticator
         null -> false
     }
-    val complete: Boolean get() = credentialsComplete && recoverySaved
+    val complete: Boolean get() = credentialsComplete && recoverySaved && recoveryAcknowledged
     val nextTask: CoreOnboardingSecurityTask? get() = when (method) {
         CoreOnboardingSecurityMethod.Passkeys -> when {
             !firstPasskey -> CoreOnboardingSecurityTask.FirstPasskey
@@ -133,6 +134,8 @@ data class CoreOnboardingSnapshot(
     /** True after a plan change discarded an earlier demo payment confirmation. */
     val repaymentRequired: Boolean = false,
     val security: CoreOnboardingSecurity = CoreOnboardingSecurity(),
+    /** Choice is separate from the focused task; returning to it retains the selected method's progress. */
+    val securityChoiceVisible: Boolean = true,
     val answers: CoreOnboardingAnswers = CoreOnboardingAnswers(),
     val conflict: CoreOnboardingTeamConflict? = null,
     val editing: CoreOnboardingQuestion? = null,
@@ -194,7 +197,7 @@ class CoreOnboardingFlow {
     fun proceedFromCompletedStep(): Boolean = transition {
         val satisfied = when (step) {
             CoreOnboardingStep.Payment -> paymentConfirmed
-            CoreOnboardingStep.Security -> securitySetupComplete
+            CoreOnboardingStep.Security -> securitySetupComplete && !securityChoiceVisible
             CoreOnboardingStep.Conversation -> answers.complete
             else -> false
         }
@@ -223,25 +226,28 @@ class CoreOnboardingFlow {
 
     /** A new choice deliberately discards all earlier security confirmations, but keeps payment and answers. */
     fun selectSecurityMethod(method: CoreOnboardingSecurityMethod): Boolean = transition {
-        if (step != CoreOnboardingStep.Security || !paymentConfirmed || method == security.method) null
-        else copy(security = CoreOnboardingSecurity(method = method))
+        if (step != CoreOnboardingStep.Security || !paymentConfirmed || !securityChoiceVisible) null
+        else copy(
+            security = if (method == security.method) security else CoreOnboardingSecurity(method = method),
+            securityChoiceVisible = false,
+        )
     }
 
     fun editSecurity(): Boolean = transition {
         if (step == CoreOnboardingStep.Review && editing == null && conflict == null) {
-            copy(step = CoreOnboardingStep.Security, inputError = null)
+            copy(step = CoreOnboardingStep.Security, securityChoiceVisible = true, inputError = null)
         } else null
     }
 
     fun openSecuritySheet(task: CoreOnboardingSecurityTask): Boolean = transition {
-        if (step == CoreOnboardingStep.Security && paymentConfirmed && security.nextTask == task &&
+        if (step == CoreOnboardingStep.Security && !securityChoiceVisible && paymentConfirmed && security.nextTask == task &&
             security.sheet != CoreOnboardingSheet.Open
         ) copy(security = security.copy(sheet = CoreOnboardingSheet.Open)) else null
     }
 
     /** The expected task prevents a repeated confirmation from completing the next credential. */
     fun confirmSecurityTask(task: CoreOnboardingSecurityTask): Boolean = transition {
-        if (step != CoreOnboardingStep.Security || !paymentConfirmed || security.nextTask != task ||
+        if (step != CoreOnboardingStep.Security || securityChoiceVisible || !paymentConfirmed || security.nextTask != task ||
             security.sheet != CoreOnboardingSheet.Open
         ) null else {
             val confirmed = when (task) {
@@ -251,19 +257,26 @@ class CoreOnboardingFlow {
                 CoreOnboardingSecurityTask.Authenticator -> security.copy(authenticator = true)
                 CoreOnboardingSecurityTask.Recovery -> security.copy(recoverySaved = true)
             }.copy(sheet = CoreOnboardingSheet.Idle)
-            val next = copy(security = confirmed)
-            if (confirmed.complete) next.proceed() else next
+            copy(security = confirmed)
         }
     }
 
+    /** Saving and acknowledging are separate demo actions; neither creates a recovery file. */
+    fun acknowledgeRecovery(method: CoreOnboardingSecurityMethod): Boolean = transition {
+        if (step != CoreOnboardingStep.Security || securityChoiceVisible || !paymentConfirmed ||
+            security.method != method || !security.credentialsComplete || !security.recoverySaved ||
+            security.recoveryAcknowledged || security.sheet != CoreOnboardingSheet.Idle
+        ) null else copy(security = security.copy(recoveryAcknowledged = true)).proceed()
+    }
+
     fun failSecurityTask(task: CoreOnboardingSecurityTask): Boolean = transition {
-        if (step == CoreOnboardingStep.Security && security.nextTask == task && security.sheet == CoreOnboardingSheet.Open) {
+        if (step == CoreOnboardingStep.Security && !securityChoiceVisible && security.nextTask == task && security.sheet == CoreOnboardingSheet.Open) {
             copy(security = security.copy(sheet = CoreOnboardingSheet.Failed))
         } else null
     }
 
     fun cancelSecurityTask(task: CoreOnboardingSecurityTask): Boolean = transition {
-        if (step == CoreOnboardingStep.Security && security.nextTask == task && security.sheet.visible) {
+        if (step == CoreOnboardingStep.Security && !securityChoiceVisible && security.nextTask == task && security.sheet.visible) {
             copy(security = security.copy(sheet = CoreOnboardingSheet.Cancelled))
         } else null
     }
@@ -358,8 +371,9 @@ class CoreOnboardingFlow {
             step == CoreOnboardingStep.Payment && payment.visible -> copy(payment = CoreOnboardingSheet.Cancelled)
             step == CoreOnboardingStep.Security && security.sheet.visible ->
                 copy(security = security.copy(sheet = CoreOnboardingSheet.Cancelled))
+            step == CoreOnboardingStep.Security && !securityChoiceVisible -> copy(securityChoiceVisible = true)
             step == CoreOnboardingStep.Welcome || step == CoreOnboardingStep.Workspace -> null
-            else -> copy(step = CoreOnboardingStep.entries[step.ordinal - 1], inputError = null)
+            else -> copy(step = CoreOnboardingStep.entries[step.ordinal - 1], securityChoiceVisible = true, inputError = null)
         }
     }
 
