@@ -713,14 +713,17 @@ private fun ReviewRecoveryStep(
     }
     StepTitle("Choose how to sign in after recovery")
     ProfileChoices(profile, busy, passkeysConfigured) { profile = it }
-    StepButton("Review account changes", !busy) {
-        val mode = when {
-            lost.isEmpty() -> RecoveryLossMode.None
-            lost.size == active.size -> RecoveryLossMode.All
-            else -> RecoveryLossMode.Some
-        }
-        submit(mode, lost, profile)
+    val mode = when {
+        lost.size == active.size -> RecoveryLossMode.All
+        lost.isEmpty() -> RecoveryLossMode.None
+        else -> RecoveryLossMode.Some
     }
+    val needsRetainedPasskey = mode != RecoveryLossMode.All && profile == SecurityProfile.Passkeys &&
+        active.none { it.kind == SecurityMethodKind.Passkey && it.id !in lost }
+    if (needsRetainedPasskey) {
+        Text("Keep at least one passkey, mark all methods lost, or choose password and authenticator.")
+    }
+    StepButton("Review account changes", !busy && !needsRetainedPasskey) { submit(mode, lost, profile) }
 }
 
 @Composable

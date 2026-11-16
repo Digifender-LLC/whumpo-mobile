@@ -6,6 +6,7 @@ import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreProtocolException
 import com.whumpo.core.api.RecoveryLossMode
 import com.whumpo.core.api.SavedRecoveryProof
+import com.whumpo.core.api.SecurityAccess
 import com.whumpo.core.api.SecurityPhase
 import com.whumpo.core.api.SecurityProfile
 import com.whumpo.core.api.SecurityPurpose
@@ -54,11 +55,12 @@ class CoreAccountRecoveryTest {
         bundle: Int = 3,
         offer: String = "null",
         approved: String? = null,
+        workspaceAccess: String? = null,
     ): String {
         val restricted = purpose != "account"
         val attempt = if (restricted) literal("attempt-1") else "null"
         val attemptRevision = if (restricted) "$revision" else "null"
-        val access = if (restricted) "restricted" else "available"
+        val access = workspaceAccess ?: if (restricted) "restricted" else "available"
         val inventory = methods.joinToString()
         return """{"version":1,"accountId":"account-1","candidateId":null,"purpose":"$purpose","phase":"$phase",
             "generation":$generation,"inventoryRevision":$revision,"attemptId":$attempt,"attemptRevision":$attemptRevision,
@@ -71,15 +73,16 @@ class CoreAccountRecoveryTest {
 
     private fun grant(
         state: String, token: String = initialGrant, purpose: String = "recovery", operation: String? = null,
+        priorInventoryRevision: Int? = null,
     ): String {
-        val acknowledgement = operation?.let { ""","receipt":${receipt(it, state)}""" }.orEmpty()
+        val acknowledgement = operation?.let { ""","receipt":${receipt(it, state, priorInventoryRevision)}""" }.orEmpty()
         return """{"authority":{"kind":"account_grant","token":"$token","purpose":"$purpose","expiresAt":9000},"state":$state$acknowledgement}"""
     }
 
-    private fun receipt(operation: String, snapshot: String): String {
+    private fun receipt(operation: String, snapshot: String, priorInventoryRevision: Int? = null): String {
         val state = Json.parseToJsonElement(snapshot).jsonObject
         val generation = state.field("generation")
-        val revision = state.field("inventoryRevision")
+        val revision = priorInventoryRevision?.toString() ?: state.field("inventoryRevision")
         val bundle = state.getValue("recovery").jsonObject.field("generation")
         return """{"operation":"$operation","accountId":"account-1","candidateId":null,"attemptId":"attempt-1",
             "operationId":"00000000-0000-0000-0000-000000000001","confirmedAt":1,
@@ -168,7 +171,8 @@ class CoreAccountRecoveryTest {
                     assertEquals("AccountGrant $initialGrant", header)
                     assertNotNull(key)
                     assertEquals("234567", body.getValue("proof").jsonObject.field("totp"))
-                    respond(grant(snapshot("account", kind = "codes", approved = "password_totp"), accountGrant, "account", "enrollment.complete"))
+                    respond(grant(snapshot("account", revision = 3, kind = "codes", approved = "password_totp"),
+                        accountGrant, "account", "enrollment.complete", priorInventoryRevision = 1))
                 }
                 "organizations" -> {
                     assertEquals("AccountGrant $accountGrant", header)
@@ -212,6 +216,7 @@ class CoreAccountRecoveryTest {
         var pendingOffer = "null"
         var registerPrompts = 0
         var finalPrompts = 0
+        var secureCalls = 0
         val passkeys = object : AccountPasskeys {
             override suspend fun register(options: String): String? {
                 registerPrompts++
@@ -277,11 +282,16 @@ class CoreAccountRecoveryTest {
                     assertEquals("4", body.field("generation"))
                     if (secure.record(key, body)) respond("""{"authority":null,"state":{}}""")
                     else {
-                        secured = true
-                        methods = listOf(retained)
-                        pendingOffer = "null"
-                        revision++
-                        respond(grant(state(), securedGrant, operation = "recovery.secure"))
+                        secureCalls++
+                        if (!secured) {
+                            secured = true
+                            methods = listOf(retained)
+                            pendingOffer = "null"
+                            revision++
+                        }
+                        val securedState = if (secureCalls == 1) state().replace("\"version\":1,\"verified\"", "\"version\":2,\"verified\"")
+                            else state()
+                        respond(grant(securedState, securedGrant, operation = "recovery.secure", priorInventoryRevision = revision - 1))
                     }
                 }
                 "passkeys/options" -> {
@@ -306,9 +316,10 @@ class CoreAccountRecoveryTest {
                 }
                 "recovery/complete/verify" -> {
                     assertEquals("""{"method":"passkey_uv","response":{"id":"synthetic-final-proof"}}""", body["proof"].toString())
-                    val ready = snapshot("account", generation = 5, revision = revision, bundle = 4, approved = "passkey_uv")
+                    val ready = snapshot("account", generation = 5, revision = revision + 1, bundle = 4,
+                        approved = "passkey_uv", workspaceAccess = "none")
                     val operation = if (final.record(key, body)) null else "recovery.complete"
-                    respond(grant(ready, accountGrant, "account", operation))
+                    respond(grant(ready, accountGrant, "account", operation, priorInventoryRevision = revision))
                 }
                 else -> error("Unexpected route $route")
             }
@@ -329,6 +340,8 @@ class CoreAccountRecoveryTest {
             controller.confirmSaved(material.offerId, material.generation)
             assertFailsWith<CoreProtocolException> { controller.secureRecovery() }
             assertEquals(SecurityPhase.Ready, controller.state.value?.phase)
+            assertFailsWith<CoreProtocolException> { controller.retryPending() }
+            assertEquals(SecurityPhase.Ready, controller.state.value?.phase)
             controller.retryPending()
             assertEquals(SecurityPhase.Recovering, controller.state.value?.phase)
             assertFalse(controller.state.value!!.replacementMethodsReady())
@@ -344,6 +357,8 @@ class CoreAccountRecoveryTest {
             controller.retryPending()
             assertEquals(1, finalPrompts)
             assertEquals(SecurityPurpose.Account, controller.state.value?.purpose)
+            assertEquals(SecurityAccess.None, controller.state.value?.workspaceAccess)
+            assertFailsWith<IllegalStateException> { controller.organizations() }
             assertNull(controller.recoveryReview.value)
             assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
         }
@@ -377,7 +392,8 @@ class CoreAccountRecoveryTest {
                 "recovery/review/current" -> {
                     assertNull(key)
                     currentCalls++
-                    respond(current(reviewed, 5, if (currentCalls == 1) 6 else 5))
+                    val review = if (currentCalls == 2) reviewed.replace("\"version\":1", "\"version\":2") else reviewed
+                    respond(current(review, 5, if (currentCalls == 1) 6 else 5))
                 }
                 "recovery/complete/options" -> {
                     assertEquals("review-1", body.field("reviewId"))
@@ -414,6 +430,8 @@ class CoreAccountRecoveryTest {
             assertFailsWith<CoreProtocolException> {
                 controller.startRecovery("synthetic-locator", SavedRecoveryProof.Code("synthetic-replacement-code"))
             }
+            assertNull(controller.state.value)
+            assertFailsWith<CoreProtocolException> { controller.retryPending() }
             assertNull(controller.state.value)
             controller.retryPending()
             assertEquals(SecurityPhase.Recovering, controller.state.value?.phase)
@@ -478,6 +496,32 @@ class CoreAccountRecoveryTest {
             assertNull(controller.state.value)
             assertNull(controller.retry.value)
             assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
+        }
+    }
+
+    @Test
+    fun clearingReservedStartPreventsLateReplayFromResuming() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val enrollment = snapshot("enrollment", "enrolling", "password_totp")
+        val engine = MockEngine { request ->
+            assertEquals("/v1/account-security/enrollment/reserved/start", request.url.encodedPath)
+            started.complete(Unit)
+            release.await()
+            respond("""{"authority":null,"state":null,"receipt":${receipt("enrollment.reserved.start", enrollment)}}""")
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val workspace = CoreOrganizationSessionController(api) { 1 }
+            val controller = CoreAccountSecurityController(api, workspace, rp) { 1 }
+            val pending = async {
+                assertFailsWith<CancellationException> { controller.enrollReserved(SecurityProfile.PasswordTotp, invitation) }
+            }
+            started.await()
+            controller.clear()
+            release.complete(Unit)
+            pending.await()
+            assertNull(controller.state.value)
+            assertNull(controller.retry.value)
         }
     }
 

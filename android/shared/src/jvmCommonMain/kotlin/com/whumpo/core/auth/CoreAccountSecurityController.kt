@@ -325,9 +325,7 @@ class CoreAccountSecurityController(
         val review = current.review
         val active = activeMethods(snapshot)
         if (snapshot.phase == SecurityPhase.Recovering) {
-            if (review == null || review.completionProfile != snapshot.setupProfile ||
-                review.retainedIds.toSet() != active.map { it.id }.toSet()) invalid()
-            validateReview(review)
+            validateSecuredReview(snapshot, review ?: invalid())
         } else if (review != null) {
             validateReview(review, active)
             if (snapshot.setupProfile != review.completionProfile) invalid()
@@ -341,8 +339,8 @@ class CoreAccountSecurityController(
             checkEpoch(operation)
             mutableRetry.value = if (pending.route == "recovery/start") Retry.RecoveryStart else Retry.ReservedStart
         }
-        return try {
-            api.accountSecurity(pending.route, body = pending.payload, key = pending.key)
+        val result = try {
+            api.accountSecurity<T>(pending.route, body = pending.payload, key = pending.key)
         } catch (error: CoreHttpException) {
             if (error.status in definitiveRejection) synchronized(lock) {
                 checkEpoch(operation)
@@ -351,6 +349,8 @@ class CoreAccountSecurityController(
             }
             throw error
         }
+        verify(operation)
+        return result
     }
 
     private fun checkAttemptReceipt(
@@ -359,6 +359,7 @@ class CoreAccountSecurityController(
         state: AccountSecurityState,
         attemptId: String? = state.attemptId,
         minimumGeneration: Long = 0,
+        expectedInventoryRevision: Long = state.inventoryRevision,
         replay: Boolean = false,
     ) {
         if (!recoveryId.matches(receipt.operationId) || receipt.confirmedAt !in 0..CORE_MAX_VERSION ||
@@ -367,7 +368,7 @@ class CoreAccountSecurityController(
             receipt.generationAfter !in maxOf(receipt.generationBefore, minimumGeneration)..state.generation ||
             receipt.generationBefore < 0 || receipt.inventoryRevision !in 0..state.inventoryRevision ||
             receipt.recoveryGeneration !in 0..CORE_MAX_VERSION ||
-            (!replay && (receipt.generationAfter != state.generation || receipt.inventoryRevision != state.inventoryRevision))) invalid()
+            (!replay && (receipt.generationAfter != state.generation || receipt.inventoryRevision != expectedInventoryRevision))) invalid()
     }
 
     suspend fun reviewRecovery(mode: RecoveryLossMode, lostIds: Set<String>, profile: SecurityProfile) =
@@ -378,10 +379,13 @@ class CoreAccountSecurityController(
             val ids = active.map { it.id }.toSet()
             val selected = when (mode) {
                 RecoveryLossMode.All -> ids
-                RecoveryLossMode.None -> emptySet()
+                RecoveryLossMode.None -> emptySet<String>().also { require(ids.isNotEmpty()) }
                 RecoveryLossMode.Some -> lostIds.also { require(it.isNotEmpty() && it.size < ids.size && ids.containsAll(it)) }
             }
             require(selected.size <= 12)
+            if (mode != RecoveryLossMode.All && profile == SecurityProfile.Passkeys) {
+                require(active.any { it.kind == SecurityMethodKind.Passkey && it.id !in selected })
+            }
             reviewRecovery(operation, authority, revisionBody {
                 put("mode", accountSecurityJson.encodeToJsonElement(mode))
                 putJsonArray("lostIds") { selected.sorted().forEach { add(it) } }
@@ -422,12 +426,24 @@ class CoreAccountSecurityController(
     private fun activeMethods(snapshot: AccountSecurityState? = state.value) =
         snapshot?.methods.orEmpty().filter { it.state == SecurityMethodStatus.Active }
 
+    private fun reviewedMethods(methods: List<SecurityMethod>) = methods.map {
+        RecoveryReviewedMethod(it.id, it.version, it.kind, it.createdAt)
+    }.toSet()
+
+    private fun validateSecuredReview(snapshot: AccountSecurityState, review: RecoveryReview) {
+        validateReview(review)
+        val retained = review.inventory.filter { it.id in review.retainedIds }.toSet()
+        val active = activeMethods(snapshot)
+        if (snapshot.setupProfile != review.completionProfile || active.any { !it.verified } ||
+            reviewedMethods(active) != retained) invalid()
+    }
+
     private fun validateReview(review: RecoveryReview, active: List<SecurityMethod>? = null) {
         val reviewedIds = review.inventory.map { it.id }.toSet()
         val lost = review.lostIds.toSet()
         val retained = review.retainedIds.toSet()
         val expectedMode = when {
-            lost.isEmpty() && review.mode == RecoveryLossMode.None -> RecoveryLossMode.None
+            lost.isEmpty() && retained.isNotEmpty() && review.mode == RecoveryLossMode.None -> RecoveryLossMode.None
             lost == reviewedIds -> RecoveryLossMode.All
             else -> RecoveryLossMode.Some
         }
@@ -436,11 +452,11 @@ class CoreAccountSecurityController(
             review.inventory.size != reviewedIds.size || review.lostIds.size != lost.size ||
             review.retainedIds.size != retained.size || lost.size > 12 || retained.size > 12 ||
             lost.intersect(retained).isNotEmpty() || lost + retained != reviewedIds ||
+            (review.mode != RecoveryLossMode.All && review.completionProfile == SecurityProfile.Passkeys &&
+                review.inventory.none { it.kind == SecurityMethodKind.Passkey && it.id in retained }) ||
             review.inventory.any { !securityOpaqueId.matches(it.id) || it.version !in 1..CORE_MAX_VERSION ||
                 it.createdAt !in 0..CORE_MAX_VERSION } ||
-            (active != null && review.inventory.toSet() != active.map {
-                RecoveryReviewedMethod(it.id, it.version, it.kind, it.createdAt)
-            }.toSet())) invalid()
+            (active != null && review.inventory.toSet() != reviewedMethods(active))) invalid()
     }
 
     suspend fun secureRecovery() = exclusive { operation ->
@@ -472,14 +488,14 @@ class CoreAccountSecurityController(
             next.generation <= previous.generation || next.inventoryRevision < previous.inventoryRevision ||
             (next.attemptRevision ?: 0) <= (previous.attemptRevision ?: 0) ||
             next.phase != SecurityPhase.Recovering ||
-            next.setupProfile != review.completionProfile ||
             next.recovery.offer != null || next.recovery.kind != review.completionProfile.recoveryKind() ||
-            next.recovery.generation.toString() != payload["generation"]?.jsonPrimitive?.content ||
-            activeMethods(next).map { it.id }.toSet() != review.retainedIds.toSet()) {
+            next.recovery.generation.toString() != payload["generation"]?.jsonPrimitive?.content) {
             rejectedResponse(operation, request)
         }
         try {
-            checkAttemptReceipt(result.receipt, "recovery.secure", next, minimumGeneration = previous.generation + 1)
+            validateSecuredReview(next, review)
+            checkAttemptReceipt(result.receipt, "recovery.secure", next,
+                minimumGeneration = previous.generation + 1, expectedInventoryRevision = previous.inventoryRevision)
             if (result.receipt.recoveryGeneration != next.recovery.generation) invalid()
             install(operation, SecurityGrant(credential, next), SecurityPurpose.Recovery)
         } catch (error: CoreProtocolException) {
@@ -762,7 +778,8 @@ class CoreAccountSecurityController(
                 pending = request
                 val ready = response.state ?: invalid()
                 val expectedOperation = if (authority.purpose == SecurityPurpose.Recovery) "recovery.complete" else "enrollment.complete"
-                checkAttemptReceipt(response.receipt, expectedOperation, ready, previous.attemptId, previous.generation)
+                checkAttemptReceipt(response.receipt, expectedOperation, ready, previous.attemptId, previous.generation,
+                    expectedInventoryRevision = previous.inventoryRevision)
                 if (response.receipt.recoveryGeneration != ready.recovery.generation) invalid()
                 SecurityGrant(response.authority ?: invalid(), ready)
             } else {
@@ -775,7 +792,8 @@ class CoreAccountSecurityController(
                 (previous.accountId != null && result.state.accountId != previous.accountId) ||
                 (strict && (result.state.approvedMethod != previous.setupProfile?.proofMethod() ||
                     result.state.recovery.kind != previous.setupProfile?.recoveryKind() ||
-                    result.state.workspaceAccess != SecurityAccess.Available))) invalid()
+                    result.state.workspaceAccess == SecurityAccess.Restricted)) ||
+                (reservedEnrollment && result.state.workspaceAccess != SecurityAccess.Available)) invalid()
             install(operation, result, SecurityPurpose.Account) {
                 mutableRecoveryReview.value = null
                 reservedEnrollment = false
