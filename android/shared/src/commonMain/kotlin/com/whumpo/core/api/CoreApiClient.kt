@@ -167,6 +167,33 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         const val restoreReviews = "/v1/application-restore-reviews"
     }
 
+    internal suspend inline fun <reified T> accountSecurity(
+        route: String,
+        authority: SecurityAuthority? = null,
+        body: JsonObject? = null,
+        key: String? = null,
+        cursor: String? = null,
+    ): T {
+        require(key == null || coreIdentifier.matches(key))
+        require(cursor == null || coreIdentifier.matches(cursor))
+        val payload = body?.toString()
+        val requestLimit = when (route) {
+            "passkey/login/verify", "passkeys/verify", "enrollment/complete/verify" -> 65_536
+            else -> 8192
+        }
+        require(payload == null || payload.encodeToByteArray().size <= requestLimit)
+        val raw = call(null, "/v1/account-security/$route",
+            if (body == null) HttpMethod.Get else HttpMethod.Post, payload, cursor = cursor, key = key,
+            accountAuthority = authority)
+        return try {
+            accountSecurityJson.decodeFromString(raw)
+        } catch (_: kotlinx.serialization.SerializationException) {
+            throw CoreProtocolException()
+        } catch (_: IllegalArgumentException) {
+            throw CoreProtocolException()
+        }
+    }
+
     private suspend fun call(
         token: String?,
         path: String,
@@ -181,11 +208,14 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         maxResponseBytes: Int = 65_536,
         workspaceId: String? = null,
         expectedStatus: Int = 200,
+        accountAuthority: SecurityAuthority? = null,
     ): String {
         require(token == null || coreBearer.matches(token)) { "Invalid core bearer format" }
+        require(accountAuthority == null || (token == null && accountGrantBearer.matches(accountAuthority.token)))
+        val bearer = accountAuthority?.token ?: token
         return http.prepareRequest(origin.value + path) {
             method = verb
-            if (token != null) header("Authorization", "Bearer $token")
+            if (bearer != null) header("Authorization", "Bearer $bearer")
             if (workspaceId != null) parameter("workspaceId", workspaceId)
             if (projectId != null) parameter("projectId", projectId)
             if (before != null) parameter("before", before)

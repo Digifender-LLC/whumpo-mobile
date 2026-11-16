@@ -21,6 +21,13 @@ val uploadStore = uploadEnv("WHUMPO_UPLOAD_STORE_FILE")
 val uploadSigned = listOf("WHUMPO_UPLOAD_STORE_PASSWORD", "WHUMPO_UPLOAD_KEY_ALIAS", "WHUMPO_UPLOAD_KEY_PASSWORD")
     .all { uploadEnv(it) != null } && uploadStore != null
 
+// Public endpoint configuration only. Admission credentials are entered at runtime.
+val localCoreOrigin = providers.gradleProperty("whumpo.localCoreOrigin").getOrElse("http://127.0.0.1:5173")
+val localCoreRp = providers.gradleProperty("whumpo.localCoreRp").getOrElse("")
+require(Regex("https://[a-z0-9]+(?:[-.][a-z0-9]+)+|http://127\\.0\\.0\\.1:[1-9][0-9]{0,4}").matches(localCoreOrigin))
+require(localCoreRp.isEmpty() || Regex("[a-z0-9]+(?:[-.][a-z0-9]+)+").matches(localCoreRp))
+require(!localCoreOrigin.startsWith("https://") || localCoreOrigin == "https://$localCoreRp")
+
 android {
     namespace = "com.whumpo.android"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -44,6 +51,8 @@ android {
         create("local") {
             dimension = "environment"
             applicationIdSuffix = ".local"
+            buildConfigField("String", "WHUMPO_LOCAL_CORE_ORIGIN", "\"$localCoreOrigin\"")
+            buildConfigField("String", "WHUMPO_LOCAL_CORE_RP", "\"$localCoreRp\"")
             versionNameSuffix = "-local"
             buildConfigField("String", "WHUMPO_ENVIRONMENT", "\"local\"")
             buildConfigField("String", "WHUMPO_ORIGIN", "\"http://127.0.0.1:8787\"")
