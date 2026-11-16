@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.node.RootForTest
 import androidx.core.view.allViews
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
@@ -31,6 +32,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.tryPerformAccessibilityChecks
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -340,11 +342,13 @@ class FormDeviceTest {
             val actions = show(fontScale = 2f, displayedForm = dates, initialAnswers = initial)
             compose.onNodeWithText("2031-05-06").performScrollTo().performClick()
             assertDialogConfirmAboveKeyboard(compose, compose.onNode(hasSetTextAction()), "form-date-confirm")
-            compose.onNodeWithTag("form-date-confirm").performClick()
+            compose.onNodeWithTag("form-date-confirm").performTouchInput { click() }
+            compose.onNodeWithTag("form-date-dialog").assertDoesNotExist()
             assertEquals(initial, actions.answers)
             compose.onNodeWithText("07:08").performScrollTo().performClick()
             assertDialogConfirmAboveKeyboard(compose, compose.onAllNodes(hasSetTextAction())[0], "form-time-confirm")
-            compose.onNodeWithTag("form-time-confirm").performClick()
+            compose.onNodeWithTag("form-time-confirm").performTouchInput { click() }
+            compose.onNodeWithTag("form-time-dialog").assertDoesNotExist()
             assertEquals(initial, actions.answers)
             assertTrue(actions.calls.filterNot { it.startsWith("blur:") }.isEmpty())
         } finally {

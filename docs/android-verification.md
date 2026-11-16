@@ -110,6 +110,13 @@ stable frames provide evidence. A stable covered composer still fails the origin
 geometry assertion. Synthetic Java regressions exercise repeated-frame rejection,
 movement, animation and absence resets, and stable-but-covered geometry.
 
+The date and time dialog test uses actual 200% system text and compares the
+confirmation button in three stable rendered frames with the input-method
+window in screen coordinates. It then taps the button with the IME open and
+checks that the dialog closes. The Android picker dialog uses its own safe
+drawing insets, including the IME, and lets the picker body scroll while the
+actions stay visible.
+
 Direct instrumentation is diagnostic evidence, not a replacement for this Gradle
 gate.
 `AccountStateTest` uses the pinned Compose JUnit4 v2 rule's standard composition

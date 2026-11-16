@@ -21,7 +21,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DisplayMode
 import androidx.compose.material3.TimeInput as MaterialTimeInput
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -502,7 +501,7 @@ private fun DateInput(
         val initial = date.takeIf(::isIsoDate)?.let { Instant.parse("${it}T00:00:00Z").toEpochMilliseconds() }
         val largeText = LocalDensity.current.fontScale >= 1.5f
         val picker = rememberDatePickerState(initialSelectedDateMillis = initial, yearRange = 1..9999, initialDisplayMode = if (largeText) DisplayMode.Input else DisplayMode.Picker)
-        DatePickerDialog(
+        FormPickerDialog(
             modifier = Modifier.testTag("form-date-dialog"),
             onDismissRequest = { picking = false },
             confirmButton = {
@@ -516,11 +515,9 @@ private fun DateInput(
                     modifier = Modifier.testTag("form-date-confirm"),
                 ) { Text("Use date") }
             },
-            dismissButton = { TextButton({ picking = false }, Modifier.testTag("form-date-dismiss")) { Text("Keep previous date") } },
+            dismissButton = { TextButton({ picking = false }, Modifier.testTag("form-date-dismiss")) { Text("Cancel") } },
         ) {
-            FormMemoryOnlyContent {
-                DatePicker(picker, title = { Text(label, Modifier.padding(24.dp)) }, showModeToggle = !largeText, modifier = Modifier.testTag("form-date-picker"))
-            }
+            DatePicker(picker, title = { Text(label, Modifier.padding(24.dp)) }, showModeToggle = !largeText, modifier = Modifier.testTag("form-date-picker"))
         }
     }
 }
@@ -548,29 +545,33 @@ private fun TimeInput(
         ) { Text("Clear time") }
     }
     if (picking && enabled) {
+        val largeText = LocalDensity.current.fontScale >= 1.5f
         val pieces = time.split(':')
         val picker = rememberTimePickerState(
             initialHour = pieces.getOrNull(0)?.toIntOrNull()?.takeIf { it in 0..23 } ?: 12,
             initialMinute = pieces.getOrNull(1)?.toIntOrNull()?.takeIf { it in 0..59 } ?: 0,
             is24Hour = true,
         )
-        AlertDialog(
+        FormPickerDialog(
             modifier = Modifier.testTag("form-time-dialog"),
             onDismissRequest = { picking = false },
-            title = { Text("Choose time") },
-            text = {
-                FormMemoryOnlyContent {
-                    if (LocalDensity.current.fontScale >= 1.5f) MaterialTimeInput(picker, Modifier.testTag("form-time-picker"))
-                    else TimePicker(picker, Modifier.testTag("form-time-picker"))
-                }
-            },
             confirmButton = { TextButton({
                 onSelected("${picker.hour.toString().padStart(2, '0')}:${picker.minute.toString().padStart(2, '0')}")
                 picking = false
                 onBlur()
             }, Modifier.testTag("form-time-confirm")) { Text("Use time") } },
-            dismissButton = { TextButton({ picking = false }, Modifier.testTag("form-time-dismiss")) { Text("Keep previous time") } },
-        )
+            dismissButton = { TextButton({ picking = false }, Modifier.testTag("form-time-dismiss")) { Text("Cancel") } },
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (largeText) 12.dp else 24.dp),
+                verticalArrangement = Arrangement.spacedBy(if (largeText) 8.dp else 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("Choose time", style = MaterialTheme.typography.headlineSmall)
+                if (largeText) MaterialTimeInput(picker, Modifier.testTag("form-time-picker"))
+                else TimePicker(picker, Modifier.testTag("form-time-picker"))
+            }
+        }
     }
 }
 
