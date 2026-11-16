@@ -55,7 +55,7 @@ data class CoreOrganizationEntitlements(
     val expiresAt: Long?,
 )
 
-class CoreHttpException(val status: Int) : Exception("Core request failed (HTTP $status)")
+open class CoreHttpException(val status: Int) : Exception("Core request failed (HTTP $status)")
 class CoreProtocolException : Exception("Core returned an invalid session or organization response")
 
 internal val coreIdentifier = Regex("[A-Za-z0-9][A-Za-z0-9._~-]{0,127}")

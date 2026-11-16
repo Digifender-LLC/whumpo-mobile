@@ -81,6 +81,32 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return decodeOwnership(raw)
     }
 
+    internal suspend inline fun <reified T> partner(
+        token: String,
+        route: PartnerRoute,
+        id: String? = null,
+        cursor: String? = null,
+        key: String? = null,
+        body: String? = null,
+    ): T {
+        require(route.withId == (id != null) && (id == null || coreIdentifier.matches(id)))
+        require(route.write == (key != null) && route.write == (body != null))
+        require(key == null || coreIdentifier.matches(key))
+        require(cursor == null || (route.limit != null && coreIdentifier.matches(cursor)))
+        val result = call(token, route.path.replace("{id}", id.orEmpty()),
+            if (route.write) HttpMethod.Post else HttpMethod.Get, body,
+            cursor = cursor, limit = route.limit, key = key, requireJson = true,
+            expectedStatus = route.status, alternateStatus = if (route == PartnerRoute.Append) 200 else null,
+            maxResponseBytes = if (route == PartnerRoute.Messages) 262_144 else 65_536,
+            partnerFailure = true)
+        return try {
+            verifyPartnerFieldTypes(Json.parseToJsonElement(result))
+            Json.decodeFromString(result)
+        } catch (_: IllegalArgumentException) {
+            throw CoreProtocolException()
+        }
+    }
+
     internal suspend fun profile(token: String): CoreOrganizationProfile =
         json.decodeFromString(call(token, "/v1/organization"))
 
@@ -230,6 +256,8 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         expectedStatus: Int = 200,
         accountAuthority: SecurityAuthority? = null,
         requireJson: Boolean = false,
+        alternateStatus: Int? = null,
+        partnerFailure: Boolean = false,
     ): String {
         require(token == null || coreBearer.matches(token)) { "Invalid core bearer format" }
         require(accountAuthority == null || (token == null && accountGrantBearer.matches(accountAuthority.token)))
@@ -249,8 +277,24 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
                 setBody(body)
             }
         }.execute { response ->
-            if (response.status.value != expectedStatus) {
+            if (response.status.value != expectedStatus && response.status.value != alternateStatus) {
                 if (response.status.value in 200..299) throw CoreProtocolException()
+                if (partnerFailure && response.status.value != 401) {
+                    if (response.contentType()?.withoutParameters() != ContentType.Application.Json) throw CoreProtocolException()
+                    val errorBytes = response.bodyAsChannel().readBuffer(8193L).readByteArray()
+                    if (errorBytes.size > 8192) throw CoreProtocolException()
+                    val error = try {
+                        val text = errorBytes.decodeToString(throwOnInvalidSequence = true)
+                        verifyPartnerFieldTypes(Json.parseToJsonElement(text))
+                        Json.decodeFromString<PartnerFailureEnvelope>(text).error
+                    } catch (_: IllegalArgumentException) {
+                        throw CoreProtocolException()
+                    }
+                    if (!coreIdentifier.matches(error.requestId) || !Regex("[A-Z0-9_]{1,64}").matches(error.code) ||
+                        error.message.isBlank() || error.message.encodeToByteArray().size > 1024
+                    ) throw CoreProtocolException()
+                    throw PartnerHttpException(response.status.value, error.code)
+                }
                 throw CoreHttpException(response.status.value)
             }
             if (requireJson && response.contentType()?.withoutParameters() != ContentType.Application.Json) {

@@ -805,6 +805,36 @@ class CoreOrganizationSessionController(
         )
     }
 
+    internal suspend fun partnerWorkspaceChoices(active: State.Active, cursor: String?): CoreWorkspaceChoices =
+        partnerRequest(active) { client, token ->
+            client.workspaceChoices(token, cursor, 20).also { page ->
+                verifyChoices(page.items.map { it.id }, cursor, page.nextCursor)
+                if (page.items.any { it.name.isBlank() }) throw CoreProtocolException()
+            }
+        }
+
+    internal suspend fun partnerProjectChoices(active: State.Active, workspaceId: String, cursor: String?): CoreProjectChoices =
+        partnerRequest(active) { client, token ->
+            client.projectChoices(token, workspaceId, cursor, 20).also { page ->
+                verifyChoices(page.items.map { it.id }, cursor, page.nextCursor)
+                if (page.items.any { it.workspaceId != workspaceId || it.name.isBlank() }) throw CoreProtocolException()
+            }
+        }
+
+    internal suspend fun canonicalTaskForPartner(active: State.Active, taskId: String): CoreWorkTask =
+        partnerRequest(active) { client, token ->
+            client.task(token, taskId).also {
+                verifyTask(it)
+                if (it.id != taskId) throw CoreProtocolException()
+            }
+        }
+
+    internal suspend fun <T> partnerRequest(active: State.Active, operation: suspend (CoreApiClient, String) -> T): T =
+        request { current ->
+            if (current.state !== active) throw CancellationException("Core session changed")
+            operation(api, current.token)
+        }
+
     private suspend fun <T> request(operation: suspend (Credential) -> T): T {
         val current = synchronized(lock) { requireCredential() }
         val result = try {
@@ -812,6 +842,7 @@ class CoreOrganizationSessionController(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            currentCoroutineContext().ensureActive()
             synchronized(lock) {
                 if (credential !== current) {
                     throw CancellationException("Core session changed")

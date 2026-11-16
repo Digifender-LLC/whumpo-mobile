@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
@@ -47,6 +48,7 @@ import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.coreApiClient
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import com.whumpo.core.auth.CoreOwnershipController
+import com.whumpo.core.auth.CorePartnerController
 import com.whumpo.android.ui.ownership.CoreOwnershipSection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -112,12 +114,18 @@ internal fun CorePreview(
 ) {
     val state by controller.state.collectAsState()
     val active = state as? CoreOrganizationSessionController.State.Active
+    val partner = remember(controller, active) { active?.let { CorePartnerController(controller, it) } }
+    DisposableEffect(partner) {
+        onDispose { partner?.retire() }
+    }
     val ownership = remember(controller, active) { active?.let { CoreOwnershipController(controller, it) } }
     val actions = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
     var page by remember(active?.epoch) { mutableStateOf<OrganizationPreview?>(null) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
+    var showPartner by remember(active?.epoch) { mutableStateOf(false) }
+    var showPartnerSample by remember(state) { mutableStateOf(false) }
     var showOnboarding by remember(state) { mutableStateOf(false) }
     var showSecurity by remember { mutableStateOf(false) }
     val accountState by account.state.collectAsState()
@@ -150,6 +158,10 @@ internal fun CorePreview(
         CoreOnboardingPreview { showOnboarding = false }
         return
     }
+    if (state == CoreOrganizationSessionController.State.SignedOut && showPartnerSample) {
+        LocalPartnerSample { showPartnerSample = false }
+        return
+    }
     if (active == null && showSecurity) {
         AccountSecurityScreen(account, accountState, passkeys, passkeysConfigured) { showSecurity = false }
         return
@@ -163,6 +175,20 @@ internal fun CorePreview(
             ) {
                 showWork = false
             }
+        }
+        return
+    }
+    if (active != null && partner != null && showPartner) {
+        key(active.epoch) {
+            CorePartnerPreview(
+                partner,
+                page?.profile?.displayName ?: active.session.orgId,
+                signInAgain = {
+                    account.clear()
+                    showSecurity = true
+                },
+                close = { showPartner = false },
+            )
         }
         return
     }
@@ -187,6 +213,8 @@ internal fun CorePreview(
         },
         openToday = { showToday = true },
         openWork = { showWork = true },
+        openPartner = { showPartner = true },
+        tryPartner = { showPartnerSample = true },
         tryOnboarding = { showOnboarding = true },
         signIn = { showSecurity = true },
         choose = { org ->
@@ -227,6 +255,8 @@ private fun CorePreviewContent(
     ownership: @Composable () -> Unit,
     openToday: () -> Unit,
     openWork: () -> Unit,
+    openPartner: () -> Unit,
+    tryPartner: () -> Unit,
     tryOnboarding: () -> Unit,
     signIn: () -> Unit,
     choose: (String) -> Unit,
@@ -243,6 +273,7 @@ private fun CorePreviewContent(
                 WhumpoPrimaryButton(onClick = tryOnboarding, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Text("Try onboarding")
                 }
+                WhumpoQuietButton(onClick = tryPartner, modifier = Modifier.heightIn(min = 48.dp)) { Text("View offline Partner sample") }
                 WhumpoQuietButton(onClick = signIn, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text("Account security and sign-in")
                 }
@@ -267,6 +298,7 @@ private fun CorePreviewContent(
                 }
                 ownership()
                 Button(onClick = openToday) { Text("Open Today") }
+                WhumpoQuietButton(onClick = openPartner, modifier = Modifier.heightIn(min = 48.dp)) { Text("Open Partner") }
                 Button(onClick = openWork) { Text("Open Work") }
                 Button(onClick = signOut) { Text("Sign out locally") }
             }

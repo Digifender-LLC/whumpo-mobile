@@ -74,3 +74,39 @@ In the connected Core preview, open **Show primary owner details** on the Organi
 Confirming sends the reviewed action. If the designation or transfer changes, refresh the details and review the action again. When the service cannot confirm a request, **Retry exact request** sends the same request for the active workspace session. A new session clears the saved retry. Claim, offer and acceptance can require a recent verified sign-in. **Sign in again** opens the existing account sign-in flow for passkeys or password and authenticator code.
 
 The shared JVM suite uses synthetic responses to verify request shape, closed response decoding, pagination, review invalidation, exact replay and session switching. Android host tests also exercise the claim review and retry controls at large text size. See [Android verification](android-verification.md) for the full client gate.
+
+### Core Partner workspace
+
+From a connected `localDebug` Core organization, choose **Open Partner**.
+**Active conversations** lists current conversations. **Conversation history**
+includes closed conversations and their retained messages. Owners can choose an
+enabled agent and create a temporary conversation. Members with write access can
+save messages. Signed-out users can view an offline sample with synthetic data.
+
+The organization needs to finish connected setup before its default project and
+Partner are available. Complete setup in the connected web workspace, then
+refresh Partner. The Android onboarding preview uses local sample data.
+
+**Save message** writes only the message. Partner confirms an acknowledgment
+against the exact canonical message in history. The confirmation reads a separate
+cursor even when the saved message is outside the 100 visible messages. After
+an ambiguous write, **Retry exact save** repeats the original request. When the
+conversation closes before acknowledgment, the save stays unresolved until the
+conversation is reopened. An acknowledged save can still be checked against
+closed history. Drafts and pending requests are held in memory for the active
+session and clear on organization or account change or app restart.
+
+From your saved message, **Request task run** lets you choose a project and review
+one task title. The service can disable task execution by policy while the
+message stays saved. A pending approval opens the exact task change for review.
+Owners can approve or reject supported task creation, update, or transition
+proposals. **Check task result** checks the matching effect, immutable receipt
+and a fresh task read. A queued run, recorded decision or completed run alone
+does not verify a task change.
+
+The public synthetic JVM tests cover scoped pages, exact write retry, closed
+history confirmation, an acknowledgment outside the visible window, disabled
+run admission, approval and receipt binding, and cancellation across
+conversation and organization changes. Compose host tests exercise the
+conversation controls at 200% text size and with synthetic IME insets. Physical
+devices and connected service acceptance require separate evidence.
