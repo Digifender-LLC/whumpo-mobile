@@ -64,14 +64,14 @@ class CorePartnerControllerTest {
     private fun run(status: String = "waiting_approval", steps: Boolean = true, wrongConversation: Boolean = false) =
         """{"id":"run-1","conversationId":"${if (wrongConversation) "other" else "a"}","sourceMessageId":"${id(1)}","status":"$status","planner":"local-task-fixture@1","deadlineAt":2000000000000,"modelCalls":1,"toolCalls":${if (steps) 1 else 0},"steps":[${if (steps) """{"index":1,"tool":"tasks.create@1","effectId":"effect-1","approvalId":"approval-1"}""" else ""}]}"""
 
-    private fun approval(status: String = "pending", effect: String = "effect-1") =
-        """{"id":"approval-1","effectId":"$effect","runId":"run-1","status":"$status","payloadHash":"$digest","policyRevision":2,"requesterId":"user-1","proposal":{"operation":"tasks.create@1","payload":{"projectId":"project-1","title":"Test task","parentTaskId":null,"description":null,"dueAt":null}},"expiresAt":"2099-01-01T00:00:00.000Z","version":${if (status == "pending") 1 else 2}}"""
+    private fun approval(status: String = "pending", effect: String = "effect-1", runId: String = "effect-run-1") =
+        """{"id":"approval-1","effectId":"$effect","runId":"$runId","status":"$status","payloadHash":"$digest","policyRevision":2,"requesterId":"user-1","proposal":{"operation":"tasks.create@1","payload":{"projectId":"project-1","title":"Test task","parentTaskId":null,"description":null,"dueAt":null}},"expiresAt":"2099-01-01T00:00:00.000Z","version":${if (status == "pending") 1 else 2}}"""
 
-    private fun effect(state: String = "confirmed") =
-        """{"id":"effect-1","runId":"run-1","state":"$state","version":2,"payloadHash":"$digest","policyRevision":2,"approvalId":"approval-1"${if (state == "confirmed") ",\"taskId\":\"task-1\"" else ""}}"""
+    private fun effect(state: String = "confirmed", runId: String = "effect-run-1") =
+        """{"id":"effect-1","runId":"$runId","state":"$state","version":2,"payloadHash":"$digest","policyRevision":2,"approvalId":"approval-1"${if (state == "confirmed") ",\"taskId\":\"task-1\"" else ""}}"""
 
-    private fun receipt(org: String = "org-1", id: String = "receipt-1") =
-        """{"items":[{"schemaVersion":1,"receiptId":"$id","effectId":"effect-1","orgId":"$org","runId":"run-1","outcome":"confirmed","verificationMethod":"internal_read_after_write","redactedSummary":"Task saved","verifiedAt":"$instant","createdAt":"$instant","taskEvidence":{"taskId":"task-1","taskVersion":1,"taskDigest":"$digest"}}]}"""
+    private fun receipt(org: String = "org-1", id: String = "receipt-1", runId: String = "effect-run-1") =
+        """{"items":[{"schemaVersion":1,"receiptId":"$id","effectId":"effect-1","orgId":"$org","runId":"$runId","outcome":"confirmed","verificationMethod":"internal_read_after_write","redactedSummary":"Task saved","verifiedAt":"$instant","createdAt":"$instant","taskEvidence":{"taskId":"task-1","taskVersion":1,"taskDigest":"$digest"}}]}"""
 
     private data class Post(val key: String, val body: String)
 
@@ -347,7 +347,7 @@ class CorePartnerControllerTest {
                     when (writes.size) {
                         1 -> failure(503, "UPSTREAM_UNAVAILABLE")
                         2 -> failure(409, "VERSION_CONFLICT")
-                        else -> json("""{"approvalId":"approval-1","effectId":"effect-1","runId":"run-1","status":"approved","version":2}""")
+                        else -> json("""{"approvalId":"approval-1","effectId":"effect-1","runId":"effect-run-1","status":"approved","version":2}""")
                     }
                 }
                 "/v1/effects/effect-1" -> json(effect)
@@ -384,9 +384,18 @@ class CorePartnerControllerTest {
             assertIs<PartnerTaskProof.Queued>(controller.state.value.proof)
             effect = effect()
             controller.verifyTask(step)
-            assertFalse(controller.state.value.proof is PartnerTaskProof.Verified)
+            assertNull(controller.state.value.proof)
+            assertEquals(0, taskReads)
+            receipt = receipt(runId = "run-1")
+            controller.verifyTask(step)
+            assertNull(controller.state.value.proof)
             assertEquals(0, taskReads)
             receipt = receipt()
+            effect = effect(runId = "run-1")
+            controller.verifyTask(step)
+            assertNull(controller.state.value.proof)
+            assertEquals(0, taskReads)
+            effect = effect()
             controller.verifyTask(step)
             val proof = assertIs<PartnerTaskProof.Verified>(controller.state.value.proof)
             assertEquals("receipt-1", proof.receiptId)

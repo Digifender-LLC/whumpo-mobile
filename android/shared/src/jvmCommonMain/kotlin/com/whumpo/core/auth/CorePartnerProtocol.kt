@@ -146,7 +146,7 @@ internal class CorePartnerProtocol(
         checkWire(step in run.steps)
         val id = step.approvalId ?: throw CoreProtocolException()
         return read<PartnerApproval>(PartnerRoute.Approval, id).also {
-            checkWire(it.id == id && it.effectId == step.effectId && it.runId == run.id &&
+            checkWire(it.id == id && it.effectId == step.effectId && coreIdentifier.matches(it.runId) &&
                 it.proposal.operation == step.tool && coreDigest.matches(it.payloadHash) &&
                 it.policyRevision in 0..CORE_MAX_VERSION && it.version.isVersion() &&
                 coreIdentifier.matches(it.requesterId) && it.errorCode.validCode())
@@ -168,10 +168,12 @@ internal class CorePartnerProtocol(
         val effectId = step.effectId ?: throw CoreProtocolException()
         val approval = step.approvalId?.let { approval(run, step) }
         val effect = read<PartnerEffect>(PartnerRoute.Effect, effectId)
-        checkWire(effect.id == effectId && effect.runId == run.id && effect.approvalId == step.approvalId &&
+        // An agent run owns the tool step. The effect and its evidence have a separate run ID.
+        checkWire(effect.id == effectId && coreIdentifier.matches(effect.runId) && effect.approvalId == step.approvalId &&
             effect.version.isVersion() && coreDigest.matches(effect.payloadHash) && effect.errorCode.validCode() &&
             effect.policyRevision in 0..CORE_MAX_VERSION &&
-            (approval == null || (approval.payloadHash == effect.payloadHash && approval.policyRevision == effect.policyRevision)) &&
+            (approval == null || (approval.runId == effect.runId &&
+                approval.payloadHash == effect.payloadHash && approval.policyRevision == effect.policyRevision)) &&
             (effect.taskId != null) == (effect.state == CoreEffectState.Confirmed))
         when (effect.state) {
             CoreEffectState.WaitingApproval -> return PartnerTaskProof.WaitingApproval
@@ -184,7 +186,7 @@ internal class CorePartnerProtocol(
             ?: throw CoreProtocolException()
         val evidence = receipt.taskEvidence
         checkWire(receipt.schemaVersion == 1 && receipt.orgId == active.session.orgId && receipt.effectId == effectId &&
-            receipt.runId == run.id && coreIdentifier.matches(receipt.receiptId) && partnerText(receipt.redactedSummary, 8_000) &&
+            receipt.runId == effect.runId && coreIdentifier.matches(receipt.receiptId) && partnerText(receipt.redactedSummary, 8_000) &&
             receipt.verifiedAt.instant() <= receipt.createdAt.instant() &&
             evidence.taskId == effect.taskId && coreIdentifier.matches(evidence.taskId) &&
             evidence.taskVersion.isVersion() && coreDigest.matches(evidence.taskDigest))
