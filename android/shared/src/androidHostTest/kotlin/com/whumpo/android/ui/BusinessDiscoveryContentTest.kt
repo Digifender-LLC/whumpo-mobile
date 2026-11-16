@@ -7,6 +7,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -18,6 +21,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -30,9 +34,11 @@ import com.whumpo.core.api.CoreDiscoveryKey
 import com.whumpo.core.api.CoreDiscoveryPlan
 import com.whumpo.core.api.CoreDiscoveryPlanStatus
 import com.whumpo.core.api.CoreDiscoveryProposal
+import com.whumpo.core.api.CoreDiscoverySavedAnswer
 import com.whumpo.core.api.CoreDiscoverySnapshot
 import com.whumpo.core.api.CoreDiscoveryValue
 import com.whumpo.core.auth.CoreConnectedDiscoveryState
+import com.whumpo.core.auth.CoreDiscoveryNotice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -113,6 +119,32 @@ class BusinessDiscoveryContentTest : RobolectricUiTest() {
             compose.onNodeWithText("(TW)", substring = true).performClick()
             assertEquals(listOf(CoreDiscoveryCommand.RefreshPlan,
                 CoreDiscoveryCommand.Answer(CoreDiscoveryKey.Country, CoreDiscoveryValue.Declared("TW"))), commands)
+        }
+    }
+
+    @Test
+    fun deniedReadRemovesSavedAnswersFromQuestionAndReviewViews() {
+        val saved = "Synthetic private summary"
+        val original = snapshot(CoreDiscoveryKey.Offer).copy(
+            activeQuestions = listOf(CoreDiscoveryKey.Offer, CoreDiscoveryKey.Region),
+            answers = mapOf(CoreDiscoveryKey.Offer to CoreDiscoverySavedAnswer(CoreDiscoveryValue.Declared(saved), 1)),
+        )
+        for (review in listOf(false, true)) {
+            var state by mutableStateOf(CoreConnectedDiscoveryState(snapshot = original))
+            launch(Screen.Medium) {
+                BusinessDiscoveryContent(state, review, onCommand = {}, onRefresh = {}, onRetry = {},
+                    onSignIn = {}, onLater = {}, modifier = Modifier.fillMaxSize())
+            }.use {
+                val key = if (review) "review-offer" else "answered-offer"
+                compose.onNodeWithTag("discovery-chat").performScrollToKey(key)
+                compose.onNodeWithText(saved).assertIsDisplayed()
+                compose.runOnIdle {
+                    state = state.copy(snapshot = null, notice = CoreDiscoveryNotice.PolicyUnavailable, requiresRefresh = true)
+                }
+                compose.onNodeWithText(saved).assertDoesNotExist()
+                compose.onNodeWithTag("discovery-editor").assertDoesNotExist()
+                compose.onNodeWithText("Continue later").assertIsDisplayed()
+            }
         }
     }
 

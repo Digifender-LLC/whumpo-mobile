@@ -52,6 +52,8 @@ class CoreBusinessDiscoveryController(
     private var job: Job? = null
     private var retired = false
     private var pending: Attempt? = null
+    private var observedRevision = 0L
+    private var observedAnswerRevision = 0L
 
     private data class Attempt(
         val baseline: CoreDiscoverySnapshot,
@@ -70,13 +72,7 @@ class CoreBusinessDiscoveryController(
     suspend fun refresh() = perform {
         val attempt = pending
         when {
-            attempt == null -> {
-                val snapshot = read()
-                current.snapshot?.let { prior ->
-                    checkDiscovery(snapshot.revision >= prior.revision && snapshot.answerRevision >= prior.answerRevision)
-                }
-                update { copy(snapshot = snapshot, requiresRefresh = false, invalidatedKeys = emptyList()) }
-            }
+            attempt == null -> publish(read())
             attempt.receipt != null -> reconcile(attempt)
             else -> update { copy(notice = CoreDiscoveryNotice.Unconfirmed) }
         }
@@ -106,10 +102,17 @@ class CoreBusinessDiscoveryController(
 
     suspend fun retry() = perform { pending?.let { execute(it, retry = true) } }
 
-    private suspend fun read(): CoreDiscoverySnapshot =
+    private suspend fun read(): CoreDiscoverySnapshot = try {
         sessions.requestForActiveSession(active) { api, token -> api.businessDiscovery(token) }.also {
-            checkDiscovery(it.orgId == active.session.orgId)
+            checkDiscovery(it.orgId == active.session.orgId && it.revision >= observedRevision &&
+                it.answerRevision >= observedAnswerRevision)
         }
+    } catch (error: CoreHttpException) {
+        if (error.status == 403 || error.status == 423) {
+            update { copy(snapshot = null, invalidatedKeys = emptyList()) }
+        }
+        throw error
+    }
 
     private suspend fun execute(attempt: Attempt, retry: Boolean) {
         try {
@@ -148,9 +151,15 @@ class CoreBusinessDiscoveryController(
                 (snapshot.planStatus == CoreDiscoveryPlanStatus.Stale || snapshot.plan?.revision == receipt.planRevision))
         }
         pending = null
+        publish(snapshot, receipt.invalidatedKeys)
+    }
+
+    private fun publish(snapshot: CoreDiscoverySnapshot, invalidatedKeys: List<CoreDiscoveryKey> = emptyList()) {
         update {
+            observedRevision = snapshot.revision
+            observedAnswerRevision = snapshot.answerRevision
             copy(snapshot = snapshot, pending = false, acknowledged = false, requiresRefresh = false,
-                invalidatedKeys = receipt.invalidatedKeys)
+                invalidatedKeys = invalidatedKeys)
         }
     }
 
@@ -185,9 +194,9 @@ class CoreBusinessDiscoveryController(
             update {
                 copy(notice = when {
                     (error as? CoreHttpException)?.status == 403 -> CoreDiscoveryNotice.SignInAgain
+                    (error as? CoreHttpException)?.status == 423 -> CoreDiscoveryNotice.PolicyUnavailable
                     acknowledged -> CoreDiscoveryNotice.ConfirmationPending
                     pending -> CoreDiscoveryNotice.Unconfirmed
-                    (error as? CoreHttpException)?.status == 423 -> CoreDiscoveryNotice.PolicyUnavailable
                     else -> CoreDiscoveryNotice.Unavailable
                 }, requiresRefresh = !pending)
             }

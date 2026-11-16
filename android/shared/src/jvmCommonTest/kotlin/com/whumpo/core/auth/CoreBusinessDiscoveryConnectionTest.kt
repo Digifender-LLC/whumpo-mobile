@@ -143,7 +143,7 @@ class CoreBusinessDiscoveryConnectionTest {
                 when {
                     !committed -> json(snapshot(answers =
                         """{"country":{"status":"declared","value":"US","source":"owner","revision":1},"region":{"status":"declared","value":"California","source":"owner","revision":1}}"""))
-                    reads == 2 -> fail(503)
+                    reads == 2 -> fail(423)
                     else -> json(snapshot(revision = 2, answers = """{"country":{"status":"declared","value":"TW","source":"owner","revision":2}}"""))
                 }
             }
@@ -159,7 +159,8 @@ class CoreBusinessDiscoveryConnectionTest {
             assertEquals(CoreDiscoveryNotice.SignInAgain, controller.state.value.notice)
             controller.retry()
             assertTrue(controller.state.value.acknowledged)
-            assertEquals(1L, controller.state.value.snapshot?.revision)
+            assertNull(controller.state.value.snapshot)
+            assertEquals(CoreDiscoveryNotice.PolicyUnavailable, controller.state.value.notice)
             controller.retry()
             assertEquals(3, sent.size)
             assertTrue(sent.all { it == sent.first() })
@@ -259,6 +260,36 @@ class CoreBusinessDiscoveryConnectionTest {
             controller.refresh()
             assertFalse(controller.state.value.canEdit)
             assertEquals(CoreDiscoveryNotice.PolicyUnavailable, controller.state.value.notice)
+        }
+    }
+
+    @Test
+    fun readAuthorityDenialClearsLoadedAnswersUntilAuthorizedCurrentRead() = runTest {
+        for ((denied, notice) in listOf(403 to CoreDiscoveryNotice.SignInAgain, 423 to CoreDiscoveryNotice.PolicyUnavailable)) {
+            var response = 200
+            var revision = 2
+            val saved = """{"offer":{"status":"declared","value":"Synthetic private summary","source":"owner","revision":1}}"""
+            fixture(routes = { if (response == 200) json(snapshot(revision = revision, answers = saved)) else fail(response) }) {
+                _, controller ->
+                controller.refresh()
+                assertTrue(controller.state.value.canEdit)
+                assertEquals(CoreDiscoveryValue.Declared("Synthetic private summary"),
+                    controller.state.value.snapshot?.answers?.get(CoreDiscoveryKey.Offer)?.value)
+
+                response = denied
+                controller.refresh()
+                assertNull(controller.state.value.snapshot)
+                assertEquals(notice, controller.state.value.notice)
+                assertFalse(controller.state.value.canEdit)
+
+                response = 200
+                revision = 1
+                controller.refresh()
+                assertNull(controller.state.value.snapshot)
+                revision = 2
+                controller.refresh()
+                assertTrue(controller.state.value.canEdit)
+            }
         }
     }
 
