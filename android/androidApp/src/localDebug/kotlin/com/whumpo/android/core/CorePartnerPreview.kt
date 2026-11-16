@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import com.whumpo.android.ui.partner.PartnerApprovalDetails
 import com.whumpo.android.ui.partner.PartnerButton
 import com.whumpo.android.ui.partner.PartnerConversationContent
 import com.whumpo.android.ui.partner.PartnerDecisionButtons
@@ -41,15 +42,12 @@ import com.whumpo.core.api.PartnerAgent
 import com.whumpo.core.api.PartnerApprovalStatus
 import com.whumpo.core.api.PartnerMessage
 import com.whumpo.core.api.PartnerMessageRole
-import com.whumpo.core.api.PartnerTool
 import com.whumpo.core.auth.CorePartnerController
 import com.whumpo.core.auth.PartnerDirectory
 import com.whumpo.core.auth.PartnerNotice
 import com.whumpo.core.auth.PartnerState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonPrimitive
 
 @Composable
 internal fun CorePartnerPreview(
@@ -294,31 +292,7 @@ private fun PartnerReview(
         state.notice?.let { PartnerStatus(it.partnerText()) }
         if (state.notice == PartnerNotice.SignInAgain) PartnerButton("Sign in again", onClick = signInAgain)
         if (approval != null) {
-            Text(when (approval.proposal.operation) {
-                PartnerTool.Create -> "Create task"
-                PartnerTool.Update -> "Update task"
-                PartnerTool.Transition -> "Change task status"
-                PartnerTool.Read -> "Read task"
-            }, style = MaterialTheme.typography.titleLarge)
-            Text("Status: ${approval.status.name}")
-            Text("Requested by: ${approval.requesterId}")
-            Text("Review expires: ${approval.expiresAt}")
-            approval.proposal.taskId?.let { Text("Task: $it") }
-            approval.proposal.expectedVersion?.let { Text("Expected task version: $it") }
-            approval.proposal.payload.forEach { (field, value) ->
-                val label = when (field) {
-                    "projectId" -> "Project"
-                    "title" -> "Title"
-                    "parentTaskId" -> "Parent task"
-                    "description" -> "Description"
-                    "dueAt" -> "Due date"
-                    "archived" -> "Archived"
-                    "status" -> "Task status"
-                    "reason" -> "Reason"
-                    else -> field
-                }
-                Text("$label: ${if (value == JsonNull) "None" else (value as JsonPrimitive).content}")
-            }
+            PartnerApprovalDetails(approval)
             if (state.decisionPending && controller.canCreate) {
                 PartnerButton("Retry exact approval decision", !state.busy, primary = true) { actions.launch { controller.decide(null) } }
             } else if (approval.status == PartnerApprovalStatus.pending && controller.canCreate) {

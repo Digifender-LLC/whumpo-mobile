@@ -115,6 +115,20 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
     internal suspend fun businessDiscovery(token: String): CoreDiscoverySnapshot =
         decodeDiscoverySnapshot(call(token, "/v1/onboarding/discovery", requireJson = true))
 
+    internal suspend fun discoveryHandoffs(token: String, orgId: String): List<CoreDiscoveryHandoff> =
+        decodeHandoffInventory(call(token, "/v1/onboarding/discovery/handoffs", requireJson = true), orgId)
+
+    internal suspend fun discoveryHandoff(token: String, id: String): CoreDiscoveryHandoff {
+        require(coreIdentifier.matches(id))
+        return decodeHandoff(call(token, "/v1/onboarding/discovery/handoffs/$id", requireJson = true))
+    }
+
+    internal suspend fun submitDiscoveryHandoff(token: String, key: String, body: String): CoreDiscoveryHandoff {
+        require(coreIdentifier.matches(key))
+        return decodeHandoff(call(token, "/v1/onboarding/discovery/handoffs", HttpMethod.Post, body,
+            key = key, requireJson = true))
+    }
+
     internal suspend fun writeBusinessDiscovery(
         token: String, key: String, version: Long, body: String,
     ): CoreDiscoveryReceipt {

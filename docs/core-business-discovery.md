@@ -22,7 +22,7 @@ Starter plan review shows server proposals, reasons, prerequisites, and any
 selected next step. Owners can rename or reset a title, defer or restore a step,
 and select or clear a next step. Only eligible steps can be selected. A stale
 plan must be refreshed before editing. These controls edit the draft. Work
-creation and external actions are outside this flow.
+creation starts from a separate [Work handoff review](core-discovery-work-handoff.md).
 
 ## Wire and retry
 

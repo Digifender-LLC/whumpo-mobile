@@ -1,0 +1,122 @@
+{
+  "command": {
+    "schemaVersion": 1,
+    "projectId": "project-demo",
+    "discoveryRevision": 4,
+    "answerRevision": 3,
+    "planRevision": 4,
+    "actionId": "domain"
+  },
+  "waitingApproval": {
+    "schemaVersion": 1,
+    "projectId": "project-demo",
+    "discoveryRevision": 4,
+    "answerRevision": 3,
+    "planRevision": 4,
+    "actionId": "domain",
+    "orgId": "org-demo",
+    "handoffId": "effect-demo",
+    "dependencies": [
+      {
+        "actionId": "migration",
+        "taskId": "task-migration"
+      }
+    ],
+    "approvalId": "approval-demo",
+    "effectVersion": 1,
+    "payloadHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "state": "waiting_approval",
+    "task": null,
+    "lineageStatus": "current",
+    "supersedesHandoffId": null
+  },
+  "confirmed": {
+    "schemaVersion": 1,
+    "projectId": "project-demo",
+    "discoveryRevision": 4,
+    "answerRevision": 3,
+    "planRevision": 4,
+    "actionId": "domain",
+    "orgId": "org-demo",
+    "handoffId": "effect-demo",
+    "dependencies": [
+      {
+        "actionId": "migration",
+        "taskId": "task-migration"
+      }
+    ],
+    "approvalId": "approval-demo",
+    "effectVersion": 3,
+    "payloadHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "state": "confirmed",
+    "task": {
+      "taskId": "task-domain",
+      "receiptId": "receipt-effect-demo",
+      "taskVersion": 1
+    },
+    "lineageStatus": "current",
+    "supersedesHandoffId": null
+  },
+  "inventory": {
+    "schemaVersion": 1,
+    "orgId": "org-demo",
+    "handoffs": [
+      {
+        "schemaVersion": 1,
+        "projectId": "project-demo",
+        "discoveryRevision": 4,
+        "answerRevision": 3,
+        "planRevision": 4,
+        "actionId": "domain",
+        "orgId": "org-demo",
+        "handoffId": "effect-demo",
+        "dependencies": [
+          {
+            "actionId": "migration",
+            "taskId": "task-migration"
+          }
+        ],
+        "approvalId": "approval-demo",
+        "effectVersion": 3,
+        "payloadHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "confirmed",
+        "task": {
+          "taskId": "task-domain",
+          "receiptId": "receipt-effect-demo",
+          "taskVersion": 1
+        },
+        "lineageStatus": "current",
+        "supersedesHandoffId": null
+      }
+    ]
+  },
+  "invalidCommands": [
+    {
+      "schemaVersion": 1,
+      "projectId": "project-demo",
+      "discoveryRevision": 4,
+      "answerRevision": 3,
+      "planRevision": 4,
+      "actionId": [
+        "domain"
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "projectId": "project-demo",
+      "discoveryRevision": 4,
+      "answerRevision": 3,
+      "planRevision": 4,
+      "actionId": "domain",
+      "selectedNext": "domain"
+    },
+    {
+      "schemaVersion": 1,
+      "projectId": "project-demo",
+      "discoveryRevision": 4,
+      "answerRevision": 3,
+      "planRevision": 0,
+      "actionId": "domain"
+    }
+  ]
+}
