@@ -212,10 +212,10 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
     ): String {
         require(token == null || coreBearer.matches(token)) { "Invalid core bearer format" }
         require(accountAuthority == null || (token == null && accountGrantBearer.matches(accountAuthority.token)))
-        val bearer = accountAuthority?.token ?: token
         return http.prepareRequest(origin.value + path) {
             method = verb
-            if (bearer != null) header("Authorization", "Bearer $bearer")
+            if (accountAuthority != null) header("Authorization", "AccountGrant ${accountAuthority.token}")
+            if (token != null) header("Authorization", "Bearer $token")
             if (workspaceId != null) parameter("workspaceId", workspaceId)
             if (projectId != null) parameter("projectId", projectId)
             if (before != null) parameter("before", before)

@@ -113,7 +113,7 @@ class CoreAccountSecurityControllerTest {
                 }
                 "organizations", "session" -> {
                     assertTrue(finalProof)
-                    assertEquals("Bearer $accountToken", bearer)
+                    assertEquals("AccountGrant $accountToken", bearer)
                     if (path == "organizations") respond("""{"items":[{"orgId":"workspace-1","role":"operator"}],"nextCursor":null}""")
                     else {
                         assertEquals("workspace-1", body?.get("orgId")?.jsonPrimitive?.content)
@@ -126,7 +126,7 @@ class CoreAccountSecurityControllerTest {
                     respond("""{"sessionId":"session-1","orgId":"workspace-1","userId":"account-1","role":"operator","expiresAt":9000}""")
                 }
                 else -> {
-                    assertEquals("Bearer $enrollmentToken", bearer)
+                    assertEquals("AccountGrant $enrollmentToken", bearer)
                     if (body?.containsKey("expectedIntentRevision") == true) {
                         assertEquals(revision.toString(), body["expectedIntentRevision"]?.jsonPrimitive?.content)
                         assertEquals("null", body["expectedAttemptRevision"].toString())
@@ -384,7 +384,7 @@ class CoreAccountSecurityControllerTest {
                     respond("""{"invitationId":"invite-1","orgId":"workspace-1","organizationName":"Example","role":"operator","expiresAt":"2027-01-01T00:00:00.000Z"}""")
                 }
                 "invitations/accept" -> {
-                    assertEquals("Bearer $accountToken", authorization)
+                    assertEquals("AccountGrant $accountToken", authorization)
                     val body = Json.parseToJsonElement(request.body.toByteArray().decodeToString()).jsonObject
                     assertEquals(setOf("version", "invitationCode", "consent"), body.keys)
                     assertEquals(invitation, body["invitationCode"]?.jsonPrimitive?.content)
@@ -394,12 +394,12 @@ class CoreAccountSecurityControllerTest {
                 }
                 "state" -> {
                     assertTrue(accepted)
-                    assertEquals("Bearer $accountToken", authorization)
+                    assertEquals("AccountGrant $accountToken", authorization)
                     respond(state(false))
                 }
                 "organizations" -> {
                     assertTrue(accepted)
-                    assertEquals("Bearer $accountToken", authorization)
+                    assertEquals("AccountGrant $accountToken", authorization)
                     respond("""{"items":[{"orgId":"workspace-1","role":"operator"}],"nextCursor":null}""")
                 }
                 else -> error("Unexpected route $path")
