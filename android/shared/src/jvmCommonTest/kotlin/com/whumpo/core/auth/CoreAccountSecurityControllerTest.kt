@@ -170,7 +170,7 @@ class CoreAccountSecurityControllerTest {
                         "enrollment/complete/verify" -> {
                             assertEquals("password_totp", body?.get("proof")?.jsonObject?.get("method")?.jsonPrimitive?.content)
                             finalProof = true
-                            respond(grant(false))
+                            respond(grant(false, state(false, revision = revision)))
                         }
                         else -> error("Unexpected route $path")
                     }
@@ -259,7 +259,7 @@ class CoreAccountSecurityControllerTest {
                     respond("""{"challengeId":"complete:1","method":"passkey_uv","options":${requestOptions()}}""")
                 "enrollment/complete/verify" -> {
                     assertEquals("passkey_uv", body?.get("proof")?.jsonObject?.get("method")?.jsonPrimitive?.content)
-                    respond(grant(false))
+                    respond(grant(false, state(false, revision = revision)))
                 }
                 else -> error("Unexpected route $path")
             }
@@ -358,6 +358,52 @@ class CoreAccountSecurityControllerTest {
             assertNull(controller.state.value)
             assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
             controller.loginTotp("123456")
+            assertEquals(SecurityPurpose.Account, controller.state.value?.purpose)
+            assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
+        }
+    }
+
+    @Test
+    fun lostFinalAcknowledgementRetriesExactProofThenReturnsToNormalSignIn() = runTest {
+        var key: String? = null
+        var payload: String? = null
+        val pending = state(true, offer = offer("codes", true))
+        val engine = MockEngine { request ->
+            val path = request.url.encodedPath.substringAfter("/v1/account-security/")
+            when (path) {
+                "enrollment/start" -> respond(grant(true, pending))
+                "enrollment/complete/options" -> {
+                    assertNull(key)
+                    respond("""{"challengeId":"final:1","method":"password_totp","options":null}""")
+                }
+                "enrollment/complete/verify" -> {
+                    assertEquals("AccountGrant $enrollmentToken", request.headers["Authorization"])
+                    val submittedKey = assertNotNull(request.headers["Idempotency-Key"])
+                    val submittedProof = request.body.toByteArray().decodeToString()
+                    if (key == null) {
+                        key = submittedKey
+                        payload = submittedProof
+                        respond("", HttpStatusCode.ServiceUnavailable)
+                    } else {
+                        assertEquals(key, submittedKey)
+                        assertEquals(payload, submittedProof)
+                        respond("", HttpStatusCode.Unauthorized)
+                    }
+                }
+                "password/login/start" -> respond("""{"challengeId":"login:1","expiresAt":9000}""")
+                "password/login/verify" -> respond(grant(false))
+                else -> error("Unexpected route $path")
+            }
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val workspace = CoreOrganizationSessionController(api) { 1 }
+            val controller = CoreAccountSecurityController(api, workspace, rp) { 1 }
+            controller.enroll(SecurityProfile.PasswordTotp, SecurityAdmission.Bootstrap(bootstrap))
+            assertFailsWith<CoreHttpException> { controller.complete(passkeys, "example password", "123456") }
+            assertFailsWith<EnrollmentAcknowledgementLost> { controller.complete(passkeys, "example password", "234567") }
+            assertNull(controller.state.value)
+            controller.loginPassword("fixture", "example password")
+            controller.loginTotp("345678")
             assertEquals(SecurityPurpose.Account, controller.state.value?.purpose)
             assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
         }

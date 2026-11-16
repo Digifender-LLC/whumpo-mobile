@@ -401,10 +401,19 @@ class CoreAccountSecurityController(
     }
 
     private suspend fun settle(operation: Long, authority: SecurityAuthority, payload: JsonObject) {
-        val (request, result) = keyed<SecurityGrant>(operation, authority, "enrollment/complete/verify", payload)
-        if (result.state.phase != SecurityPhase.Ready) invalid()
-        install(operation, result, SecurityPurpose.Account)
-        forget(operation, request)
+        val previous = state.value ?: invalid()
+        try {
+            val (request, result) = keyed<SecurityGrant>(operation, authority, "enrollment/complete/verify", payload)
+            if (result.state.phase != SecurityPhase.Ready || result.state.generation < previous.generation ||
+                result.state.inventoryRevision < previous.inventoryRevision) invalid()
+            install(operation, result, SecurityPurpose.Account)
+            forget(operation, request)
+        } catch (_: CoreProtocolException) {
+            // A malformed successful response may follow an already-settled enrollment.
+            // Do not keep using a restricted grant the service may have revoked.
+            synchronized(lock) { checkEpoch(operation); clear() }
+            throw EnrollmentAcknowledgementLost()
+        }
     }
 
     private suspend fun mutation(operation: Long, authority: SecurityAuthority, route: String, payload: JsonObject, readState: Boolean = true) {

@@ -275,6 +275,7 @@ internal fun AccountSecurityScreen(
                                         run { if (!controller.complete(passkeys, "", "")) message = "Verification cancelled." }
                                     }
                                 } else {
+                                    Text("If you just used the current authenticator code, wait for a new one.")
                                     PasswordProofStep(busy) { password, code ->
                                         run { controller.complete(passkeys, password, code) }
                                     }
