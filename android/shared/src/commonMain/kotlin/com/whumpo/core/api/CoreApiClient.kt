@@ -137,6 +137,32 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
             key = key, version = version, requireJson = true, maxResponseBytes = 4096))
     }
 
+    internal suspend fun domainClaims(token: String, org: String, project: String): List<CoreDomainClaim> =
+        decodeDomainClaims(call(token, domainPath(project), requireJson = true), org, project)
+
+    internal suspend fun domainClaim(token: String, org: String, project: String, id: String): CoreDomainClaim =
+        decodeDomainDetail(call(token, domainPath(project, id), requireJson = true), org, project, id)
+
+    internal suspend fun submitDomainCommand(
+        token: String,
+        org: String,
+        project: String,
+        command: CoreDomainCommand,
+        write: String,
+        key: String,
+    ): CoreDomainClaim {
+        require(coreIdentifier.matches(key))
+        val path = domainPath(project, command.claim?.id)
+        val endpoint = if (command.kind == CoreDomainOperationKind.Prepare) path else "$path/${command.kind.segment}"
+        return decodeDomainOperation(call(token, endpoint, HttpMethod.Post, write, key = key,
+            requireJson = true), org, project, command)
+    }
+
+    private fun domainPath(project: String, claim: String? = null): String {
+        require(coreIdentifier.matches(project) && claim?.let(coreDomainClaimId::matches) != false)
+        return "/v1/projects/$project/domain-claims" + (claim?.let { "/$it" } ?: "")
+    }
+
     internal suspend fun onboardingSummary(token: String): CoreOnboardingSummary {
         var tag: List<String>? = null
         val response = decodeConnectedOnboarding<CoreOnboardingSummary>(call(token, "/v1/onboarding",
