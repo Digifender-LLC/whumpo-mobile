@@ -6,6 +6,9 @@ demo account security, business questions, editable review, and a starter plan
 in the preview workspace. The harness also offers **Account security and sign-in** for a separately
 configured local service.
 
+For saving business answers to an authenticated organization from this harness,
+see [connected business discovery](core-business-discovery.md).
+
 ## Open and leave
 
 Build and install the local debug APK as described in the

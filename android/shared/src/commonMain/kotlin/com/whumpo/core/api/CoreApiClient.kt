@@ -112,6 +112,17 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
     internal suspend fun organizationReadiness(token: String): CoreOrganizationReadiness =
         decodeConnectedOnboarding(call(token, "/v1/organization/readiness", requireJson = true, maxResponseBytes = 1024))
 
+    internal suspend fun businessDiscovery(token: String): CoreDiscoverySnapshot =
+        decodeDiscoverySnapshot(call(token, "/v1/onboarding/discovery", requireJson = true))
+
+    internal suspend fun writeBusinessDiscovery(
+        token: String, key: String, version: Long, body: String,
+    ): CoreDiscoveryReceipt {
+        require(coreIdentifier.matches(key) && version in 1..CORE_MAX_VERSION)
+        return decodeDiscoveryReceipt(call(token, "/v1/onboarding/discovery/commands", HttpMethod.Post, body,
+            key = key, version = version, requireJson = true, maxResponseBytes = 4096))
+    }
+
     internal suspend fun onboardingSummary(token: String): CoreOnboardingSummary {
         var tag: List<String>? = null
         val response = decodeConnectedOnboarding<CoreOnboardingSummary>(call(token, "/v1/onboarding",

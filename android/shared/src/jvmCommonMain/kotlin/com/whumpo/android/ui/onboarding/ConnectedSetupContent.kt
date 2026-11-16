@@ -44,6 +44,7 @@ fun ConnectedSetupContent(
     onSignIn: () -> Unit,
     organizationActions: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    onDiscovery: (() -> Unit)? = null,
 ) {
     val question = state.question
     val profile = state.profile
@@ -115,6 +116,10 @@ fun ConnectedSetupContent(
                 } else {
                     item {
                         SetupMessage("Whumpo", "When you’re ready, I’ll create your first project and Partner conversation.")
+                        if (onDiscovery != null && editable) {
+                            SetupMessage("Whumpo", "You can also tell me more about your business to review a starter plan.")
+                            SetupQuietButton("Add business details", onClick = onDiscovery)
+                        }
                     }
                 }
             }

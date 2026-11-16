@@ -1,0 +1,506 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Business discovery wire contract v1",
+  "description": "Canonical JSON shapes. Normalization, branch eligibility, authority and revision preconditions are validated by the Worker.",
+  "oneOf": [{"$ref": "#/$defs/command"}, {"$ref": "#/$defs/receipt"}, {"$ref": "#/$defs/snapshot"}],
+  "$defs": {
+    "revision": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "key": {
+      "enum": [
+        "stage", "country", "region", "customers", "offer", "delivery", "registration", "formationIntent", "entityType", "ein", "website", "websiteURL",
+        "websiteIntent", "domain", "domainName", "domainAccess", "domainHelp", "registrationHelp", "blocker", "time", "budget", "tools"
+      ]
+    },
+    "actionId": {
+      "enum": [
+        "goal", "migration", "domain-access", "domain", "domain-discovery", "website-discovery", "discover-registration", "registration", "ein", "offer", "tools"
+      ]
+    },
+    "value-stage": {"enum": ["idea", "launching", "operating", "growing"]},
+    "value-country": {
+      "enum": [
+        "AD", "AE", "AF", "AG", "AI", "AL", "AM", "AO", "AQ", "AR", "AS", "AT",
+        "AU", "AW", "AX", "AZ", "BA", "BB", "BD", "BE", "BF", "BG", "BH", "BI",
+        "BJ", "BL", "BM", "BN", "BO", "BQ", "BR", "BS", "BT", "BV", "BW", "BY",
+        "BZ", "CA", "CC", "CD", "CF", "CG", "CH", "CI", "CK", "CL", "CM", "CN",
+        "CO", "CR", "CU", "CV", "CW", "CX", "CY", "CZ", "DE", "DJ", "DK", "DM",
+        "DO", "DZ", "EC", "EE", "EG", "EH", "ER", "ES", "ET", "FI", "FJ", "FK",
+        "FM", "FO", "FR", "GA", "GB", "GD", "GE", "GF", "GG", "GH", "GI", "GL",
+        "GM", "GN", "GP", "GQ", "GR", "GS", "GT", "GU", "GW", "GY", "HK", "HM",
+        "HN", "HR", "HT", "HU", "ID", "IE", "IL", "IM", "IN", "IO", "IQ", "IR",
+        "IS", "IT", "JE", "JM", "JO", "JP", "KE", "KG", "KH", "KI", "KM", "KN",
+        "KP", "KR", "KW", "KY", "KZ", "LA", "LB", "LC", "LI", "LK", "LR", "LS",
+        "LT", "LU", "LV", "LY", "MA", "MC", "MD", "ME", "MF", "MG", "MH", "MK",
+        "ML", "MM", "MN", "MO", "MP", "MQ", "MR", "MS", "MT", "MU", "MV", "MW",
+        "MX", "MY", "MZ", "NA", "NC", "NE", "NF", "NG", "NI", "NL", "NO", "NP",
+        "NR", "NU", "NZ", "OM", "PA", "PE", "PF", "PG", "PH", "PK", "PL", "PM",
+        "PN", "PR", "PS", "PT", "PW", "PY", "QA", "RE", "RO", "RS", "RU", "RW",
+        "SA", "SB", "SC", "SD", "SE", "SG", "SH", "SI", "SJ", "SK", "SL", "SM",
+        "SN", "SO", "SR", "SS", "ST", "SV", "SX", "SY", "SZ", "TC", "TD", "TF",
+        "TG", "TH", "TJ", "TK", "TL", "TM", "TN", "TO", "TR", "TT", "TV", "TW",
+        "TZ", "UA", "UG", "UM", "US", "UY", "UZ", "VA", "VC", "VE", "VG", "VI",
+        "VN", "VU", "WF", "WS", "YE", "YT", "ZA", "ZM", "ZW"
+      ]
+    },
+    "value-region": {"type": "string", "minLength": 1, "maxLength": 80},
+    "value-customers": {"type": "string", "minLength": 1, "maxLength": 280},
+    "value-offer": {"type": "string", "minLength": 1, "maxLength": 280},
+    "value-delivery": {"enum": ["online", "in_person", "physical_products", "mixed"]},
+    "value-registration": {"enum": ["registered", "in_progress", "not_registered"]},
+    "value-formationIntent": {"enum": ["form_entity", "explore", "no_entity_planned"]},
+    "value-entityType": {"type": "string", "minLength": 1, "maxLength": 80},
+    "value-ein": {"enum": ["have_ein", "need_ein"]},
+    "value-website": {"enum": ["existing", "none"]},
+    "value-websiteURL": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^https?://[a-z0-9-]+(?:\\.[a-z0-9-]+)+(?:/[^?#\\\\]*)?$"
+    },
+    "value-websiteIntent": {"enum": ["keep", "improve", "replace"]},
+    "value-domain": {"enum": ["owned", "managed_by_other", "none"]},
+    "value-domainName": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9-]+(?:\\.[a-z0-9-]+)+$"},
+    "value-domainAccess": {"enum": ["self", "other", "none"]},
+    "value-domainHelp": {"enum": ["find_new", "connect_owned", "keep_as_is", "understand_existing", "none"]},
+    "value-registrationHelp": {"enum": ["paperwork_checklist", "understand_requirements", "none"]},
+    "value-blocker": {"type": "string", "minLength": 1, "maxLength": 280},
+    "value-time": {"enum": ["under_two_hours", "two_to_five_hours", "over_five_hours"]},
+    "value-budget": {"type": "string", "minLength": 1, "maxLength": 280},
+    "value-tools": {"type": "string", "minLength": 1, "maxLength": 280},
+    "answerInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {"status": {"const": "declared"}, "value": {"type": "string"}},
+          "required": ["status", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"status": {"enum": ["unknown", "deferred"]}},
+          "required": ["status"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "answer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {"const": "declared"},
+            "value": {"type": "string"},
+            "source": {"const": "owner"},
+            "revision": {"$ref": "#/$defs/revision"}
+          },
+          "required": ["status", "value", "source", "revision"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {"enum": ["unknown", "deferred"]},
+            "source": {"const": "owner"},
+            "revision": {"$ref": "#/$defs/revision"}
+          },
+          "required": ["status", "source", "revision"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "set": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "action": {"const": "answer.set"},
+        "key": {"$ref": "#/$defs/key"},
+        "answer": {"$ref": "#/$defs/answerInput"}
+      },
+      "required": ["schemaVersion", "action", "key", "answer"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "stage"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-stage"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "country"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-country"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "region"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-region"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "customers"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-customers"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "offer"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-offer"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "delivery"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-delivery"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "registration"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-registration"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "formationIntent"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-formationIntent"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "entityType"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-entityType"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "ein"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-ein"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "website"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-website"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "websiteURL"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-websiteURL"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "websiteIntent"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-websiteIntent"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "domain"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-domain"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "domainName"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-domainName"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "domainAccess"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-domainAccess"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "domainHelp"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-domainHelp"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "registrationHelp"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-registrationHelp"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "blocker"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-blocker"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "time"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-time"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "budget"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-budget"}}}}
+          }
+        },
+        {
+          "if": {"type": "object", "properties": {"key": {"const": "tools"}}},
+          "then": {
+            "type": "object",
+            "properties": {"answer": {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-tools"}}}}
+          }
+        }
+      ]
+    },
+    "clear": {
+      "type": "object",
+      "properties": {"schemaVersion": {"const": 1}, "action": {"const": "answer.clear"}, "key": {"$ref": "#/$defs/key"}},
+      "required": ["schemaVersion", "action", "key"],
+      "additionalProperties": false
+    },
+    "deferRemaining": {
+      "type": "object",
+      "properties": {"schemaVersion": {"const": 1}, "action": {"const": "answers.defer_remaining"}},
+      "required": ["schemaVersion", "action"],
+      "additionalProperties": false
+    },
+    "refresh": {
+      "type": "object",
+      "properties": {"schemaVersion": {"const": 1}, "action": {"const": "plan.refresh"}},
+      "required": ["schemaVersion", "action"],
+      "additionalProperties": false
+    },
+    "edit": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "action": {"const": "plan.edit"},
+        "planRevision": {"$ref": "#/$defs/revision"},
+        "edit": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "title"},
+                "id": {"$ref": "#/$defs/actionId"},
+                "value": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 200}, {"type": "null"}]}
+              },
+              "required": ["kind", "id", "value"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {"kind": {"const": "defer"}, "id": {"$ref": "#/$defs/actionId"}, "value": {"type": "boolean"}},
+              "required": ["kind", "id", "value"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {"kind": {"const": "select"}, "id": {"anyOf": [{"$ref": "#/$defs/actionId"}, {"type": "null"}]}},
+              "required": ["kind", "id"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": ["schemaVersion", "action", "planRevision", "edit"],
+      "additionalProperties": false
+    },
+    "command": {
+      "oneOf": [
+        {"$ref": "#/$defs/set"},
+        {"$ref": "#/$defs/clear"},
+        {"$ref": "#/$defs/deferRemaining"},
+        {"$ref": "#/$defs/refresh"},
+        {"$ref": "#/$defs/edit"}
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "orgId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "revision": {"$ref": "#/$defs/revision"},
+        "answerRevision": {"$ref": "#/$defs/revision"},
+        "planRevision": {"anyOf": [{"$ref": "#/$defs/revision"}, {"type": "null"}]},
+        "invalidatedKeys": {"type": "array", "items": {"$ref": "#/$defs/key"}, "maxItems": 22, "uniqueItems": true}
+      },
+      "required": ["schemaVersion", "orgId", "revision", "answerRevision", "planRevision", "invalidatedKeys"],
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/actionId"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+        "dependencies": {"type": "array", "items": {"$ref": "#/$defs/actionId"}, "maxItems": 10, "uniqueItems": true},
+        "answerKeys": {"type": "array", "items": {"$ref": "#/$defs/key"}, "maxItems": 22, "uniqueItems": true},
+        "requiresReview": {"const": true},
+        "deferred": {"type": "boolean"},
+        "titleOverride": {"type": "string", "minLength": 1, "maxLength": 200}
+      },
+      "required": ["id", "title", "reason", "dependencies", "answerKeys", "requiresReview", "deferred"],
+      "additionalProperties": false
+    },
+    "plan": {
+      "type": "object",
+      "properties": {
+        "revision": {"$ref": "#/$defs/revision"},
+        "answerRevision": {"$ref": "#/$defs/revision"},
+        "rulesVersion": {"const": 1},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 1600},
+        "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}, "maxItems": 11, "uniqueItems": true},
+        "selectedNext": {"anyOf": [{"$ref": "#/$defs/actionId"}, {"type": "null"}]},
+        "recommendedNext": {"anyOf": [{"$ref": "#/$defs/actionId"}, {"type": "null"}]}
+      },
+      "required": ["revision", "answerRevision", "rulesVersion", "summary", "actions", "selectedNext", "recommendedNext"],
+      "additionalProperties": false
+    },
+    "answers": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-stage"}}}]
+        },
+        "country": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-country"}}}]
+        },
+        "region": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-region"}}}]
+        },
+        "customers": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-customers"}}}]
+        },
+        "offer": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-offer"}}}]
+        },
+        "delivery": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-delivery"}}}]
+        },
+        "registration": {
+          "allOf": [
+            {"$ref": "#/$defs/answer"},
+            {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-registration"}}}
+          ]
+        },
+        "formationIntent": {
+          "allOf": [
+            {"$ref": "#/$defs/answer"},
+            {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-formationIntent"}}}
+          ]
+        },
+        "entityType": {
+          "allOf": [
+            {"$ref": "#/$defs/answer"},
+            {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-entityType"}}}
+          ]
+        },
+        "ein": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-ein"}}}]
+        },
+        "website": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-website"}}}]
+        },
+        "websiteURL": {
+          "allOf": [
+            {"$ref": "#/$defs/answer"},
+            {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-websiteURL"}}}
+          ]
+        },
+        "websiteIntent": {
+          "allOf": [
+            {"$ref": "#/$defs/answer"},
+            {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-websiteIntent"}}}
+          ]
+        },
+        "domain": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-domain"}}}]
+        },
+        "domainName": {
+          "allOf": [
+            {"$ref": "#/$defs/answer"},
+            {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-domainName"}}}
+          ]
+        },
+        "domainAccess": {
+          "allOf": [
+            {"$ref": "#/$defs/answer"},
+            {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-domainAccess"}}}
+          ]
+        },
+        "domainHelp": {
+          "allOf": [
+            {"$ref": "#/$defs/answer"},
+            {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-domainHelp"}}}
+          ]
+        },
+        "registrationHelp": {
+          "allOf": [
+            {"$ref": "#/$defs/answer"},
+            {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-registrationHelp"}}}
+          ]
+        },
+        "blocker": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-blocker"}}}]
+        },
+        "time": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-time"}}}]
+        },
+        "budget": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-budget"}}}]
+        },
+        "tools": {
+          "allOf": [{"$ref": "#/$defs/answer"}, {"type": "object", "properties": {"value": {"$ref": "#/$defs/value-tools"}}}]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "snapshot": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "orgId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "revision": {"$ref": "#/$defs/revision"},
+        "answerRevision": {"$ref": "#/$defs/revision"},
+        "answers": {"$ref": "#/$defs/answers"},
+        "activeQuestions": {"type": "array", "items": {"$ref": "#/$defs/key"}, "maxItems": 22, "uniqueItems": true},
+        "planStatus": {"enum": ["missing", "current", "stale"]},
+        "plan": {"anyOf": [{"$ref": "#/$defs/plan"}, {"type": "null"}]}
+      },
+      "required": ["schemaVersion", "orgId", "revision", "answerRevision", "answers", "activeQuestions", "planStatus", "plan"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"type": "object", "properties": {"planStatus": {"const": "current"}}},
+          "then": {"type": "object", "properties": {"plan": {"$ref": "#/$defs/plan"}}},
+          "else": {"type": "object", "properties": {"plan": {"type": "null"}}}
+        }
+      ]
+    }
+  }
+}
