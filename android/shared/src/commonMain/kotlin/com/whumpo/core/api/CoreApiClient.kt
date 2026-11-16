@@ -178,7 +178,7 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         require(cursor == null || coreIdentifier.matches(cursor))
         val payload = body?.toString()
         val requestLimit = when (route) {
-            "passkey/login/verify", "passkeys/verify", "enrollment/complete/verify" -> 65_536
+            "passkey/login/verify", "passkeys/verify", "enrollment/complete/verify", "recovery/complete/verify" -> 65_536
             else -> 8192
         }
         require(payload == null || payload.encodeToByteArray().size <= requestLimit)

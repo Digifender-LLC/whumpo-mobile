@@ -71,6 +71,69 @@ internal class SecurityGrant(val authority: SecurityAuthority, val state: Accoun
 internal class SecurityStart(val authority: SecurityAuthority?, val state: AccountSecurityState?)
 
 @Serializable
+internal class SecurityAttemptResult(
+    val authority: SecurityAuthority?,
+    val state: AccountSecurityState?,
+    val receipt: SecurityAttemptReceipt,
+)
+
+@Serializable
+internal class SecurityAttemptReceipt(
+    val operationId: String,
+    val operation: String,
+    val accountId: String?,
+    val candidateId: String?,
+    val attemptId: String?,
+    val generationBefore: Long,
+    val generationAfter: Long,
+    val inventoryRevision: Long,
+    val recoveryGeneration: Long,
+    val confirmedAt: Long,
+)
+
+@Serializable
+internal class ReservedEnrollmentResume(
+    val authority: SecurityAuthority,
+    val state: AccountSecurityState,
+    val attemptId: String,
+    val attemptExpiresAt: Long,
+)
+
+@Serializable
+enum class RecoveryLossMode { @SerialName("all") All, @SerialName("some") Some, @SerialName("none") None }
+
+sealed interface SavedRecoveryProof {
+    class Kit(val key: String) : SavedRecoveryProof
+    class Code(val code: String) : SavedRecoveryProof
+}
+
+@Serializable
+data class RecoveryReviewedMethod(val id: String, val version: Long, val kind: SecurityMethodKind, val createdAt: Long)
+
+@Serializable
+class RecoveryReview(
+    val id: String,
+    val digest: String,
+    val mode: RecoveryLossMode,
+    val completionProfile: SecurityProfile,
+    val lostIds: List<String>,
+    val retainedIds: List<String>,
+    val inventory: List<RecoveryReviewedMethod>,
+)
+
+@Serializable
+internal class SecurityRecoveryReview(val receipt: SecurityReceipt, val review: RecoveryReview)
+
+@Serializable
+internal class CurrentSecurityRecoveryReview(
+    val attemptId: String,
+    val attemptRevision: Long,
+    val generation: Long,
+    val inventoryRevision: Long,
+    val review: RecoveryReview?,
+)
+
+@Serializable
 internal class SecurityChallenge(val challengeId: String, val options: JsonObject)
 
 @Serializable
@@ -80,7 +143,13 @@ internal class SecurityFinalChallenge(val challengeId: String, val method: Secur
 internal class SecurityPasswordChallenge(val challengeId: String, val expiresAt: Long)
 
 @Serializable
-internal class SecurityReceipt(val factorId: String? = null, val offerId: String? = null, val recoveryGeneration: Long)
+internal class SecurityReceipt(
+    val factorId: String? = null,
+    val offerId: String? = null,
+    val reviewId: String? = null,
+    val revision: Long? = null,
+    val recoveryGeneration: Long,
+)
 
 @Serializable
 internal class SecurityTotpPreparation(val receipt: SecurityReceipt, val secret: String?, val otpauthUri: String?)
@@ -117,6 +186,7 @@ data class SecurityMembershipPage(val items: List<SecurityMembership>, val nextC
 internal val accountGrantBearer = Regex("ag1[.][A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]")
 internal val securityOpaqueId = Regex("[A-Za-z0-9._:-]{1,128}")
 internal val personInvitationCode = Regex("wi[12][.][A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]")
+internal val reservedInvitationToken = Regex("[A-Za-z0-9_-]{43}")
 
 sealed interface SecurityAdmission {
     class Bootstrap(val token: String) : SecurityAdmission

@@ -153,7 +153,11 @@ their existing account entry.
 
 Enroll with a person invitation or an operator-issued bootstrap token entered at
 runtime. The app previews an invitation with the service, shows the organization
-and role, and submits consent only after acceptance. An enrollment grant stages
+and role, and submits consent only after acceptance. **Use a reserved invitation**
+starts setup for an identity and membership assigned by the operator. Enter the
+reserved token and choose a sign-in profile. After a missing start response,
+**Retry last step** uses the original request key to resume the same reservation.
+Membership and role come from the service after setup. An enrollment grant stages
 the selected sign-in method. Passkey enrollment adds two distinct credential
 records and a recovery kit. The password path stages a password and verifies an
 authenticator code before preparing ten recovery codes. The app uses the
@@ -179,21 +183,40 @@ password plus TOTP. A signed-in member can also review and accept a person
 invitation. The account keeps its existing sign-in method and returns to
 organization selection after acceptance. The organization picker requires an explicit choice and
 verifies the returned workspace session against the account and selected
-organization before opening Today or Work. This connected route covers setup,
-sign-in and workspace selection. The recovery files are real for the connected
-test account. Applying them to recover an account, managing methods, and
-production provider acceptance are separate work.
+organization before opening Today or Work.
+
+**Recover an account** takes the locator and kit key or one unused code from a
+saved recovery file. Review which sign-in methods to remove or retain, choose a
+completion profile, and save and acknowledge the replacement recovery file.
+**Secure account** applies the reviewed removals and activates the replacement
+material. Finish any missing credentials and complete the independent final
+proof before choosing an organization. A retained passkey can count toward the
+two required passkeys, with at least one newly verified passkey required.
+Password and TOTP recovery can reuse retained verified factors. The final
+password and authenticator proof requires a fresh code.
+
+**Retry last step** reuses the exact submitted request after an ambiguous
+response. If the service secured the account and the previous grant has stopped
+working, **Resume with replacement material** starts a restricted session using
+the saved replacement file. The app reads the current review and checks its
+attempt and revision against the service snapshot before offering completion.
+If final proof was sent but completion remains unconfirmed, sign in with the
+resulting credential to check access. Closing the activity clears the local
+recovery session. The saved file provides the recovery entry point.
 
 ```sh
 ./gradlew :shared:jvmTest --tests 'com.whumpo.core.auth.CoreAccountSecurityControllerTest'
+./gradlew :shared:jvmTest --tests 'com.whumpo.core.auth.CoreAccountRecoveryTest'
 ```
 
 The synthetic tests cover both enrollment profiles, public invitation consent,
 the verified TOTP distinction, replay after a lost response, restricted grant
 boundaries, explicit scope handoff, ordinary login, RP mismatch and credential
-prompt cancellation by epoch. Use a separately configured provider/device to
-verify OS credential prompts, Digital Asset Links, recovery document storage
-and native accessibility end to end.
+prompt cancellation by epoch. Recovery and reservation fixtures cover the
+restricted request shapes, retained-factor rules, redacted review readback,
+exact retries after malformed or missing responses, and rejected late proof.
+Provider calls, physical devices, Digital Asset Links, external document
+storage and native accessibility require separate end-to-end evidence.
 
 ## Earlier security-choice integration evidence — November 15, 2026
 
