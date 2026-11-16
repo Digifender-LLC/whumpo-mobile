@@ -69,10 +69,10 @@ internal class CorePartnerProtocol(
     private val active: CoreOrganizationSessionController.State.Active,
 ) {
     private suspend inline fun <reified T> read(route: PartnerRoute, id: String? = null, cursor: String? = null): T =
-        sessions.partnerRequest(active) { api, token -> api.partner<T>(token, route, id = id, cursor = cursor) }
+        sessions.requestForActiveSession(active) { api, token -> api.partner<T>(token, route, id = id, cursor = cursor) }
 
     private suspend inline fun <reified T> write(route: PartnerRoute, command: PartnerWrite, id: String? = null): T =
-        sessions.partnerRequest(active) { api, token -> api.partner<T>(token, route, id = id, key = command.key, body = command.body) }
+        sessions.requestForActiveSession(active) { api, token -> api.partner<T>(token, route, id = id, key = command.key, body = command.body) }
 
     suspend fun active(cursor: String?): PartnerPage<PartnerConversation> =
         read<PartnerPage<PartnerConversation>>(PartnerRoute.Conversations, cursor = cursor).also { page ->

@@ -110,3 +110,29 @@ run admission, approval and receipt binding, and cancellation across
 conversation and organization changes. Compose host tests exercise the
 conversation controls at 200% text size and with synthetic IME insets. Physical
 devices and connected service acceptance require separate evidence.
+
+### Connected workspace setup
+
+After a connected Core sign-in, the app checks the selected organization's
+readiness before it offers Today, Work, or Partner. Existing ready
+organizations open directly. Members waiting for setup can refresh, switch
+organizations, or sign out. An owner can answer the setup questions in the
+conversation. Answers saved by the service appear again on the next sign-in.
+
+The initial questions cover the organization label, owner name, first goal,
+time zone, and briefing schedule. All answers are optional. **Skip this
+question** leaves the field empty and advances the conversation for the
+current session. **Skip remaining questions** saves the profile's skipped
+status and keeps answers already saved. On returning to a draft profile,
+the app asks about any remaining empty fields.
+
+**Create workspace** submits the provisioning request. The app opens
+the workspace after checking the current provisioning record and the
+organization's readiness. If the response is uncertain,
+**Retry original request** sends the same request in the current session.
+**Refresh workspace status** can confirm provisioning through fresh reads.
+Signing in again clears pending request bodies and reloads saved progress.
+
+Connected setup uses the existing account sign-in methods. The offline
+onboarding preview and its simulated checkout are separate from connected
+workspace setup.

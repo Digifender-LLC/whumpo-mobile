@@ -49,6 +49,9 @@ import com.whumpo.core.api.coreApiClient
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import com.whumpo.core.auth.CoreOwnershipController
 import com.whumpo.core.auth.CorePartnerController
+import com.whumpo.core.auth.CoreConnectedOnboardingController
+import com.whumpo.core.auth.CoreConnectedSetupState
+import com.whumpo.android.ui.onboarding.ConnectedSetupContent
 import com.whumpo.android.ui.ownership.CoreOwnershipSection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -100,7 +103,6 @@ class CorePreviewActivity : ComponentActivity() {
 }
 
 private data class OrganizationPreview(
-    val memberships: CoreMembershipPage,
     val profile: CoreOrganizationProfile,
     val coverage: CoreOrganizationEntitlements,
 )
@@ -118,9 +120,16 @@ internal fun CorePreview(
     DisposableEffect(partner) {
         onDispose { partner?.retire() }
     }
+    val setup = remember(controller, active) { active?.let { CoreConnectedOnboardingController(controller, it) } }
+    DisposableEffect(setup) { onDispose { setup?.retire() } }
+    val setupState = key(active?.epoch) {
+        setup?.state?.collectAsState()?.value ?: CoreConnectedSetupState()
+    }
+    val ready = setupState.canOpenWorkspace && setupState.readiness?.orgId == active?.session?.orgId
     val ownership = remember(controller, active) { active?.let { CoreOwnershipController(controller, it) } }
     val actions = rememberCoroutineScope()
-    var message by remember { mutableStateOf<String?>(null) }
+    var message by remember(active?.epoch) { mutableStateOf<String?>(null) }
+    var memberships by remember(active?.epoch) { mutableStateOf<CoreMembershipPage?>(null) }
     var page by remember(active?.epoch) { mutableStateOf<OrganizationPreview?>(null) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
@@ -142,17 +151,81 @@ internal fun CorePreview(
             }
         }
     }
+    LaunchedEffect(setup) { setup?.refresh() }
     LaunchedEffect(active?.epoch, cursor) {
         if (active != null) {
             try {
-                val snapshot = OrganizationPreview(controller.organizations(cursor), controller.profile(), controller.entitlements())
-                controller.commitIfCurrent(active.epoch) { page = snapshot }
+                val choices = controller.organizations(cursor)
+                controller.commitIfCurrent(active.epoch) { memberships = choices }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
                 controller.commitIfCurrent(active.epoch) { message = "Could not load organizations." }
             }
         }
+    }
+    LaunchedEffect(active?.epoch, ready) {
+        if (active != null && ready) {
+            try {
+                val snapshot = OrganizationPreview(controller.profile(), controller.entitlements())
+                controller.commitIfCurrent(active.epoch) { page = snapshot }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                controller.commitIfCurrent(active.epoch) { message = "Could not load organization details." }
+            }
+        }
+    }
+    val choose: (String) -> Unit = { org ->
+        message = null
+        actions.launch {
+            try {
+                controller.switchOrganization(org)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                message = "Could not switch organizations. Sign in again."
+            }
+        }
+    }
+    val signOut: () -> Unit = {
+        message = null
+        actions.launch {
+            try {
+                account.leave()
+                showSecurity = false
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                account.clear()
+                showSecurity = false
+            }
+        }
+    }
+    val freshSignIn: () -> Unit = {
+        account.clear()
+        showSecurity = true
+    }
+    if (active != null && setup != null && !ready) {
+        key(active.epoch) {
+            ConnectedSetupContent(
+                state = setupState,
+                isOwner = setup.isOwner,
+                onAnswer = { question, answer -> actions.launch { setup.answer(question, answer) } },
+                onEdit = setup::editQuestion,
+                onSkipRemaining = { actions.launch { setup.skipRemaining() } },
+                onCreate = { actions.launch { setup.createWorkspace() } },
+                onRetry = { actions.launch { setup.retry() } },
+                onRefresh = { actions.launch { setup.refresh() } },
+                onSignIn = freshSignIn,
+                organizationActions = {
+                    OrganizationActions(memberships, choose, { cursor = it }, signOut)
+                    message?.let { Text(it) }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        return
     }
     if (state == CoreOrganizationSessionController.State.SignedOut && showOnboarding) {
         CoreOnboardingPreview { showOnboarding = false }
@@ -166,7 +239,7 @@ internal fun CorePreview(
         AccountSecurityScreen(account, accountState, passkeys, passkeysConfigured) { showSecurity = false }
         return
     }
-    if (active != null && showWork) {
+    if (active != null && ready && showWork) {
         key(active.epoch) {
             CoreWorkPreview(
                 controller, active.epoch, page?.profile?.displayName ?: active.session.orgId,
@@ -178,7 +251,7 @@ internal fun CorePreview(
         }
         return
     }
-    if (active != null && partner != null && showPartner) {
+    if (active != null && ready && partner != null && showPartner) {
         key(active.epoch) {
             CorePartnerPreview(
                 partner,
@@ -192,7 +265,7 @@ internal fun CorePreview(
         }
         return
     }
-    if (active != null && showToday) {
+    if (active != null && ready && showToday) {
         key(active.epoch) {
             CoreTodayPreview(controller, active.epoch, page?.profile?.displayName ?: active.session.orgId) {
                 showToday = false
@@ -200,7 +273,7 @@ internal fun CorePreview(
         }
         return
     }
-    CorePreviewContent(state, page, message,
+    CorePreviewContent(state, page, memberships, message,
         ownership = {
             if (active != null && ownership != null) {
                 key(active.epoch) {
@@ -217,33 +290,9 @@ internal fun CorePreview(
         tryPartner = { showPartnerSample = true },
         tryOnboarding = { showOnboarding = true },
         signIn = { showSecurity = true },
-        choose = { org ->
-            message = null
-            actions.launch {
-                try {
-                    controller.switchOrganization(org)
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (_: Exception) {
-                    message = "Could not switch organizations. Sign in again."
-                }
-            }
-        },
+        choose = choose,
         next = { cursor = it },
-        signOut = {
-            message = null
-            actions.launch {
-                try {
-                    account.leave()
-                    showSecurity = false
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (_: Exception) {
-                    account.clear()
-                    showSecurity = false
-                }
-            }
-        },
+        signOut = signOut,
     )
 }
 
@@ -251,6 +300,7 @@ internal fun CorePreview(
 private fun CorePreviewContent(
     state: CoreOrganizationSessionController.State,
     page: OrganizationPreview?,
+    memberships: CoreMembershipPage?,
     message: String?,
     ownership: @Composable () -> Unit,
     openToday: () -> Unit,
@@ -288,21 +338,32 @@ private fun CorePreviewContent(
                     Text("Coverage: ${page.coverage.status}")
                     Text("Seats available: ${page.coverage.availableHumanSeats}")
                     Text(if (page.coverage.siteBuildAvailable) "Site building available" else "Site building unavailable")
-                    page.memberships.items.forEach { membership ->
-                        Button(enabled = !membership.active, onClick = { choose(membership.orgId) }) {
-                            Text("${membership.orgId} · ${membership.role}")
-                        }
-                    }
-                    page.memberships.nextCursor?.let { Button(onClick = { next(it) }) { Text("More organizations") } }
-                    Button(onClick = { next(null) }) { Text("First page") }
                 }
                 ownership()
                 Button(onClick = openToday) { Text("Open Today") }
                 WhumpoQuietButton(onClick = openPartner, modifier = Modifier.heightIn(min = 48.dp)) { Text("Open Partner") }
                 Button(onClick = openWork) { Text("Open Work") }
-                Button(onClick = signOut) { Text("Sign out locally") }
+                OrganizationActions(memberships, choose, next, signOut)
             }
         }
         message?.let { Text(it) }
     }
+}
+
+
+@Composable
+private fun OrganizationActions(
+    memberships: CoreMembershipPage?,
+    choose: (String) -> Unit,
+    next: (String?) -> Unit,
+    signOut: () -> Unit,
+) {
+    memberships?.items?.forEach { membership ->
+        Button(enabled = !membership.active, onClick = { choose(membership.orgId) }) {
+            Text("${membership.orgId} · ${membership.role}")
+        }
+    }
+    memberships?.nextCursor?.let { cursor -> Button(onClick = { next(cursor) }) { Text("More organizations") } }
+    if (memberships != null) Button(onClick = { next(null) }) { Text("First page") }
+    Button(onClick = signOut) { Text("Sign out locally") }
 }

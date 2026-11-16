@@ -10,6 +10,8 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.HttpMethod
+import io.ktor.http.HttpHeaders
+import io.ktor.http.Headers
 import io.ktor.utils.io.readBuffer
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
@@ -105,6 +107,40 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         } catch (_: IllegalArgumentException) {
             throw CoreProtocolException()
         }
+    }
+
+    internal suspend fun organizationReadiness(token: String): CoreOrganizationReadiness =
+        decodeConnectedOnboarding(call(token, "/v1/organization/readiness", requireJson = true, maxResponseBytes = 1024))
+
+    internal suspend fun onboardingSummary(token: String): CoreOnboardingSummary {
+        var tag: List<String>? = null
+        val response = decodeConnectedOnboarding<CoreOnboardingSummary>(call(token, "/v1/onboarding",
+            requireJson = true, successHeaders = { tag = it.getAll(HttpHeaders.ETag) }))
+        verifyProfileTag(tag, response.profile.version)
+        return response
+    }
+
+    internal suspend fun writeOnboardingProfile(
+        token: String, key: String, version: Long, patch: String?,
+    ): CoreOnboardingProfile {
+        require(coreIdentifier.matches(key) && version in 1..CORE_MAX_VERSION)
+        var tag: List<String>? = null
+        val path = if (patch == null) "/v1/onboarding/profile/skip" else "/v1/onboarding/profile"
+        val method = if (patch == null) HttpMethod.Post else HttpMethod.Patch
+        val response = decodeConnectedOnboarding<CoreOnboardingProfile>(call(token, path, method, patch ?: "{}",
+            key = key, version = version, requireJson = true, successHeaders = { tag = it.getAll(HttpHeaders.ETag) }))
+        verifyProfileTag(tag, response.version)
+        return response
+    }
+
+    internal suspend fun completeOnboarding(token: String, key: String): CoreOnboardingSummary {
+        require(coreIdentifier.matches(key))
+        return decodeConnectedOnboarding(call(token, "/v1/onboarding/complete", HttpMethod.Post, "{}",
+            key = key, requireJson = true))
+    }
+
+    private fun verifyProfileTag(tags: List<String>?, version: Long) {
+        if (version !in 1..CORE_MAX_VERSION || tags != listOf("\"$version\"")) throw CoreProtocolException()
     }
 
     internal suspend fun profile(token: String): CoreOrganizationProfile =
@@ -258,6 +294,7 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         requireJson: Boolean = false,
         alternateStatus: Int? = null,
         partnerFailure: Boolean = false,
+        successHeaders: ((Headers) -> Unit)? = null,
     ): String {
         require(token == null || coreBearer.matches(token)) { "Invalid core bearer format" }
         require(accountAuthority == null || (token == null && accountGrantBearer.matches(accountAuthority.token)))
@@ -300,6 +337,7 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
             if (requireJson && response.contentType()?.withoutParameters() != ContentType.Application.Json) {
                 throw CoreProtocolException()
             }
+            successHeaders?.invoke(response.headers)
             val bytes = response.bodyAsChannel().readBuffer(maxResponseBytes.toLong() + 1).readByteArray()
             if (bytes.size > maxResponseBytes) throw CoreProtocolException()
             bytes.decodeToString(throwOnInvalidSequence = true)
