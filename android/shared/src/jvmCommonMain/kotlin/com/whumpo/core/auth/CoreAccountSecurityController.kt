@@ -359,16 +359,18 @@ class CoreAccountSecurityController(
         state: AccountSecurityState,
         attemptId: String? = state.attemptId,
         minimumGeneration: Long = 0,
-        expectedInventoryRevision: Long = state.inventoryRevision,
+        priorGeneration: Long? = null,
         replay: Boolean = false,
     ) {
         if (!recoveryId.matches(receipt.operationId) || receipt.confirmedAt !in 0..CORE_MAX_VERSION ||
-            state.accountId?.let(coreIdentifier::matches) != true || receipt.operation != operation || receipt.accountId != state.accountId ||
+            state.accountId?.let(coreIdentifier::matches) != true || state.candidateId != null ||
+            receipt.operation != operation || receipt.accountId != state.accountId ||
             receipt.candidateId != null || receipt.attemptId != attemptId ||
             receipt.generationAfter !in maxOf(receipt.generationBefore, minimumGeneration)..state.generation ||
             receipt.generationBefore < 0 || receipt.inventoryRevision !in 0..state.inventoryRevision ||
+            (priorGeneration != null && receipt.generationBefore != priorGeneration) ||
             receipt.recoveryGeneration !in 0..CORE_MAX_VERSION ||
-            (!replay && (receipt.generationAfter != state.generation || receipt.inventoryRevision != expectedInventoryRevision))) invalid()
+            (!replay && (receipt.generationAfter != state.generation || receipt.inventoryRevision != state.inventoryRevision))) invalid()
     }
 
     suspend fun reviewRecovery(mode: RecoveryLossMode, lostIds: Set<String>, profile: SecurityProfile) =
@@ -495,7 +497,7 @@ class CoreAccountSecurityController(
         try {
             validateSecuredReview(next, review)
             checkAttemptReceipt(result.receipt, "recovery.secure", next,
-                minimumGeneration = previous.generation + 1, expectedInventoryRevision = previous.inventoryRevision)
+                minimumGeneration = previous.generation + 1, priorGeneration = previous.generation)
             if (result.receipt.recoveryGeneration != next.recovery.generation) invalid()
             install(operation, SecurityGrant(credential, next), SecurityPurpose.Recovery)
         } catch (error: CoreProtocolException) {
@@ -778,8 +780,9 @@ class CoreAccountSecurityController(
                 pending = request
                 val ready = response.state ?: invalid()
                 val expectedOperation = if (authority.purpose == SecurityPurpose.Recovery) "recovery.complete" else "enrollment.complete"
-                checkAttemptReceipt(response.receipt, expectedOperation, ready, previous.attemptId, previous.generation,
-                    expectedInventoryRevision = previous.inventoryRevision)
+                val minimumGeneration = previous.generation + if (reservedEnrollment) 1 else 0
+                checkAttemptReceipt(response.receipt, expectedOperation, ready, previous.attemptId,
+                    minimumGeneration, priorGeneration = previous.generation)
                 if (response.receipt.recoveryGeneration != ready.recovery.generation) invalid()
                 SecurityGrant(response.authority ?: invalid(), ready)
             } else {

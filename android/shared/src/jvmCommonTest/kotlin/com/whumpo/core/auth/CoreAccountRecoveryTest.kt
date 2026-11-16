@@ -73,20 +73,20 @@ class CoreAccountRecoveryTest {
 
     private fun grant(
         state: String, token: String = initialGrant, purpose: String = "recovery", operation: String? = null,
-        priorInventoryRevision: Int? = null,
+        receiptRevision: Int? = null, priorGeneration: Int = 4,
     ): String {
-        val acknowledgement = operation?.let { ""","receipt":${receipt(it, state, priorInventoryRevision)}""" }.orEmpty()
+        val acknowledgement = operation?.let { ""","receipt":${receipt(it, state, receiptRevision, priorGeneration)}""" }.orEmpty()
         return """{"authority":{"kind":"account_grant","token":"$token","purpose":"$purpose","expiresAt":9000},"state":$state$acknowledgement}"""
     }
 
-    private fun receipt(operation: String, snapshot: String, priorInventoryRevision: Int? = null): String {
+    private fun receipt(operation: String, snapshot: String, receiptRevision: Int? = null, priorGeneration: Int = 4): String {
         val state = Json.parseToJsonElement(snapshot).jsonObject
         val generation = state.field("generation")
-        val revision = priorInventoryRevision?.toString() ?: state.field("inventoryRevision")
+        val revision = receiptRevision?.toString() ?: state.field("inventoryRevision")
         val bundle = state.getValue("recovery").jsonObject.field("generation")
         return """{"operation":"$operation","accountId":"account-1","candidateId":null,"attemptId":"attempt-1",
             "operationId":"00000000-0000-0000-0000-000000000001","confirmedAt":1,
-            "generationBefore":4,"generationAfter":$generation,"inventoryRevision":$revision,"recoveryGeneration":$bundle}"""
+            "generationBefore":$priorGeneration,"generationAfter":$generation,"inventoryRevision":$revision,"recoveryGeneration":$bundle}"""
     }
 
     private fun method(id: String, kind: String, status: String = "active", verified: Boolean = true) =
@@ -171,8 +171,8 @@ class CoreAccountRecoveryTest {
                     assertEquals("AccountGrant $initialGrant", header)
                     assertNotNull(key)
                     assertEquals("234567", body.getValue("proof").jsonObject.field("totp"))
-                    respond(grant(snapshot("account", revision = 3, kind = "codes", approved = "password_totp"),
-                        accountGrant, "account", "enrollment.complete", priorInventoryRevision = 1))
+                    respond(grant(snapshot("account", generation = 5, revision = 3, kind = "codes", approved = "password_totp"),
+                        accountGrant, "account", "enrollment.complete"))
                 }
                 "organizations" -> {
                     assertEquals("AccountGrant $accountGrant", header)
@@ -217,6 +217,7 @@ class CoreAccountRecoveryTest {
         var registerPrompts = 0
         var finalPrompts = 0
         var secureCalls = 0
+        var finalCalls = 0
         val passkeys = object : AccountPasskeys {
             override suspend fun register(options: String): String? {
                 registerPrompts++
@@ -291,7 +292,7 @@ class CoreAccountRecoveryTest {
                         }
                         val securedState = if (secureCalls == 1) state().replace("\"version\":1,\"verified\"", "\"version\":2,\"verified\"")
                             else state()
-                        respond(grant(securedState, securedGrant, operation = "recovery.secure", priorInventoryRevision = revision - 1))
+                        respond(grant(securedState, securedGrant, operation = "recovery.secure"))
                     }
                 }
                 "passkeys/options" -> {
@@ -319,7 +320,9 @@ class CoreAccountRecoveryTest {
                     val ready = snapshot("account", generation = 5, revision = revision + 1, bundle = 4,
                         approved = "passkey_uv", workspaceAccess = "none")
                     val operation = if (final.record(key, body)) null else "recovery.complete"
-                    respond(grant(ready, accountGrant, "account", operation, priorInventoryRevision = revision))
+                    finalCalls++
+                    val receiptRevision = if (finalCalls == 2) revision else null
+                    respond(grant(ready, accountGrant, "account", operation, receiptRevision, priorGeneration = 5))
                 }
                 else -> error("Unexpected route $route")
             }
@@ -353,6 +356,8 @@ class CoreAccountRecoveryTest {
             assertTrue(controller.state.value!!.replacementMethodsReady())
             assertFailsWith<CoreProtocolException> { controller.complete(passkeys, "", "") }
             assertEquals(CoreAccountSecurityController.Retry.Complete, controller.retry.value)
+            assertEquals(SecurityPurpose.Recovery, controller.state.value?.purpose)
+            assertFailsWith<CoreProtocolException> { controller.retryPending() }
             assertEquals(SecurityPurpose.Recovery, controller.state.value?.purpose)
             controller.retryPending()
             assertEquals(1, finalPrompts)
