@@ -38,6 +38,8 @@ import com.whumpo.core.api.CoreWebsiteHistoryItem
 import com.whumpo.core.api.CoreWebsiteHistoryPage
 import com.whumpo.core.api.CoreWebsiteOperation
 import com.whumpo.core.api.CoreWorkPage
+import com.whumpo.core.api.CoreSourceHistoryVersion
+import com.whumpo.core.api.SourceHistoryResult
 import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.coreBearer
 import com.whumpo.core.api.coreDigest
@@ -439,14 +441,31 @@ class CoreOrganizationSessionController(
 
     private fun distinct(ids: List<String>) = ids.distinct().size == ids.size
 
-    suspend fun workspaceChoices(cursor: String? = null): CoreWorkspaceChoices = request { current ->
+    suspend fun workspaceChoices(cursor: String? = null, expected: State.Active? = null): CoreWorkspaceChoices = request { current ->
+        if (expected != null && current.state !== expected) throw CancellationException("Core session changed")
         api.workspaceChoices(current.token, cursor, 20).also { page ->
             verifyChoices(page.items.map { it.id }, cursor, page.nextCursor)
             if (page.items.any { it.name.isBlank() }) throw CoreProtocolException()
         }
     }
 
-    suspend fun projectChoices(workspaceId: String, cursor: String? = null): CoreProjectChoices = request { current ->
+    class SourceHistoryPage internal constructor(
+        internal val active: State.Active,
+        internal val project: CoreProjectChoice,
+        internal val result: SourceHistoryResult,
+    ) {
+        val entries: List<CoreSourceHistoryVersion> get() = result.entries
+        val hasOlderVersions: Boolean get() = result.nextCursor != null
+    }
+
+    suspend fun sourceHistory(active: State.Active, project: CoreProjectChoice, prior: SourceHistoryPage? = null): SourceHistoryPage =
+        requestForActiveSession(active) { client, token ->
+            require(prior == null || (prior.active === active && prior.project == project && prior.hasOlderVersions))
+            SourceHistoryPage(active, project, client.sourceHistory(token, project.id, prior?.result))
+        }
+
+    suspend fun projectChoices(workspaceId: String, cursor: String? = null, expected: State.Active? = null): CoreProjectChoices = request { current ->
+        if (expected != null && current.state !== expected) throw CancellationException("Core session changed")
         api.projectChoices(current.token, workspaceId, cursor, 20).also { page ->
             verifyChoices(page.items.map { it.id }, cursor, page.nextCursor)
             if (page.items.any { it.workspaceId != workspaceId || it.name.isBlank() }) throw CoreProtocolException()

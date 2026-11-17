@@ -208,3 +208,14 @@ for (const mode of ['120000', '160000']) {
 }
 
 console.log('Mobile policy negative fixtures passed.');
+
+const connectedPreview = readFileSync(new URL(
+  '../android/androidApp/src/localDebug/kotlin/com/whumpo/android/core/CorePreviewActivity.kt', import.meta.url
+), 'utf8');
+const shortcutHub = connectedPreview.match(/fun shortcutHubEpoch\(\): Long\? \{([\s\S]*?)return session\.epoch/)?.[1];
+assert.match(shortcutHub ?? '', /\bshowSourceHistory\b[\s\S]*return null/,
+  'An open Source History screen must reject a new static shortcut.');
+assert.match(connectedPreview, /openSourceHistory = \{ interruptShortcut\(\); showSourceHistory = true \}/,
+  'Entering Source History must also invalidate a shortcut already awaiting workspace readiness.');
+assert.match(connectedPreview, /controller\.commitIfCurrent\(session\.epoch\) \{\s*if \(currentEpoch\(\) == null/,
+  'Shortcut navigation must recheck the current hub immediately before showing a destination.');
