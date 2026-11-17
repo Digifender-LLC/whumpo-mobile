@@ -439,9 +439,11 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         partnerFailure: Boolean = false,
         structuredValidationFailure: Boolean = false,
         successHeaders: ((Headers) -> Unit)? = null,
+        binaryBody: ByteArray? = null,
     ): String {
         require(token == null || coreBearer.matches(token)) { "Invalid core bearer format" }
         require(accountAuthority == null || (token == null && accountGrantBearer.matches(accountAuthority.token)))
+        require(binaryBody == null || (body == null && binaryBody.size in 1..(4 * 1024 * 1024)))
         return http.prepareRequest(origin.value + path) {
             method = verb
             if (accountAuthority != null) header("Authorization", "AccountGrant ${accountAuthority.token}")
@@ -456,6 +458,10 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
             if (body != null) {
                 header("Content-Type", "application/json")
                 setBody(body)
+            }
+            if (binaryBody != null) {
+                contentType(ContentType.Application.OctetStream)
+                setBody(binaryBody)
             }
         }.execute { response ->
             if (response.status.value != expectedStatus && response.status.value != alternateStatus) {
@@ -487,6 +493,40 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
             if (bytes.size > maxResponseBytes) throw CoreProtocolException()
             bytes.decodeToString(throwOnInvalidSequence = true)
         }
+    }
+
+    internal suspend fun reserveTaskFile(token: String, metadata: String, key: String): CoreAttachmentUpload =
+        Json.decodeFromString(call(token, "/v1/files", HttpMethod.Post, metadata, key = key,
+            expectedStatus = 201, requireJson = true))
+
+    internal suspend fun taskFileUpload(token: String, uploadId: String): CoreAttachmentUpload =
+        Json.decodeFromString(call(token, taskFileUploadPath(uploadId), requireJson = true))
+
+    internal suspend fun sendTaskFile(token: String, uploadId: String, bytes: ByteArray): CoreAttachmentUpload =
+        Json.decodeFromString(call(token, taskFileUploadPath(uploadId) + "/content", HttpMethod.Put,
+            requireJson = true, binaryBody = bytes))
+
+    internal suspend fun finalizeTaskFile(token: String, uploadId: String): CoreAttachmentVersion =
+        Json.decodeFromString(call(token, taskFileUploadPath(uploadId) + "/finalize", HttpMethod.Post, "{}",
+            requireJson = true))
+
+    internal suspend fun attachTaskFile(
+        token: String, file: CoreAttachmentVersion, body: String, key: String,
+    ): CoreAttachmentLink =
+        Json.decodeFromString(call(token, taskFileLinkPath(file), HttpMethod.Post, body, key = key,
+            expectedStatus = 201, requireJson = true))
+
+    internal suspend fun taskFileLinks(token: String, file: CoreAttachmentVersion): CoreAttachmentLinks =
+        Json.decodeFromString(call(token, taskFileLinkPath(file), limit = 100, requireJson = true))
+
+    private fun taskFileUploadPath(uploadId: String): String {
+        require(coreIdentifier.matches(uploadId))
+        return "/v1/uploads/$uploadId"
+    }
+
+    private fun taskFileLinkPath(file: CoreAttachmentVersion): String {
+        require(coreIdentifier.matches(file.fileId) && file.version in 1..CORE_MAX_VERSION)
+        return "/v1/files/${file.fileId}/versions/${file.version}/links"
     }
 
     override fun close() {
