@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
 import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.core.api.CoreHttpException
+import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreWebsiteHistoryItem
 import com.whumpo.core.api.CoreWebsiteOperation
 import com.whumpo.core.api.CoreWorkTask
@@ -41,13 +42,14 @@ import kotlinx.coroutines.CancellationException
 @Composable
 internal fun CoreWorkPreview(
     controller: CoreOrganizationSessionController,
-    epoch: Long,
+    active: CoreOrganizationSessionController.State.Active,
     organizationName: String,
     canCreateTask: Boolean,
     canRecoverApplication: Boolean,
     initialTask: CoreWorkTask? = null,
     close: () -> Unit,
 ) {
+    val epoch = active.epoch
     var recovering by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
     var selected by remember(initialTask) { mutableStateOf(initialTask) }
@@ -133,6 +135,9 @@ internal fun CoreWorkPreview(
                 receipts -> {
                     Text("Website receipts", style = MaterialTheme.typography.headlineMedium)
                     Text("Project ${task.projectId}", style = MaterialTheme.typography.bodyMedium)
+                    if (active.session.role == CoreRole.owner) {
+                        CurrentPublicationCheck(controller, active, task.projectId)
+                    }
                     WorkRead(controller, epoch, { controller.websiteReceipts(task.projectId, historyCursor) }) { page ->
                         when {
                             page == null -> Text("This project has no website target.")
@@ -158,6 +163,32 @@ internal fun CoreWorkPreview(
                     Text("Project ${detail.projectId}", style = MaterialTheme.typography.bodyMedium)
                     Button(onClick = { selected = detail; receipts = true }) { Text("View website receipts") }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CurrentPublicationCheck(
+    controller: CoreOrganizationSessionController,
+    active: CoreOrganizationSessionController.State.Active,
+    projectId: String,
+) {
+    var attempt by remember(active.epoch, projectId) { mutableStateOf(0) }
+    OutlinedButton(
+        onClick = { attempt += 1 },
+        modifier = Modifier.heightIn(min = 48.dp),
+    ) {
+        Text("Check current publication")
+    }
+    if (attempt > 0) {
+        key(attempt) {
+            WorkRead(controller, active.epoch, { controller.currentPublication(active, projectId) }) { publication ->
+                Text(
+                    if (publication == null) "No current website publication."
+                    else "Confirmed publication, version ${publication.targetVersion}.",
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
             }
         }
     }

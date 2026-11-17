@@ -185,6 +185,41 @@ class CoreOrganizationSessionController(
     suspend fun websiteReceipts(projectId: String, before: String? = null, limit: Int = 10): CoreWebsiteHistoryPage? =
         request { current -> readWebsiteReceipts(current, projectId, before, limit) }
 
+    class CurrentPublication internal constructor(
+        val epoch: Long,
+        val projectId: String,
+        val targetId: String,
+        val targetVersion: Long,
+        val effectId: String,
+        val artifactDigest: String,
+        val pageManifestDigest: String?,
+        val pageCount: Int?,
+    )
+
+    /** Checks the current static publication for this owner session and project. */
+    suspend fun currentPublication(active: State.Active, projectId: String): CurrentPublication? = request { current ->
+        if (current.state !== active) throw CancellationException("Core session changed")
+        if (active.session.role != CoreRole.owner) throw CoreHttpException(403)
+        verifyCurrent(current)
+        val target = try {
+            api.publicationTarget(current.token, active.session.orgId, projectId)
+        } catch (error: CoreHttpException) {
+            if (error.status == 404) return@request null
+            throw error
+        }
+        if (target.activeEffectId == null) return@request null
+        verifyCurrent(current)
+        val receipt = api.currentPublicationReceipt(current.token, target)
+        verifyCurrent(current)
+        if (api.publicationTarget(current.token, active.session.orgId, projectId) != target) {
+            throw CoreProtocolException()
+        }
+        CurrentPublication(
+            active.epoch, projectId, target.id, target.version, receipt.effectId,
+            receipt.artifactDigest, receipt.pageManifestDigest, receipt.pageCount,
+        )
+    }
+
     private suspend fun readWebsiteReceipts(
         current: Credential,
         projectId: String,
