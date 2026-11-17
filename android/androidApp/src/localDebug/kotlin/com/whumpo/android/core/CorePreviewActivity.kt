@@ -103,6 +103,7 @@ class CorePreviewActivity : ComponentActivity() {
     private var shortcutReadyEpoch: () -> Long? = { null }
     private var shortcut by mutableStateOf<CoreStaticShortcutRequest?>(null)
     private var shortcutLifetime = 0L
+    private var shortcutWindowFocused by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -131,6 +132,8 @@ class CorePreviewActivity : ComponentActivity() {
                             adaptiveCache = adaptiveCache, cacheFailure = { adaptiveCacheFailure = true },
                             eraseCacheActor = { if (!adaptiveCache.eraseActor(api.origin, it)) adaptiveCacheFailure = true },
                             showCacheFailure = adaptiveCacheFailure, shortcut = shortcut,
+                            shortcutForeground = adaptiveForeground && shortcutWindowFocused,
+                            isShortcutForeground = { adaptiveForeground && hasWindowFocus() },
                             publishShortcutReady = { shortcutReadyEpoch = it },
                             shortcutLifetime = { shortcutLifetime }, interruptShortcut = ::interruptShortcut,
                             finishShortcut = { if (shortcut === it) shortcut = null })
@@ -146,6 +149,19 @@ class CorePreviewActivity : ComponentActivity() {
         val ready = shortcutReadyEpoch()?.takeIf { it == current && controller.commitIfCurrent(it) {} }
         interruptShortcut()
         shortcut = CoreStaticShortcutRequest.receive(intent.action, ready, SystemClock.elapsedRealtime(), shortcutLifetime)
+        updateShortcutForeground()
+    }
+
+    private fun updateShortcutForeground(hasFocus: Boolean = hasWindowFocus()) {
+        shortcutWindowFocused = hasFocus
+        if (shortcut?.observeForeground(adaptiveForeground, shortcutWindowFocused, SystemClock.elapsedRealtime()) == false) {
+            interruptShortcut()
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        updateShortcutForeground(hasFocus)
     }
 
     private fun interruptShortcut() {
@@ -161,12 +177,13 @@ class CorePreviewActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         adaptiveForeground = true
+        updateShortcutForeground()
     }
 
     override fun onPause() {
         adaptiveForeground = false
         adaptiveGeneration++
-        interruptShortcut()
+        updateShortcutForeground()
         super.onPause()
     }
 
@@ -203,6 +220,8 @@ internal fun CorePreview(
     eraseCacheActor: (String) -> Unit,
     showCacheFailure: Boolean,
     shortcut: CoreStaticShortcutRequest?,
+    shortcutForeground: Boolean,
+    isShortcutForeground: () -> Boolean,
     publishShortcutReady: (() -> Long?) -> Unit,
     shortcutLifetime: () -> Long,
     interruptShortcut: () -> Unit,
@@ -272,13 +291,14 @@ internal fun CorePreview(
         return session.epoch
     }
     SideEffect { publishShortcutReady(::shortcutHubEpoch) }
-    LaunchedEffect(shortcut, adaptiveForeground, adaptiveGeneration, active?.epoch) {
+    LaunchedEffect(shortcut, shortcutForeground, adaptiveGeneration, active?.epoch) {
         val request = shortcut ?: return@LaunchedEffect
-        if (!adaptiveForeground) return@LaunchedEffect
+        if (!shortcutForeground) return@LaunchedEffect
         try {
             val session = active ?: return@LaunchedEffect
             fun currentEpoch(): Long? = session.epoch.takeIf {
-                shortcutHubEpoch() == it && isForegroundGeneration(adaptiveGeneration) && controller.commitIfCurrent(it) {}
+                shortcutHubEpoch() == it && isShortcutForeground() &&
+                    isForegroundGeneration(adaptiveGeneration) && controller.commitIfCurrent(it) {}
             }
             val admissionLifetime = shortcutLifetime()
             if (!request.verify(::currentEpoch, SystemClock::elapsedRealtime, shortcutLifetime) {

@@ -17,6 +17,20 @@ class CoreStaticShortcutRequest private constructor(
     private val lifetime: Long,
 ) {
     private var used = false
+    private var focused = false
+    private var reachedFocus = false
+    private var invalidated = false
+
+    // Android may briefly resume and pause a previously paused activity during intent delivery.
+    // Retain an already admitted request until its first focused resume, never past focus loss.
+    fun observeForeground(resumed: Boolean, windowFocused: Boolean, elapsedMillis: Long): Boolean {
+        focused = resumed && windowFocused
+        if (!withinLifetime(elapsedMillis) || reachedFocus && !focused) invalidated = true
+        if (focused) reachedFocus = true
+        return !invalidated
+    }
+
+    private fun withinLifetime(elapsedMillis: Long) = elapsedMillis - startedMillis in 0 until 5_000L
 
     suspend fun verify(
         currentEpoch: () -> Long?,
@@ -24,8 +38,8 @@ class CoreStaticShortcutRequest private constructor(
         currentLifetime: () -> Long,
         readyRead: suspend () -> Boolean,
     ): Boolean {
-        fun current() = currentEpoch() == epoch && currentLifetime() == lifetime &&
-            elapsedMillis() - startedMillis in 0 until 5_000L
+        fun current() = focused && !invalidated && currentEpoch() == epoch &&
+            currentLifetime() == lifetime && withinLifetime(elapsedMillis())
         if (used || !current()) return false
         used = true
         return readyRead() && current()

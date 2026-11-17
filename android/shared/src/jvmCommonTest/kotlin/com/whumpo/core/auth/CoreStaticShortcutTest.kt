@@ -21,6 +21,7 @@ class CoreStaticShortcutTest {
         assertNull(CoreStaticShortcutRequest.receive(today, null, 7, 1))
         val request = assertNotNull(CoreStaticShortcutRequest.receive(today, 4, 7, 1))
         assertEquals(CoreStaticShortcut.Today, request.destination)
+        assertTrue(request.observeForeground(true, true, 7))
         var reads = 0
         assertTrue(request.verify({ 4 }, { 7 }, { 1 }) { reads++; true })
         assertFalse(request.verify({ 4 }, { 7 }, { 1 }) { reads++; true })
@@ -28,10 +29,52 @@ class CoreStaticShortcutTest {
     }
 
     @Test
+    fun temporaryUnfocusedResumptionDoesNotConsumeTheRequestBeforeGenuineFocus() = runTest {
+        val request = assertNotNull(CoreStaticShortcutRequest.receive(today, 4, 7, 1))
+        var reads = 0
+        assertTrue(request.observeForeground(false, false, 7))
+        assertTrue(request.observeForeground(true, false, 8))
+        assertFalse(request.verify({ 4 }, { 8 }, { 1 }) { reads++; true })
+        assertTrue(request.observeForeground(false, false, 9))
+        assertTrue(request.observeForeground(true, false, 10))
+        assertTrue(request.observeForeground(true, true, 11))
+        assertTrue(request.verify({ 4 }, { 11 }, { 1 }) { reads++; true })
+        assertFalse(request.verify({ 4 }, { 11 }, { 1 }) { reads++; true })
+        assertEquals(1, reads)
+    }
+
+    @Test
+    fun focusLossDuringReadInvalidatesEvenIfTheSameWindowRegainsFocus() = runTest {
+        val request = assertNotNull(CoreStaticShortcutRequest.receive(work, 4, 7, 1))
+        assertTrue(request.observeForeground(true, true, 7))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val pending = async {
+            request.verify({ 4 }, { 9 }, { 1 }) {
+                entered.complete(Unit)
+                release.await()
+                true
+            }
+        }
+        entered.await()
+        assertFalse(request.observeForeground(true, false, 8))
+        assertFalse(request.observeForeground(true, true, 9))
+        release.complete(Unit)
+        assertFalse(pending.await())
+        assertFalse(request.verify({ 4 }, { 9 }, { 1 }) { error("Focus loss replayed a shortcut") })
+
+        val expired = assertNotNull(CoreStaticShortcutRequest.receive(work, 4, 7, 1))
+        assertFalse(expired.observeForeground(false, false, 5_007))
+        assertFalse(expired.observeForeground(true, true, 5_008))
+        assertFalse(expired.verify({ 4 }, { 5_008 }, { 1 }) { error("Expired request ran on first focus") })
+    }
+
+    @Test
     fun lateReadyReadDoesNotReplaceAChoiceOrOwnershipReviewInTheSameEpoch() = runTest {
         val epoch = 4L
         for (changesRoute in listOf(true, false)) {
             val request = assertNotNull(CoreStaticShortcutRequest.receive(today, epoch, 7, 1))
+            assertTrue(request.observeForeground(true, true, 7))
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             var hubRoute = true
@@ -62,6 +105,7 @@ class CoreStaticShortcutTest {
         suspend fun verifyAfter(change: () -> Unit, epoch: () -> Long?, time: () -> Long) {
             val request = assertNotNull(CoreStaticShortcutRequest.receive(work, 4, 7, 1))
             assertEquals(CoreStaticShortcut.Work, request.destination)
+            assertTrue(request.observeForeground(true, true, 7))
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             val pending = async {
@@ -86,6 +130,7 @@ class CoreStaticShortcutTest {
         val alreadyExpired = assertNotNull(CoreStaticShortcutRequest.receive(work, 4, 7, 1))
         assertFalse(alreadyExpired.verify({ epoch }, { time }, { 1 }) { error("Expired shortcut read the workspace") })
         val notReady = assertNotNull(CoreStaticShortcutRequest.receive(work, 4, time, 1))
+        assertTrue(notReady.observeForeground(true, true, time))
         assertFalse(notReady.verify({ epoch }, { time }, { 1 }) { false })
     }
 }
