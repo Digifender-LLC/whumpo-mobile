@@ -369,7 +369,7 @@ internal fun CorePreview(
     if (active != null && ready && showWork) {
         key(active.epoch) {
             CoreWorkPreview(
-                controller, active.epoch, page?.profile?.displayName ?: active.session.orgId,
+                controller, active, page?.profile?.displayName ?: active.session.orgId,
                 canCreateTask = active.session.role != CoreRole.viewer,
                 canRecoverApplication = active.session.role == CoreRole.owner,
                 initialTask = discoveryWorkTask,

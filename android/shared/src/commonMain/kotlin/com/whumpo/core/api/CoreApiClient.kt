@@ -229,6 +229,20 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return json.decodeFromString(call(token, "/v1/site-targets/$targetId/history", before = before, limit = limit))
     }
 
+    internal suspend fun publicationTarget(token: String, orgId: String, projectId: String): CoreWebsiteTarget {
+        require(coreIdentifier.matches(projectId))
+        return decodePublicationTarget(
+            call(token, "/v1/site-targets", projectId = projectId, requireJson = true, maxResponseBytes = 4096),
+            orgId, projectId,
+        )
+    }
+
+    internal suspend fun currentPublicationReceipt(token: String, target: CoreWebsiteTarget): CoreWebsiteReceipt =
+        decodeCurrentPublicationReceipt(
+            call(token, "/v1/site-targets/${target.id}/history", limit = 1, requireJson = true, maxResponseBytes = 4096),
+            target,
+        )
+
     internal suspend fun workspaceChoices(token: String, cursor: String?, limit: Int): CoreWorkspaceChoices {
         require(limit in 1..25 && (cursor == null || coreIdentifier.matches(cursor)))
         return json.decodeFromString(call(token, "/v1/workspaces", cursor = cursor, limit = limit))

@@ -48,6 +48,14 @@ receipts to the selected project target and verified organization. The Work
 screen drops open detail, cursors, errors, and in-flight results when the
 organization session changes.
 
+Owners can choose **Check current publication** on a task project's website
+receipts screen in the local debug app. The check reads the current target,
+verifies the latest confirmed static publication receipt against that target's
+version and active effect, then rereads the target before showing the result.
+It reports the confirmed version or the absence of a current publication. The
+result describes publication state at the time of the check. Manual TXT
+verification remains in its existing Domains screen.
+
 From **Work**, choose **New task**, a workspace, and a project. The preview reads
 available choices from `GET /v1/workspaces` and `GET /v1/projects?workspaceId=…`,
 then submits the title and optional description to `POST /v1/tasks`. A valid
