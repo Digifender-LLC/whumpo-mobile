@@ -110,6 +110,23 @@ class CoreConnectedOnboardingTest {
     }
 
     @Test
+    fun openingAnExistingReadyWorkspaceDoesNotOfferACompletionStep() = runTest {
+        var reads = 0
+        fixture(routes = { request ->
+            assertEquals(HttpMethod.Get, request.method)
+            assertEquals("/v1/organization/readiness", request.url.encodedPath)
+            reads++
+            json(readiness(true, project = "project-1"))
+        }) { _, controller ->
+            controller.refresh()
+            assertTrue(controller.state.value.canOpenWorkspace)
+            assertNull(controller.state.value.nextStepProject("org-1"))
+            controller.createWorkspace()
+            assertEquals(1, reads)
+        }
+    }
+
+    @Test
     fun closedReadinessRejectsWrongOrganizationAndMalformedWire() = runTest {
         var reply = "{}"
         fixture(routes = { json(reply) }) { _, controller ->
@@ -292,6 +309,7 @@ class CoreConnectedOnboardingTest {
             assertTrue(controller.state.value.canOpenWorkspace)
             assertFalse(controller.state.value.pending)
             assertEquals("project-1", controller.state.value.readiness?.projectId)
+            assertNull(controller.state.value.nextStepProject("org-1"))
             assertEquals(2, writes.size)
             assertEquals(listOf("/v1/onboarding", "/v1/organization/readiness"), routesSeen.takeLast(2))
         }
@@ -319,10 +337,56 @@ class CoreConnectedOnboardingTest {
             controller.createWorkspace()
             assertTrue(controller.state.value.acknowledged)
             assertFalse(controller.state.value.canOpenWorkspace)
+            assertNull(controller.state.value.nextStepProject("org-1"))
             workspace = "workspace-1"
             controller.retry()
             assertEquals(1, writes)
             assertTrue(controller.state.value.canOpenWorkspace)
+            val ready = controller.state.value
+            assertEquals("project-1", ready.nextStepProject("org-1"))
+            assertNull(ready.nextStepProject("org-2"))
+            assertNull(ready.copy(readiness = ready.readiness?.copy(projectId = "different-project")).nextStepProject("org-1"))
+            controller.retire()
+            assertNull(controller.state.value.nextStepProject("org-1"))
+        }
+    }
+
+    @Test
+    fun anAcknowledgmentFromAnOldScopeDoesNotOfferTheCompletionStep() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val writes = mutableListOf<String>()
+        val skipped = profile(status = "skipped")
+        fixture(routes = { request ->
+            when (request.url.encodedPath) {
+                "/v1/organization/readiness" -> {
+                    if (request.headers[HttpHeaders.Authorization] == "Bearer $initial") json(readiness(false))
+                    else json(readiness(true, project = "project-2", org = "org-2"))
+                }
+                "/v1/onboarding" -> json(summary(skipped), "\"1\"")
+                "/v1/onboarding/complete" -> {
+                    writes += request.url.encodedPath
+                    entered.complete(Unit)
+                    release.await()
+                    json(summary(skipped, ready = true))
+                }
+                else -> error("Unexpected route")
+            }
+        }) { sessions, first ->
+            first.refresh()
+            val completion = launch { first.createWorkspace() }
+            entered.await()
+            assertNull(first.state.value.nextStepProject("org-1"))
+            val switched = sessions.switchOrganization("org-2")
+            first.retire()
+            release.complete(Unit)
+            completion.join()
+            val second = CoreConnectedOnboardingController(sessions, switched)
+            second.refresh()
+            assertTrue(second.state.value.canOpenWorkspace)
+            assertNull(first.state.value.nextStepProject("org-1"))
+            assertNull(second.state.value.nextStepProject("org-2"))
+            assertEquals(listOf("/v1/onboarding/complete"), writes)
         }
     }
 

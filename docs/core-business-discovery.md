@@ -4,8 +4,11 @@ Open **Explore setup preview** in the `localDebug` build, then **Account
 security and sign-in** against a compatible Core test service. An owner who
 has reached the verified workspace setup review can choose **Add business
 details**. **Continue later** returns to setup review. **Create workspace**
-continues the required readiness flow. After setup, **Open business discovery**
-on the organization screen opens review and **Continue questions** resumes
+continues the required readiness flow. Once the app receives the creation acknowledgment
+and verifies readiness, choose **Review your next step** to open the saved discovery review
+or **Continue to workspace** to leave setup. Returning from the review opens
+the workspace. **Open business discovery** remains available from the
+organization screen, and **Continue questions** resumes
 unanswered questions. Today, Work, and Partner are available once the workspace
 is ready. Signed-out **Try onboarding** remains an offline demo.
 

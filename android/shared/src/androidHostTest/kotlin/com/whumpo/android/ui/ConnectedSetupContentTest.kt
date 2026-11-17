@@ -13,10 +13,12 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import com.whumpo.android.ui.onboarding.ConnectedSetupContent
+import com.whumpo.android.ui.onboarding.ConnectedSetupNextStepContent
 import com.whumpo.core.api.CoreOnboardingProfile
 import com.whumpo.core.api.CoreOnboardingProfileStatus
 import com.whumpo.core.api.CoreOnboardingStage
@@ -84,6 +86,25 @@ class ConnectedSetupContentTest : RobolectricUiTest() {
             compose.onNodeWithText("Save answer").assertDoesNotExist()
             compose.onNodeWithText("Refresh workspace status").performClick()
             assertEquals(1, refreshes)
+        }
+    }
+
+    @Test
+    fun readyWorkspaceOffersSeparateExplicitReviewAndContinueActions() {
+        var reviews = 0
+        var continues = 0
+        launch(Screen.Compact, dark = true, fontScale = 2f) {
+            ConnectedSetupNextStepContent(onReview = { reviews++ }, onContinue = { continues++ }, Modifier.fillMaxSize())
+        }.use {
+            compose.onNodeWithText("Your workspace is ready").assertIsDisplayed()
+            assertEquals(0, reviews)
+            assertEquals(0, continues)
+            compose.onNodeWithText("Continue to workspace").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+            assertEquals(1, continues)
+            assertEquals(0, reviews)
+            compose.onNodeWithText("Review your next step").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+            assertEquals(1, reviews)
+            assertEquals(1, continues)
         }
     }
 

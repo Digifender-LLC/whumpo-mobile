@@ -75,9 +75,14 @@ data class CoreConnectedSetupState(
     val acknowledged: Boolean = false,
     val reviewRequired: Boolean = false,
     val notice: CoreSetupNotice? = null,
+    val completedProjectId: String? = null,
 ) {
     val canOpenWorkspace: Boolean get() = readiness?.ready == true && !pending
     val canEdit: Boolean get() = stage == CoreOnboardingStage.verified
+
+    fun nextStepProject(orgId: String): String? = completedProjectId?.takeIf {
+        canOpenWorkspace && readiness?.orgId == orgId && readiness.projectId == it
+    }
 }
 
 /** Owns setup and pending attempts for one exact authenticated epoch. */
@@ -277,14 +282,24 @@ class CoreConnectedOnboardingController(
             requireWire(ack.workspaceId == summary.workspaceId && ack.projectId == summary.projectId &&
                 ack.agentId == summary.agentId && ack.conversationId == summary.conversationId)
         }
-        publishReady(summary, requestedReadiness())
+        publishReady(summary, requestedReadiness(), completedHere = attempt.completion != null)
     }
 
-    private fun publishReady(summary: CoreOnboardingSummary, readiness: CoreOrganizationReadiness) {
+    private fun publishReady(
+        summary: CoreOnboardingSummary,
+        readiness: CoreOrganizationReadiness,
+        completedHere: Boolean = false,
+    ) {
         requireWire(readiness.ready && summary.projectId != null && readiness.projectId == summary.projectId)
         pending = null
         editedQuestion = null
-        update { CoreConnectedSetupState(readiness = readiness, busy = busy) }
+        update {
+            CoreConnectedSetupState(
+                readiness = readiness,
+                busy = busy,
+                completedProjectId = summary.projectId.takeIf { completedHere },
+            )
+        }
     }
 
     private fun showSummary(summary: CoreOnboardingSummary) {
