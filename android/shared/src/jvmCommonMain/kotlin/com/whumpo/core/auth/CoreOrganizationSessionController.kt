@@ -441,7 +441,8 @@ class CoreOrganizationSessionController(
 
     private fun distinct(ids: List<String>) = ids.distinct().size == ids.size
 
-    suspend fun workspaceChoices(cursor: String? = null): CoreWorkspaceChoices = request { current ->
+    suspend fun workspaceChoices(cursor: String? = null, expected: State.Active? = null): CoreWorkspaceChoices = request { current ->
+        if (expected != null && current.state !== expected) throw CancellationException("Core session changed")
         api.workspaceChoices(current.token, cursor, 20).also { page ->
             verifyChoices(page.items.map { it.id }, cursor, page.nextCursor)
             if (page.items.any { it.name.isBlank() }) throw CoreProtocolException()
@@ -463,7 +464,8 @@ class CoreOrganizationSessionController(
             SourceHistoryPage(active, project, client.sourceHistory(token, project.id, prior?.result))
         }
 
-    suspend fun projectChoices(workspaceId: String, cursor: String? = null): CoreProjectChoices = request { current ->
+    suspend fun projectChoices(workspaceId: String, cursor: String? = null, expected: State.Active? = null): CoreProjectChoices = request { current ->
+        if (expected != null && current.state !== expected) throw CancellationException("Core session changed")
         api.projectChoices(current.token, workspaceId, cursor, 20).also { page ->
             verifyChoices(page.items.map { it.id }, cursor, page.nextCursor)
             if (page.items.any { it.workspaceId != workspaceId || it.name.isBlank() }) throw CoreProtocolException()

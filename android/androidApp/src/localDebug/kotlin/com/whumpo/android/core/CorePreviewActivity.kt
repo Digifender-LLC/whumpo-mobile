@@ -260,6 +260,7 @@ internal fun CorePreview(
     var showDomains by remember(active?.epoch) { mutableStateOf(false) }
     var showHostname by remember(active?.epoch) { mutableStateOf(false) }
     var restoreHostnameFocus by remember(active?.epoch) { mutableStateOf(false) }
+    var showSourceHistory by remember(active?.epoch) { mutableStateOf(false) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var showInvitations by remember(active?.epoch) { mutableStateOf(false) }
     var showOfflineWork by remember(active?.epoch) { mutableStateOf(false) }
@@ -603,6 +604,14 @@ internal fun CorePreview(
         }
         return
     }
+    if (active != null && ready && showSourceHistory) {
+        if (adaptiveForeground) key(active.epoch, adaptiveGeneration) {
+            CoreSourceHistoryPreview(controller, active,
+                current = { isForegroundGeneration(adaptiveGeneration) && showSourceHistory },
+                close = { showSourceHistory = false })
+        }
+        return
+    }
     if (active != null && ready && showWork) {
         key(active.epoch) {
             CoreWorkPreview(
@@ -707,6 +716,7 @@ internal fun CorePreview(
             }
         },
         openToday = { interruptShortcut(); shortcutToday = false; showToday = true },
+        openSourceHistory = { interruptShortcut(); showSourceHistory = true },
         openWork = { interruptShortcut(); requestedFocus = CoreAdaptiveCategory.Work; showWork = true },
         openInvitations = if (active?.session?.role == CoreRole.owner && ready) ({
             interruptShortcut()
@@ -825,6 +835,7 @@ private fun CorePreviewContent(
     message: String?,
     ownership: @Composable () -> Unit,
     openToday: () -> Unit,
+    openSourceHistory: () -> Unit,
     openWork: () -> Unit,
     openInvitations: (() -> Unit)?,
     openPartner: () -> Unit,
@@ -878,6 +889,7 @@ private fun CorePreviewContent(
                 Button(onClick = openToday) { Text("Open Today") }
                 WhumpoQuietButton(onClick = openPartner, modifier = Modifier.heightIn(min = 48.dp)) { Text("Open Partner") }
                 Button(onClick = openWork) { Text("Open Work") }
+                Button(onClick = openSourceHistory) { Text("Project source history") }
                 if (openDiscovery != null) {
                     WhumpoQuietButton(onClick = openDiscovery, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Open business discovery")
