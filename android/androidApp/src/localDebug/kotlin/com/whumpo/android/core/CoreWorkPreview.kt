@@ -49,6 +49,7 @@ internal fun CoreWorkPreview(
     canCreateTask: Boolean,
     canRecoverApplication: Boolean,
     initialTask: CoreWorkTask? = null,
+    startTaskDraft: Boolean = false,
     openOfflineWork: () -> Unit,
     workWebOrigin: CoreWorkWebOrigin?,
     signOut: () -> Unit,
@@ -60,7 +61,7 @@ internal fun CoreWorkPreview(
 ) {
     val epoch = active.epoch
     var recovering by remember { mutableStateOf(false) }
-    var creating by remember { mutableStateOf(false) }
+    var creating by remember { mutableStateOf(startTaskDraft && canCreateTask && initialTask == null) }
     var receivingLink by remember { mutableStateOf(false) }
     var inbox by remember { mutableStateOf(false) }
     var selected by remember(initialTask) { mutableStateOf(initialTask) }

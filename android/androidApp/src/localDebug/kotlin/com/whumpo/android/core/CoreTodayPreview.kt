@@ -1,5 +1,6 @@
 package com.whumpo.android.core
 
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +34,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -46,6 +49,7 @@ import com.whumpo.core.api.CoreTodayTaskOperation
 import com.whumpo.core.api.CoreTodayTaskSource
 import com.whumpo.core.api.CoreWebsiteOperation
 import com.whumpo.core.auth.CoreOrganizationSessionController
+import com.whumpo.core.auth.CorePendingApprovalsFocus
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -69,6 +73,7 @@ internal fun CoreTodayPreview(
     canCreditOpen: () -> Boolean = { false },
     availability: (Set<CoreAdaptiveCategory>) -> Unit = {},
     openFocus: (CoreAdaptiveCategory) -> Unit = {},
+    pendingApprovals: CorePendingApprovalsFocus? = null,
     close: () -> Unit,
 ) {
     val epoch = active.epoch
@@ -84,6 +89,7 @@ internal fun CoreTodayPreview(
     var receipt by remember { mutableStateOf<TodayReceipt?>(null) }
     var refresh by remember { mutableStateOf(0) }
     val goBack: () -> Unit = {
+        pendingApprovals?.cancel()
         when {
             task != null -> task = null
             receipt != null -> receipt = null
@@ -137,8 +143,8 @@ internal fun CoreTodayPreview(
                 }
                 else -> {
                     Text("Today", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
-                    OutlinedButton(onClick = { refresh += 1 }) { Text("Refresh") }
-                    WhumpoQuietButton(onClick = { inbox = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    OutlinedButton(onClick = { pendingApprovals?.cancel(); refresh += 1 }) { Text("Refresh") }
+                    WhumpoQuietButton(onClick = { pendingApprovals?.cancel(); inbox = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Task notifications")
                     }
                     WorkRead(controller, epoch, { controller.today() }, onUnavailable = { availability(emptySet()) },
@@ -147,13 +153,16 @@ internal fun CoreTodayPreview(
                         TodayBriefing(
                             today,
                             openTask = { source ->
+                                pendingApprovals?.cancel()
                                 controller.commitIfCurrent(epoch) { task = TodayTask(today, source, CoreAdaptiveOpenIntent(readGeneration)) }
                             },
                             openReceipt = { activity ->
+                                pendingApprovals?.cancel()
                                 controller.commitIfCurrent(epoch) { receipt = TodayReceipt(today, activity, CoreAdaptiveOpenIntent(readGeneration)) }
                             },
                             websiteAnchor = websiteAnchor,
                             resultsAnchor = resultsAnchor,
+                            pendingApprovals = pendingApprovals,
                             focusSection = {
                                 if (focus != null) {
                                     val current by focus.state.collectAsState()
@@ -187,10 +196,13 @@ private fun TodayBriefing(
     openReceipt: (CoreTodaySiteActivity) -> Unit,
     websiteAnchor: BringIntoViewRequester,
     resultsAnchor: BringIntoViewRequester,
+    pendingApprovals: CorePendingApprovalsFocus?,
     focusSection: @Composable () -> Unit,
 ) {
     val briefing = today.briefing
     val sections = briefing.sections
+    val pendingHeading: (@Composable () -> Unit)? =
+        if (pendingApprovals != null) ({ PendingDecisionsHeading(pendingApprovals) }) else null
     Text("Updated ${readable(briefing.generatedAt)}", style = MaterialTheme.typography.bodyMedium)
     Text(
         "Deadlines through ${readable(briefing.dueBefore)}. Results since ${readable(briefing.verifiedSince)}.",
@@ -202,6 +214,10 @@ private fun TodayBriefing(
         TodayCard {
             Text("You’re caught up", style = MaterialTheme.typography.titleMedium)
             Text("There are no due tasks or decisions waiting in this briefing.")
+        }
+        if (pendingHeading != null) {
+            TodaySection("Pending decisions", sections.approvals, "No decisions are waiting.",
+                titleContent = pendingHeading) {}
         }
         focusSection()
         return
@@ -226,7 +242,9 @@ private fun TodayBriefing(
             Text(item.status.label, style = MaterialTheme.typography.bodySmall)
         }
     }
-    TodaySection("Pending decisions", sections.approvals, "No decisions are waiting.") { item ->
+    TodaySection("Pending decisions", sections.approvals, "No decisions are waiting.",
+        titleContent = pendingHeading,
+    ) { item ->
         TodayCard {
             Text("Approval waiting for a decision", style = MaterialTheme.typography.titleMedium)
             Text("Pending review · not completed")
@@ -288,13 +306,23 @@ private fun SiteActivity(item: CoreTodaySiteActivity, openReceipt: (CoreTodaySit
 }
 
 @Composable
+private fun PendingDecisionsHeading(request: CorePendingApprovalsFocus) {
+    val anchor = remember { BringIntoViewRequester() }
+    val focus = remember { FocusRequester() }
+    Text("Pending decisions", style = MaterialTheme.typography.titleLarge,
+        modifier = Modifier.bringIntoViewRequester(anchor).focusRequester(focus).focusable().semantics { heading() })
+    LaunchedEffect(request) { request.reveal({ anchor.bringIntoView() }) { focus.requestFocus() } }
+}
+
+@Composable
 private fun <T> TodaySection(
     title: String,
     section: CoreTodaySection<T>,
     emptyText: String,
+    titleContent: (@Composable () -> Unit)? = null,
     row: @Composable (T) -> Unit,
 ) {
-    Text(title, style = MaterialTheme.typography.titleLarge)
+    if (titleContent == null) Text(title, style = MaterialTheme.typography.titleLarge) else titleContent()
     if (section.items.isEmpty() && !section.truncated) Text(emptyText)
     section.items.forEach { row(it) }
     if (section.truncated) {

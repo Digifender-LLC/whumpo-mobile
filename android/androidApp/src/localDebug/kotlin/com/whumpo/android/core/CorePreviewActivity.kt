@@ -85,6 +85,7 @@ import kotlinx.coroutines.delay
 import com.whumpo.core.api.CoreAdaptiveCategory
 import com.whumpo.core.auth.CoreAdaptiveHomeController
 import com.whumpo.core.auth.CoreAdaptiveProfileCache
+import com.whumpo.core.auth.CorePendingApprovalsFocus
 import com.whumpo.core.auth.CoreStaticShortcut
 import com.whumpo.core.auth.CoreStaticShortcutRequest
 import kotlinx.coroutines.CancellationException
@@ -103,6 +104,7 @@ class CorePreviewActivity : ComponentActivity() {
     private var shortcutReadyEpoch: () -> Long? = { null }
     private var shortcut by mutableStateOf<CoreStaticShortcutRequest?>(null)
     private var shortcutLifetime = 0L
+    private var shortcutWasForeground = false
     private var shortcutWindowFocused by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -145,16 +147,22 @@ class CorePreviewActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        val current = (controller.state.value as? CoreOrganizationSessionController.State.Active)?.epoch
-        val ready = shortcutReadyEpoch()?.takeIf { it == current && controller.commitIfCurrent(it) {} }
+        val current = (controller.state.value as? CoreOrganizationSessionController.State.Active)
+        val ready = shortcutReadyEpoch()?.takeIf { it == current?.epoch && controller.commitIfCurrent(it) {} }
         interruptShortcut()
-        shortcut = CoreStaticShortcutRequest.receive(intent.action, ready, SystemClock.elapsedRealtime(), shortcutLifetime)
+        shortcut = CoreStaticShortcutRequest.receive(intent.action, ready, SystemClock.elapsedRealtime(), shortcutLifetime, current?.session?.role)
         updateShortcutForeground()
     }
 
     private fun updateShortcutForeground(hasFocus: Boolean = hasWindowFocus()) {
         shortcutWindowFocused = hasFocus
-        if (shortcut?.observeForeground(adaptiveForeground, shortcutWindowFocused, SystemClock.elapsedRealtime()) == false) {
+        val foreground = adaptiveForeground && hasFocus
+        val lostForeground = shortcutWasForeground && !foreground
+        shortcutWasForeground = foreground
+        val pending = shortcut
+        if (pending?.observeForeground(adaptiveForeground, hasFocus, SystemClock.elapsedRealtime()) == false ||
+            (pending == null && lostForeground)
+        ) {
             interruptShortcut()
         }
     }
@@ -266,6 +274,8 @@ internal fun CorePreview(
     var showOfflineWork by remember(active?.epoch) { mutableStateOf(false) }
     var discoveryWorkTask by remember(active?.epoch) { mutableStateOf<CoreWorkTask?>(null) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
+    var startTaskDraft by remember(active?.epoch) { mutableStateOf(false) }
+    var pendingApprovals by remember(active?.epoch) { mutableStateOf<CorePendingApprovalsFocus?>(null) }
     var shortcutToday by remember(active?.epoch) { mutableStateOf(false) }
     var showPartner by remember(active?.epoch) { mutableStateOf(false) }
     var showDiscovery by remember(active?.epoch) { mutableStateOf(false) }
@@ -301,6 +311,7 @@ internal fun CorePreview(
                 shortcutHubEpoch() == it && isShortcutForeground() &&
                     isForegroundGeneration(adaptiveGeneration) && controller.commitIfCurrent(it) {}
             }
+            if (!request.destination.allows(session.session.role)) return@LaunchedEffect
             val admissionLifetime = shortcutLifetime()
             if (!request.verify(::currentEpoch, SystemClock::elapsedRealtime, shortcutLifetime) {
                     controller.organizationWhenReady(session) != null
@@ -310,6 +321,19 @@ internal fun CorePreview(
                 when (request.destination) {
                     CoreStaticShortcut.Today -> { shortcutToday = true; showToday = true }
                     CoreStaticShortcut.Work -> { showWork = true }
+                    CoreStaticShortcut.NewTaskDraft -> {
+                        startTaskDraft = true
+                        showWork = true
+                    }
+                    CoreStaticShortcut.PendingApprovals -> {
+                        pendingApprovals = CorePendingApprovalsFocus {
+                            showToday && isShortcutForeground() && isForegroundGeneration(adaptiveGeneration) &&
+                                shortcutLifetime() == admissionLifetime &&
+                                request.withinLifetime(SystemClock.elapsedRealtime()) && controller.commitIfCurrent(session.epoch) {}
+                        }
+                        shortcutToday = true
+                        showToday = true
+                    }
                 }
             }
         } catch (cancelled: CancellationException) {
@@ -619,6 +643,7 @@ internal fun CorePreview(
                 canCreateTask = active.session.role != CoreRole.viewer,
                 canRecoverApplication = active.session.role == CoreRole.owner,
                 initialTask = discoveryWorkTask,
+                startTaskDraft = startTaskDraft,
                 openOfflineWork = { showOfflineWork = true },
                 workWebOrigin = workWebOrigin,
                 signOut = signOut,
@@ -629,6 +654,7 @@ internal fun CorePreview(
             ) {
                 requestedFocus = null
                 showWork = false
+                startTaskDraft = false
                 discoveryWorkTask = null
             }
         }
@@ -682,6 +708,7 @@ internal fun CorePreview(
                         focus.availability(primaryAvailability + destinations)
                     }
                 },
+                pendingApprovals = pendingApprovals,
                 openFocus = { category ->
                     controller.commitIfCurrent(active.epoch) {
                         if (focusForeground && isForegroundGeneration(adaptiveGeneration) && category in primaryAvailability) {
@@ -692,7 +719,11 @@ internal fun CorePreview(
                         }
                     }
                 },
-            ) { showToday = false }
+            ) {
+                pendingApprovals?.cancel()
+                pendingApprovals = null
+                showToday = false
+            }
         }
         return
     }
