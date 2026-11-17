@@ -36,6 +36,7 @@ import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreWebsiteHistoryItem
 import com.whumpo.core.api.CoreWebsiteOperation
 import com.whumpo.core.api.CoreWorkTask
+import com.whumpo.core.api.CoreWorkWebOrigin
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import kotlinx.coroutines.CancellationException
 
@@ -48,16 +49,24 @@ internal fun CoreWorkPreview(
     canRecoverApplication: Boolean,
     initialTask: CoreWorkTask? = null,
     openOfflineWork: () -> Unit,
+    workWebOrigin: CoreWorkWebOrigin?,
+    signOut: () -> Unit,
     close: () -> Unit,
 ) {
     val epoch = active.epoch
     var recovering by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
+    var receivingLink by remember { mutableStateOf(false) }
     var selected by remember(initialTask) { mutableStateOf(initialTask) }
     var openedFromCreation by remember { mutableStateOf(false) }
     var receipts by remember { mutableStateOf(false) }
     var workCursor by remember { mutableStateOf<String?>(null) }
     var historyCursor by remember { mutableStateOf<String?>(null) }
+    if (receivingLink && workWebOrigin != null) {
+        CoreWorkLinkPreview(controller, active, workWebOrigin, organizationName,
+            close = { receivingLink = false }, signOut = signOut)
+        return
+    }
     if (recovering && canRecoverApplication) {
         CoreApplicationRecoveryPreview(controller, epoch, organizationName) { recovering = false }
         return
@@ -104,6 +113,11 @@ internal fun CoreWorkPreview(
             when {
                 task == null -> {
                     Text("Work", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
+                    if (workWebOrigin != null) {
+                        WhumpoQuietButton(onClick = { receivingLink = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                            Text("Open Work link")
+                        }
+                    }
                     if (canCreateTask) {
                         WhumpoPrimaryButton(onClick = { creating = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                             Text("New task")

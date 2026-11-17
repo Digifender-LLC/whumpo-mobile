@@ -255,6 +255,17 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return json.decodeFromString(call(token, "/v1/tasks/$taskId"))
     }
 
+    internal suspend fun workLinkHistory(token: String, taskId: String, cursor: String?): CoreWorkLinkEvent? {
+        require(coreIdentifier.matches(taskId) && (cursor == null || workLinkEventId.matches(cursor)))
+        return decodeWorkLinkHistory(call(token, "/v1/tasks/$taskId/history", cursor = cursor, limit = 1,
+            requireJson = true), taskId)
+    }
+
+    internal suspend fun linkedWorkTask(token: String, taskId: String): CoreWorkTask {
+        require(coreIdentifier.matches(taskId))
+        return decodeLinkedWorkTask(call(token, "/v1/tasks/$taskId", requireJson = true), taskId)
+    }
+
     internal suspend fun websiteTarget(token: String, projectId: String): CoreWebsiteTarget {
         require(coreIdentifier.matches(projectId))
         return json.decodeFromString(call(token, "/v1/site-targets", projectId = projectId))
