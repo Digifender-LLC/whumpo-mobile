@@ -341,11 +341,17 @@ class FormDeviceTest {
             val initial = mapOf("datetime" to Answer.Text("2031-05-06T07:08:00.000Z"))
             val actions = show(fontScale = 2f, displayedForm = dates, initialAnswers = initial)
             compose.onNodeWithText("2031-05-06").performScrollTo().performClick()
+            compose.waitUntil(10_000) {
+                compose.onAllNodes(hasTestTag("form-date-dialog")).fetchSemanticsNodes().size == 1
+            }
             assertDialogConfirmAboveKeyboard(compose, compose.onNode(hasSetTextAction()), "form-date-confirm")
             compose.onNodeWithTag("form-date-confirm").performTouchInput { click() }
             compose.onNodeWithTag("form-date-dialog").assertDoesNotExist()
             assertEquals(initial, actions.answers)
             compose.onNodeWithText("07:08").performScrollTo().performClick()
+            compose.waitUntil(10_000) {
+                compose.onAllNodes(hasTestTag("form-time-dialog")).fetchSemanticsNodes().size == 1
+            }
             assertDialogConfirmAboveKeyboard(compose, compose.onAllNodes(hasSetTextAction())[0], "form-time-confirm")
             compose.onNodeWithTag("form-time-confirm").performTouchInput { click() }
             compose.onNodeWithTag("form-time-dialog").assertDoesNotExist()
