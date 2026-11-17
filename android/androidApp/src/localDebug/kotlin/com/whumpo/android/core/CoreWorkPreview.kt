@@ -38,6 +38,7 @@ import com.whumpo.core.api.CoreWebsiteOperation
 import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.CoreWorkWebOrigin
 import com.whumpo.core.auth.CoreOrganizationSessionController
+import com.whumpo.core.auth.CoreTaskCalendarReview
 import kotlinx.coroutines.CancellationException
 
 @Composable
@@ -52,6 +53,9 @@ internal fun CoreWorkPreview(
     workWebOrigin: CoreWorkWebOrigin?,
     signOut: () -> Unit,
     onReadable: (Boolean) -> Unit = {},
+    calendarForeground: Boolean,
+    calendarGeneration: Long,
+    isCalendarForeground: () -> Boolean,
     close: () -> Unit,
 ) {
     val epoch = active.epoch
@@ -196,6 +200,15 @@ internal fun CoreWorkPreview(
                     detail.dueAt?.let { Text("Due $it") }
                     if (detail.archivedAt != null) Text("Archived")
                     Text("Project ${detail.projectId}", style = MaterialTheme.typography.bodyMedium)
+                    if (calendarForeground) {
+                        val calendarDraft = CoreTaskCalendarReview.from(detail)
+                        if (calendarDraft != null) key(calendarGeneration, calendarDraft) {
+                            CoreWorkTaskCalendar(controller, epoch, calendarDraft) {
+                                isCalendarForeground() && selected == task && !receipts && attachmentTask == null &&
+                                    !inbox && !creating && !recovering && !receivingLink
+                            }
+                        }
+                    }
                     if (active.session.role != CoreRole.viewer && detail.archivedAt == null) {
                         WhumpoQuietButton(onClick = {
                             controller.commitIfCurrent(epoch) { attachmentTask = detail }
