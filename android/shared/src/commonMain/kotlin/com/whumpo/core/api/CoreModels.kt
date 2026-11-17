@@ -21,6 +21,7 @@ internal data class CoreAuthenticationVerify(val challengeId: String, val respon
 @Serializable
 internal data class CoreSwitch(val orgId: String)
 
+/** Accessible membership. [active] marks the organization selected in the current session. */
 @Serializable
 data class CoreMembership(val orgId: String, val role: CoreRole, val active: Boolean)
 

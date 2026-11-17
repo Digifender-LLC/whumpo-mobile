@@ -150,7 +150,8 @@ class CoreOrganizationSessionController(
     }
 
     suspend fun switchOrganization(active: State.Active, membership: CoreMembership): State.Active {
-        require(membership.active && coreIdentifier.matches(membership.orgId) && membership.orgId != active.session.orgId)
+        // The server lists accessible memberships. "active" marks the current session's organization.
+        require(!membership.active && coreIdentifier.matches(membership.orgId) && membership.orgId != active.session.orgId)
         return replace(membership.orgId, active, membership.role) { api.switch(it, membership.orgId) }
     }
 
@@ -163,7 +164,7 @@ class CoreOrganizationSessionController(
         requestForActiveSession(active) { client, token ->
             client.organizations(token, cursor, 25).also { page ->
                 if (page.items.size > 25 || page.items.distinctBy { it.orgId }.size != page.items.size ||
-                    page.items.any { !coreIdentifier.matches(it.orgId) } ||
+                    page.items.any { !coreIdentifier.matches(it.orgId) || it.active != (it.orgId == active.session.orgId) } ||
                     page.nextCursor?.let { !coreIdentifier.matches(it) || it == cursor } == true
                 ) throw CoreProtocolException()
             }
@@ -854,7 +855,7 @@ class CoreOrganizationSessionController(
             if (!coreIdentifier.matches(session.sessionId) || !coreIdentifier.matches(session.userId) ||
                 !coreIdentifier.matches(session.orgId) || session.expiresAt <= now() ||
                 (userId != null && session.userId != userId) || (orgId != null && session.orgId != orgId) ||
-                (expiresAt != null && session.expiresAt != expiresAt)) throw CoreProtocolException()
+                (expiresAt != null && session.expiresAt != expiresAt) || (role != null && session.role != role)) throw CoreProtocolException()
             currentCoroutineContext().ensureActive()
             if (!validGrant()) throw CancellationException("Account grant changed")
             return synchronized(lock) {

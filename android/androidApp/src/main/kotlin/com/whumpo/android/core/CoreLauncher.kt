@@ -279,9 +279,9 @@ private fun CoreOrganizationContent(
             }
             is OrganizationChoices.Loaded -> {
                 Text("Choose an organization", Modifier.semantics { heading() })
-                val eligible = choices.page.items.filter { it.active && it.orgId != organizationId }
-                if (eligible.isEmpty()) Text("No other organizations on this page.")
-                eligible.forEach { membership ->
+                val otherOrganizations = choices.page.items.filter { !it.active }
+                if (otherOrganizations.isEmpty()) Text("No other organizations on this page.")
+                otherOrganizations.forEach { membership ->
                     WhumpoQuietButton(onClick = { onSwitch(membership) }) {
                         Text("Switch to ${membership.orgId} · ${membership.role.name}")
                     }

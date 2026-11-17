@@ -294,9 +294,8 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
                 assertTrue(multipleOrganizations)
                 val expected = if (requests.count { it == route } == 1) token else switchedToken
                 assertEquals("Bearer $expected", authorization)
-                """{"items":[{"orgId":"fixture-org","role":"viewer","active":true},
-                    {"orgId":"other-org","role":"operator","active":true},
-                    {"orgId":"revoked-org","role":"viewer","active":false}],"nextCursor":null}"""
+                """{"items":[{"orgId":"fixture-org","role":"viewer","active":${!switched}},
+                    {"orgId":"other-org","role":"operator","active":$switched}],"nextCursor":null}"""
             }
             "POST /v1/auth/session/switch" -> {
                 assertTrue(multipleOrganizations)
