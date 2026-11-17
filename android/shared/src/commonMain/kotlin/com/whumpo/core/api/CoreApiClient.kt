@@ -290,9 +290,12 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return json.decodeFromString(call(token, "/v1/projects", workspaceId = workspaceId, cursor = cursor, limit = limit))
     }
 
-    internal suspend fun createTask(token: String, draft: CoreNewTask, requestKey: String): CoreTaskCommandAcceptance {
+    internal suspend fun createTask(token: String, draft: CoreNewTask, requestKey: String): CoreTaskCommandAcceptance =
+        createTask(token, json.encodeToString(draft), requestKey)
+
+    internal suspend fun createTask(token: String, body: String, requestKey: String): CoreTaskCommandAcceptance {
         require(coreIdentifier.matches(requestKey))
-        return json.decodeFromString(call(token, "/v1/tasks", HttpMethod.Post, json.encodeToString(draft),
+        return json.decodeFromString(call(token, "/v1/tasks", HttpMethod.Post, body,
             key = requestKey, expectedStatus = 202))
     }
 

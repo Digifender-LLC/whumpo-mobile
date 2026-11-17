@@ -47,6 +47,7 @@ internal fun CoreWorkPreview(
     canCreateTask: Boolean,
     canRecoverApplication: Boolean,
     initialTask: CoreWorkTask? = null,
+    openOfflineWork: () -> Unit,
     close: () -> Unit,
 ) {
     val epoch = active.epoch
@@ -106,6 +107,9 @@ internal fun CoreWorkPreview(
                     if (canCreateTask) {
                         WhumpoPrimaryButton(onClick = { creating = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                             Text("New task")
+                        }
+                        WhumpoQuietButton(onClick = openOfflineWork, modifier = Modifier.heightIn(min = 48.dp)) {
+                            Text("Capture offline task")
                         }
                     }
                     WorkRead(controller, epoch, { controller.work(workCursor) }) { page ->

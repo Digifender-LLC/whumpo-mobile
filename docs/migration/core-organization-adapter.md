@@ -96,6 +96,18 @@ state. Check Work for the task before creating it again. A new draft uses a new
 key. Changing organizations clears the form and prevents an old response from
 updating the new organization's screen.
 
+**Capture offline task** in Work saves one text draft for the verified account
+and organization on this device. The local preview encrypts it with Android
+Keystore and writes it to app-private storage excluded from backup. After an
+app restart, sign in to the same account and organization to reopen it.
+
+Choose **Reconnect to review** to verify Work access and select a current
+project. Submission requires a separate confirmation. If submission is
+uncertain, reopen the same draft, review it, and choose **Retry original
+request** to send the saved request and key. The app clears the draft only
+after checking the creation receipt and reading the current task in the
+reviewed project.
+
 ## Task outcome qualification
 
 The task outcome increment passed 400 shared JVM tests and 501 Android host
