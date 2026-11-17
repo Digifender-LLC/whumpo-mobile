@@ -39,6 +39,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.whumpo.android.auth.ActivityTracker
+import com.whumpo.android.security.KeystoreSecretBox
 import com.whumpo.android.ui.theme.WhumpoEntryTheme
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
 import com.whumpo.android.ui.theme.WhumpoQuietButton
@@ -50,6 +51,7 @@ import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.coreApiClient
+import com.whumpo.core.account.CoreOfflineWorkStore
 import com.whumpo.android.ui.domains.SiteDomainActions
 import com.whumpo.android.ui.domains.SiteDomainContent
 import com.whumpo.android.ui.domains.SiteHostnameActions
@@ -58,6 +60,7 @@ import com.whumpo.android.ui.domains.rememberDomainTime
 import com.whumpo.core.auth.CoreSiteDomainController
 import com.whumpo.core.auth.CoreSiteHostnameController
 import com.whumpo.core.auth.CoreOrganizationSessionController
+import com.whumpo.core.auth.CoreOfflineWorkController
 import com.whumpo.core.auth.CoreOwnershipController
 import com.whumpo.core.auth.CorePartnerController
 import com.whumpo.core.auth.CoreConnectedOnboardingController
@@ -70,6 +73,9 @@ import com.whumpo.android.ui.onboarding.ConnectedSetupContent
 import com.whumpo.android.ui.onboarding.DiscoveryHandoffContent
 import com.whumpo.android.ui.onboarding.DiscoveryHandoffInventory
 import com.whumpo.android.ui.ownership.CoreOwnershipSection
+import com.whumpo.android.ui.work.OfflineWorkActions
+import com.whumpo.android.ui.work.OfflineWorkContent
+import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -91,12 +97,15 @@ class CorePreviewActivity : ComponentActivity() {
         api = coreApiClient(CoreOrigin.allowlisted(origin, setOfNotNull(rpId?.let { "https://$it" }), debugLoopback = true))
         controller = CoreOrganizationSessionController(api)
         account = CoreAccountSecurityController(api, controller, rpId)
+        val offlineWork = CoreOfflineWorkStore(File(noBackupFilesDir, "core-offline-work")) {
+            KeystoreSecretBox("whumpo.core.offline-work.v1")
+        }
         val passkeys = NativeAccountPasskeys(applicationContext, activities)
         setContent {
             WhumpoEntryTheme {
                 Surface {
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                        CorePreview(controller, account, passkeys, passkeysConfigured = rpId != null)
+                        CorePreview(controller, account, passkeys, offlineWork, passkeysConfigured = rpId != null)
                     }
                 }
             }
@@ -130,6 +139,7 @@ internal fun CorePreview(
     controller: CoreOrganizationSessionController,
     account: CoreAccountSecurityController,
     passkeys: NativeAccountPasskeys,
+    offlineWork: CoreOfflineWorkStore,
     passkeysConfigured: Boolean,
 ) {
     val state by controller.state.collectAsState()
@@ -165,6 +175,7 @@ internal fun CorePreview(
     var showHostname by remember(active?.epoch) { mutableStateOf(false) }
     var restoreHostnameFocus by remember(active?.epoch) { mutableStateOf(false) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
+    var showOfflineWork by remember(active?.epoch) { mutableStateOf(false) }
     var discoveryWorkTask by remember(active?.epoch) { mutableStateOf<CoreWorkTask?>(null) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
     var showPartner by remember(active?.epoch) { mutableStateOf(false) }
@@ -186,6 +197,25 @@ internal fun CorePreview(
                 delay(minOf(remaining, 60_000))
             }
         }
+    }
+    // Keep the organization and Work refresh effects outside the offline pane.
+    if (active != null && ready && active.session.role != CoreRole.viewer && showOfflineWork) {
+        key(active.epoch) {
+            CoreOfflineWorkPreview(controller, active, offlineWork,
+                openTask = { task ->
+                    controller.commitIfCurrent(active.epoch) {
+                        discoveryWorkTask = task
+                        showOfflineWork = false
+                    }
+                },
+                signOut = {
+                    account.clear()
+                    showSecurity = false
+                },
+                close = { showOfflineWork = false },
+            )
+        }
+        return
     }
     LaunchedEffect(setup) { setup?.refresh() }
     LaunchedEffect(active?.epoch, cursor) {
@@ -390,6 +420,7 @@ internal fun CorePreview(
                 canCreateTask = active.session.role != CoreRole.viewer,
                 canRecoverApplication = active.session.role == CoreRole.owner,
                 initialTask = discoveryWorkTask,
+                openOfflineWork = { showOfflineWork = true },
             ) {
                 showWork = false
                 discoveryWorkTask = null
@@ -447,6 +478,50 @@ internal fun CorePreview(
         next = { cursor = it },
         signOut = signOut,
     )
+}
+
+@Composable
+private fun CoreOfflineWorkPreview(
+    sessions: CoreOrganizationSessionController,
+    active: CoreOrganizationSessionController.State.Active,
+    store: CoreOfflineWorkStore,
+    openTask: (CoreWorkTask) -> Unit,
+    signOut: () -> Unit,
+    close: () -> Unit,
+) {
+    val controller = remember(sessions, active, store) { CoreOfflineWorkController(sessions, active, store) }
+    DisposableEffect(controller) { onDispose { controller.retire() } }
+    val state by controller.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    val back: () -> Unit = {
+        if (state.connected) {
+            controller.offline()
+            scope.launch { controller.load() }
+        } else {
+            close()
+        }
+    }
+    LaunchedEffect(controller) { controller.load() }
+    BackHandler(onBack = back)
+    OfflineWorkContent(state, OfflineWorkActions(
+        save = { title, description -> scope.launch { controller.save(title, description) } },
+        discard = { scope.launch { controller.discard() } },
+        reconnect = { scope.launch { controller.reconnect() } },
+        chooseWorkspace = { scope.launch { controller.chooseWorkspace(it) } },
+        changeWorkspace = controller::changeWorkspace,
+        moreWorkspaces = { scope.launch { controller.moreWorkspaces() } },
+        chooseProject = { scope.launch { controller.chooseProject(it) } },
+        moreProjects = { scope.launch { controller.moreProjects() } },
+        submit = { scope.launch { controller.submit(it) } },
+        cancelReview = controller::cancelReview,
+        checkTask = { scope.launch { controller.checkTask() } },
+        openTask = openTask,
+        back = back,
+        signOut = {
+            controller.retire()
+            signOut()
+        },
+    ))
 }
 
 @Composable
