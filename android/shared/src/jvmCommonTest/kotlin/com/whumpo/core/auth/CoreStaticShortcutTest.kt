@@ -28,6 +28,30 @@ class CoreStaticShortcutTest {
     }
 
     @Test
+    fun lateReadyReadDoesNotReplaceAChoiceOrOwnershipReviewInTheSameEpoch() = runTest {
+        val epoch = 4L
+        for (changesRoute in listOf(true, false)) {
+            val request = assertNotNull(CoreStaticShortcutRequest.receive(today, epoch, 7))
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var hubRoute = true
+            var ownershipReview = false
+            val pending = async {
+                request.verify({ epoch.takeIf { hubRoute && !ownershipReview } }, { 7 }) {
+                    entered.complete(Unit)
+                    release.await()
+                    true
+                }
+            }
+            entered.await()
+            if (changesRoute) hubRoute = false else ownershipReview = true
+            release.complete(Unit)
+            assertFalse(pending.await())
+            assertFalse(request.verify({ epoch }, { 7 }) { error("A stale request replayed after the hub returned") })
+        }
+    }
+
+    @Test
     fun lateReadCannotOpenAcrossScopeExpiryOrLossOfReadyForeground() = runTest {
         suspend fun verifyAfter(change: () -> Unit, epoch: () -> Long?, time: () -> Long) {
             val request = assertNotNull(CoreStaticShortcutRequest.receive(work, 4, 7))

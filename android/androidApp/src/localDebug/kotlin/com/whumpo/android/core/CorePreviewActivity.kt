@@ -28,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -101,7 +100,7 @@ class CorePreviewActivity : ComponentActivity() {
     private var adaptiveForeground by mutableStateOf(false)
     private var adaptiveGeneration by mutableStateOf(0L)
     private var adaptiveCacheFailure by mutableStateOf(false)
-    private var shortcutReadyEpoch: Long? = null
+    private var shortcutReadyEpoch: () -> Long? = { null }
     private var shortcut by mutableStateOf<CoreStaticShortcutRequest?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -142,7 +141,7 @@ class CorePreviewActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val current = (controller.state.value as? CoreOrganizationSessionController.State.Active)?.epoch
-        val ready = shortcutReadyEpoch?.takeIf { it == current && controller.commitIfCurrent(it) {} }
+        val ready = shortcutReadyEpoch()?.takeIf { it == current && controller.commitIfCurrent(it) {} }
         shortcut = CoreStaticShortcutRequest.receive(intent.action, ready, SystemClock.elapsedRealtime())
     }
 
@@ -196,7 +195,7 @@ internal fun CorePreview(
     eraseCacheActor: (String) -> Unit,
     showCacheFailure: Boolean,
     shortcut: CoreStaticShortcutRequest?,
-    publishShortcutReady: (Long?) -> Unit,
+    publishShortcutReady: (() -> Long?) -> Unit,
     finishShortcut: (CoreStaticShortcutRequest) -> Unit,
 ) {
     val state by controller.state.collectAsState()
@@ -220,6 +219,7 @@ internal fun CorePreview(
     }
     val ready = setupState.canOpenWorkspace && setupState.readiness?.orgId == active?.session?.orgId
     val ownership = remember(controller, active) { active?.let { CoreOwnershipController(controller, it) } }
+    var ownershipSignInReview by remember(active?.epoch) { mutableStateOf(false) }
     val actions = rememberCoroutineScope()
     var message by remember(active?.epoch) { mutableStateOf<String?>(null) }
     var memberships by remember(active?.epoch) { mutableStateOf<CoreMembershipPage?>(null) }
@@ -250,19 +250,25 @@ internal fun CorePreview(
             CoreAdaptiveHomeController(controller, it, cache = adaptiveCache, onCacheFailure = cacheFailure)
         }
     }
-    val shortcutHub = ready && page != null && !setupState.busy &&
-        (nextStepChosen || active?.let { setupState.nextStepProject(it.session.orgId) } == null) &&
-        !securityPresented && !showWork && !showToday && !showOfflineWork && !showPartner &&
-        !showInvitations && !showDiscovery && !showHandoff && !showDomains && !showHostname
-    val currentShortcutHub by rememberUpdatedState(shortcutHub)
-    SideEffect { publishShortcutReady(active?.epoch?.takeIf { shortcutHub }) }
-    LaunchedEffect(shortcut, adaptiveForeground, adaptiveGeneration, active?.epoch, shortcutHub) {
+    fun shortcutHubEpoch(): Long? {
+        val session = active ?: return null
+        val liveSetup = setup?.state?.value ?: return null
+        val ownershipState = ownership?.state?.value
+        if (!liveSetup.canOpenWorkspace || liveSetup.readiness?.orgId != session.session.orgId ||
+            page == null || liveSetup.busy || (!nextStepChosen && liveSetup.nextStepProject(session.session.orgId) != null) ||
+            ownershipSignInReview || ownershipState?.review != null || ownershipState?.busy == true ||
+            showWork || showToday || showOfflineWork || showPartner || showInvitations || showDiscovery ||
+            showHandoff || showDomains || showHostname) return null
+        return session.epoch
+    }
+    SideEffect { publishShortcutReady(::shortcutHubEpoch) }
+    LaunchedEffect(shortcut, adaptiveForeground, adaptiveGeneration, active?.epoch) {
         val request = shortcut ?: return@LaunchedEffect
         if (!adaptiveForeground) return@LaunchedEffect
         try {
             val session = active ?: return@LaunchedEffect
             fun currentEpoch(): Long? = session.epoch.takeIf {
-                currentShortcutHub && isForegroundGeneration(adaptiveGeneration) && controller.commitIfCurrent(it) {}
+                shortcutHubEpoch() == it && isForegroundGeneration(adaptiveGeneration) && controller.commitIfCurrent(it) {}
             }
             if (!request.verify(::currentEpoch, SystemClock::elapsedRealtime) {
                     controller.organizationWhenReady(session) != null
@@ -657,7 +663,8 @@ internal fun CorePreview(
         ownership = {
             if (active != null && ownership != null) {
                 key(active.epoch) {
-                    CoreOwnershipSection(ownership, active.session.userId, active.session.role) {
+                    CoreOwnershipSection(ownership, active.session.userId, active.session.role,
+                        onSignInReview = { ownershipSignInReview = it }) {
                         account.clear()
                         showSecurity = true
                     }
