@@ -256,9 +256,9 @@ class CoreOfflineWorkController(
             evidence.taskId != taskId || evidence.taskVersion != 1L || !coreDigest.matches(evidence.taskDigest) ||
             !orderedTimes(receipt.verifiedAt, receipt.createdAt)
         ) throw CoreProtocolException()
-        val task = online { sessions.task(taskId, pending.projectId) }
+        val task = online { sessions.canonicalTaskForPartner(active, taskId) }
         val original = pending.decode()
-        if (task.version !in evidence.taskVersion..CORE_MAX_VERSION ||
+        if (task.projectId != pending.projectId || task.version !in evidence.taskVersion..CORE_MAX_VERSION ||
             (task.version == evidence.taskVersion && (task.title != original.title || task.description != original.description))
         ) throw CoreProtocolException()
         return task

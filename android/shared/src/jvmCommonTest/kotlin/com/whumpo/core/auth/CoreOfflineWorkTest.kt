@@ -9,9 +9,11 @@ import com.whumpo.core.api.CoreApiClient
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreTaskOutcome
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
+import io.ktor.client.request.HttpRequestData
 import io.ktor.client.request.HttpResponseData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -19,6 +21,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -29,8 +32,11 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -58,7 +64,7 @@ class CoreOfflineWorkTest {
     private data class Write(val key: String, val body: String)
     private enum class Delivery { DroppedRequest, DroppedReply, Delivered }
 
-    private inner class Fixture {
+    private inner class Fixture(engineDispatcher: CoroutineDispatcher? = null) {
         var role = "operator"
         var projectAvailable = true
         var delivery = Delivery.Delivered
@@ -66,10 +72,16 @@ class CoreOfflineWorkTest {
         var receiptBody = receipt
         var taskBody = task
         var beforeEffect: suspend () -> Unit = {}
+        var onReceipt: () -> Unit = {}
         val calls = mutableListOf<String>()
         val writes = mutableListOf<Write>()
 
-        val engine = MockEngine { request ->
+        val engine = MockEngine(MockEngineConfig().apply {
+            dispatcher = engineDispatcher
+            addHandler { request -> reply(request) }
+        })
+
+        private suspend fun MockRequestHandleScope.reply(request: HttpRequestData): HttpResponseData {
             val authorization = request.headers[HttpHeaders.Authorization]
             assertNull(request.headers[HttpHeaders.Origin])
             val session = when (authorization) {
@@ -79,7 +91,7 @@ class CoreOfflineWorkTest {
             }
             val path = request.url.encodedPath
             calls += path
-            when (path) {
+            return when (path) {
                 "/v1/auth/session" -> response(
                     """{"sessionId":"$session","orgId":"org-1","userId":"actor-1","role":"$role","expiresAt":9000}""",
                 )
@@ -104,7 +116,10 @@ class CoreOfflineWorkTest {
                     beforeEffect()
                     response("""{"id":"effect-1","runId":"run-1","state":"confirmed","taskId":"task-1"}""")
                 }
-                "/v1/effects/effect-1/receipts" -> response(receiptBody)
+                "/v1/effects/effect-1/receipts" -> {
+                    onReceipt()
+                    response(receiptBody)
+                }
                 "/v1/tasks/task-1" -> response(taskBody)
                 else -> error("Unexpected fixture path")
             }
@@ -263,6 +278,58 @@ class CoreOfflineWorkTest {
                 assertTrue(awaiting.isCancelled)
                 assertFalse(fixture.calls.contains("/v1/effects/effect-1/receipts"))
                 assertNotNull(store.read(replacement.scope))
+                reopenedModel.retire()
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun replacementAfterTheReceiptCannotReadTheTaskForTheOldReview() = runTest {
+        val fixture = Fixture(Dispatchers.Unconfined)
+        val directory = createTempDirectory().toFile()
+        try {
+            CoreApiClient(fixture.engine, origin).use { api ->
+                val checksUntilTaskRead = AtomicInteger()
+                lateinit var sessions: CoreOrganizationSessionController
+                sessions = CoreOrganizationSessionController(api) {
+                    if (checksUntilTaskRead.getAndUpdate { (it - 1).coerceAtLeast(0) } == 1) {
+                        runBlocking { sessions.establish(reopened) }
+                    }
+                    1
+                }
+                val active = sessions.establish(source)
+                val store = CoreOfflineWorkStore(directory) { FakeSecretBox() }
+                val model = controller(sessions, active, store)
+                model.load()
+                model.save(title, description)
+                model.submit(model.reviewSaved())
+                val pending = assertNotNull(store.read(active.scope))
+
+                // Let the receipt request and its post-read check finish, then replace the
+                // credential inside the last epoch check before the canonical task GET.
+                fixture.onReceipt = { checksUntilTaskRead.set(3) }
+                val read = launch { model.checkTask() }
+                read.join()
+
+                val replacement = sessions.state.value as CoreOrganizationSessionController.State.Active
+                assertEquals("session-2", replacement.session.sessionId)
+                assertTrue(read.isCancelled)
+                assertEquals(1, fixture.calls.count { it == "/v1/effects/effect-1/receipts" })
+                assertFalse("/v1/tasks/task-1" in fixture.calls)
+                assertEquals(pending, store.read(replacement.scope))
+                assertEquals(1, fixture.writes.size)
+                model.retire()
+
+                fixture.onReceipt = {}
+                val reopenedModel = controller(sessions, replacement, store)
+                reopenedModel.load()
+                reopenedModel.reconnect()
+                reopenedModel.checkTask()
+                assertEquals("task-1", (reopenedModel.state.value.outcome as CoreTaskOutcome.Confirmed).task.id)
+                assertNull(store.read(replacement.scope))
+                assertEquals(1, fixture.writes.size)
                 reopenedModel.retire()
             }
         } finally {
