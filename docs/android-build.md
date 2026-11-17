@@ -102,6 +102,24 @@ Confirming sends the reviewed action. If the designation or transfer changes, re
 
 The shared JVM suite uses synthetic responses to verify request shape, closed response decoding, pagination, review invalidation, exact replay and session switching. Android host tests also exercise the claim review and retry controls at large text size. See [Android verification](android-verification.md) for the full client gate.
 
+### Core task notifications
+
+From **Today** or **Work** in a ready connected `localDebug` organization,
+open **Task notifications**. The list uses the active workspace session.
+Owners can open pending task approvals. A confirmed task result displays after
+the app matches its verified receipt to the selected notification and workspace.
+Opening a notification displays its checked details. Approval decisions take
+place outside the inbox.
+
+Use **Acknowledge notification** to mark a row as seen. If the response is lost,
+the same acknowledgment can be tried again. The server returns the original
+acknowledgment time. **Refresh notifications** starts over from the first page.
+An unavailable or expired selection clears the result and offers a fresh read.
+Leaving the inbox or changing sessions cancels in-flight work and clears local
+inbox state. Returning after the app was backgrounded starts a fresh read.
+
+This preview pulls task notifications on demand.
+
 ### Core Partner workspace
 
 From a connected `localDebug` Core organization, choose **Open Partner**.

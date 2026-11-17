@@ -449,7 +449,7 @@ internal fun CorePreview(
     }
     if (active != null && ready && showToday) {
         key(active.epoch) {
-            CoreTodayPreview(controller, active.epoch, page?.profile?.displayName ?: active.session.orgId) {
+            CoreTodayPreview(controller, active, page?.profile?.displayName ?: active.session.orgId) {
                 showToday = false
             }
         }
