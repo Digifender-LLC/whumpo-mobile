@@ -1,5 +1,15 @@
 package com.whumpo.android.core
 
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
+import com.whumpo.android.ui.home.CoreAdaptiveFocus
+import com.whumpo.android.ui.home.CoreTodayFocusPlacement
+import com.whumpo.core.api.CoreAdaptiveCategory
+import com.whumpo.core.auth.CoreAdaptiveHomeController
+import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -49,9 +59,15 @@ internal fun CoreTodayPreview(
     controller: CoreOrganizationSessionController,
     active: CoreOrganizationSessionController.State.Active,
     organizationName: String,
+    focus: CoreAdaptiveHomeController? = null,
+    availability: (Set<CoreAdaptiveCategory>) -> Unit = {},
+    openFocus: (CoreAdaptiveCategory) -> Unit = {},
     close: () -> Unit,
 ) {
     val epoch = active.epoch
+    val websiteAnchor = remember { BringIntoViewRequester() }
+    val resultsAnchor = remember { BringIntoViewRequester() }
+    val actions = rememberCoroutineScope()
     var inbox by remember { mutableStateOf(false) }
     if (inbox) {
         CoreInboxPreview(controller, active, organizationName) { inbox = false }
@@ -81,6 +97,7 @@ internal fun CoreTodayPreview(
             Text(organizationName, style = MaterialTheme.typography.labelLarge)
             when {
                 openTask != null -> WorkRead(controller, epoch, { controller.todayTask(openTask.today, openTask.source) }) { detail ->
+                    LaunchedEffect(openTask) { focus?.open(CoreAdaptiveCategory.Work) }
                     Text(detail.title, style = MaterialTheme.typography.headlineMedium)
                     Text(detail.status.label, style = MaterialTheme.typography.titleMedium)
                     detail.description?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
@@ -93,6 +110,7 @@ internal fun CoreTodayPreview(
                         if (item == null) {
                             Text("This receipt is no longer listed in the website history.")
                         } else {
+                            LaunchedEffect(openReceipt) { focus?.open(CoreAdaptiveCategory.WebsiteActivity) }
                             TodayCard {
                                 Text(
                                     if (item.operation == CoreWebsiteOperation.Publish) "Website published" else "Website withdrawn",
@@ -111,11 +129,38 @@ internal fun CoreTodayPreview(
                     WhumpoQuietButton(onClick = { inbox = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Task notifications")
                     }
-                    WorkRead(controller, epoch, { controller.today() }) { today ->
+                    WorkRead(controller, epoch, { controller.today() }, onUnavailable = { availability(emptySet()) }) { today ->
+                        val readable = buildSet {
+                            if (today.briefing.sections.siteActivity?.items?.any {
+                                    it.decisionAccess == null && !it.source.kind.review
+                                } == true) add(CoreAdaptiveCategory.WebsiteActivity)
+                            if (today.briefing.sections.verified.items.isNotEmpty()) add(CoreAdaptiveCategory.VerifiedResults)
+                        }
+                        LaunchedEffect(today) { availability(readable) }
                         TodayBriefing(
                             today,
                             openTask = { source -> controller.commitIfCurrent(epoch) { task = TodayTask(today, source) } },
                             openReceipt = { activity -> controller.commitIfCurrent(epoch) { receipt = TodayReceipt(today, activity) } },
+                            websiteAnchor = websiteAnchor,
+                            resultsAnchor = resultsAnchor,
+                            focusSection = {
+                                if (focus != null) {
+                                    val current by focus.state.collectAsState()
+                                    CoreAdaptiveFocus(current, open = { category ->
+                                        when (category) {
+                                            CoreAdaptiveCategory.Work, CoreAdaptiveCategory.Partner -> openFocus(category)
+                                            CoreAdaptiveCategory.WebsiteActivity, CoreAdaptiveCategory.VerifiedResults -> {
+                                                if (category in readable) actions.launch {
+                                                    if (category == CoreAdaptiveCategory.WebsiteActivity) websiteAnchor.bringIntoView()
+                                                    else resultsAnchor.bringIntoView()
+                                                    focus.open(category)
+                                                }
+                                            }
+                                        }
+                                    }, save = { review, enabled, pins -> actions.launch { focus.preferences(review, enabled, pins) } },
+                                        reset = { review -> actions.launch { focus.reset(review) } }, retry = { actions.launch { focus.retry() } })
+                                }
+                            },
                         )
                     }
                 }
@@ -129,6 +174,9 @@ private fun TodayBriefing(
     today: CoreOrganizationSessionController.Today,
     openTask: (CoreTodayTaskSource) -> Unit,
     openReceipt: (CoreTodaySiteActivity) -> Unit,
+    websiteAnchor: BringIntoViewRequester,
+    resultsAnchor: BringIntoViewRequester,
+    focusSection: @Composable () -> Unit,
 ) {
     val briefing = today.briefing
     val sections = briefing.sections
@@ -144,6 +192,7 @@ private fun TodayBriefing(
             Text("You’re caught up", style = MaterialTheme.typography.titleMedium)
             Text("There are no due tasks or decisions waiting in this briefing.")
         }
+        focusSection()
         return
     }
     TodaySection("Blocked priorities", sections.blocked, "Nothing is blocked.") { item ->
@@ -174,19 +223,27 @@ private fun TodayBriefing(
             Text(decisionLabel(item.decisionAccess), style = MaterialTheme.typography.bodySmall)
         }
     }
-    TodaySection("Verified task results", sections.verified, "No confirmed task results in this window.") { item ->
-        TodayCard {
-            Text(operationLabel(item.operation), style = MaterialTheme.typography.titleMedium)
-            Text("Confirmed task receipt · ${readable(item.observedAt)}")
-        }
-    }
-    val site = sections.siteActivity
-    if (site == null) {
-        Text("Website activity", style = MaterialTheme.typography.titleLarge)
-        Text("No website activity in this window.")
-    } else {
-        TodaySection("Website activity", site, "") { item -> SiteActivity(item, openReceipt) }
-    }
+    CoreTodayFocusPlacement(sections.siteActivity,
+        websiteDecisions = { reviews ->
+            TodaySection("Website decisions", reviews, "") { item -> SiteActivity(item, openReceipt) }
+        },
+        focus = focusSection,
+        verifiedResults = {
+            Column(Modifier.bringIntoViewRequester(resultsAnchor)) {
+                TodaySection("Verified task results", sections.verified, "No confirmed task results in this window.") { item ->
+                    TodayCard {
+                        Text(operationLabel(item.operation), style = MaterialTheme.typography.titleMedium)
+                        Text("Confirmed task receipt · ${readable(item.observedAt)}")
+                    }
+                }
+            }
+        },
+        websiteReceipts = { receipts ->
+            Column(Modifier.bringIntoViewRequester(websiteAnchor)) {
+                TodaySection("Website activity", receipts, "No website activity in this window.") { item -> SiteActivity(item, openReceipt) }
+            }
+        },
+    )
 }
 
 @Composable

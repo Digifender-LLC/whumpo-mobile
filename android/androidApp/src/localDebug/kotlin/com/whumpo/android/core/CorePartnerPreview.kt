@@ -55,6 +55,7 @@ internal fun CorePartnerPreview(
     organization: String,
     signInAgain: () -> Unit,
     close: () -> Unit,
+    onReadable: (Boolean) -> Unit = {},
 ) {
     val state by controller.state.collectAsState()
     val conversation = state.conversation
@@ -64,7 +65,7 @@ internal fun CorePartnerPreview(
         val back = { if (creating) creating = false else close() }
         BackHandler(onBack = back)
         LaunchedEffect(Unit) {
-            if (state.conversations.isEmpty() && state.history.isEmpty()) controller.directory(state.directory)
+            controller.directory(state.directory, onRead = onReadable)
         }
         PartnerPage {
             PartnerButton(if (creating) "Back to conversations" else "Back to organization", onClick = back)

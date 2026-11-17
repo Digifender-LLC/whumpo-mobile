@@ -51,6 +51,7 @@ internal fun CoreWorkPreview(
     openOfflineWork: () -> Unit,
     workWebOrigin: CoreWorkWebOrigin?,
     signOut: () -> Unit,
+    onReadable: (Boolean) -> Unit = {},
     close: () -> Unit,
 ) {
     val epoch = active.epoch
@@ -141,7 +142,8 @@ internal fun CoreWorkPreview(
                             Text("Capture offline task")
                         }
                     }
-                    WorkRead(controller, epoch, { controller.work(workCursor) }) { page ->
+                    WorkRead(controller, epoch, { controller.work(workCursor) }, onUnavailable = { onReadable(false) }) { page ->
+                        LaunchedEffect(page) { onReadable(true) }
                         if (page.items.isEmpty()) {
                             Card(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -261,6 +263,7 @@ internal fun <T> WorkRead(
     controller: CoreOrganizationSessionController,
     epoch: Long,
     read: suspend () -> T,
+    onUnavailable: () -> Unit = {},
     content: @Composable (T) -> Unit,
 ) {
     var result by remember { mutableStateOf<WorkReadResult<T>>(WorkReadResult.Loading) }
@@ -277,7 +280,10 @@ internal fun <T> WorkRead(
                 404 -> "This item is no longer available."
                 else -> "Could not load this view."
             }
-            controller.commitIfCurrent(epoch) { result = WorkReadResult.Failed(message) }
+            controller.commitIfCurrent(epoch) {
+                result = WorkReadResult.Failed(message)
+                onUnavailable()
+            }
         }
     }
     when (val current = result) {

@@ -87,22 +87,34 @@ class CorePartnerController(
     private var retired = false
     private val draft get() = current.conversation?.id?.let(drafts::get)
 
-    suspend fun directory(kind: PartnerDirectory, more: Boolean = false) = perform {
+    suspend fun readableDirectory() {
+        protocol.active(null)
+    }
+
+    suspend fun directory(kind: PartnerDirectory, more: Boolean = false, onRead: (Boolean) -> Unit = {}) = perform {
         val after = current.nextDirectory.takeIf { more && current.directory == kind }
         val conversations = if (after != null) current.conversations else emptyList()
         val topics = if (after != null) current.history else emptyList()
-        when (kind) {
-            PartnerDirectory.Active -> {
-                val page = protocol.active(after)
-                update { copy(directory = kind, conversations = (conversations + page.items).takeLast(100),
-                    history = emptyList(), nextDirectory = page.nextCursor) }
+        try {
+            when (kind) {
+                PartnerDirectory.Active -> {
+                    val page = protocol.active(after)
+                    update { copy(directory = kind, conversations = (conversations + page.items).takeLast(100),
+                        history = emptyList(), nextDirectory = page.nextCursor) }
+                }
+                PartnerDirectory.History -> {
+                    val page = protocol.history(after)
+                    update { copy(directory = kind, history = (topics + page.items).takeLast(100),
+                        conversations = emptyList(), nextDirectory = page.nextCursor) }
+                }
             }
-            PartnerDirectory.History -> {
-                val page = protocol.history(after)
-                update { copy(directory = kind, history = (topics + page.items).takeLast(100),
-                    conversations = emptyList(), nextDirectory = page.nextCursor) }
-            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            onRead(false)
+            throw error
         }
+        onRead(true)
     }
 
     suspend fun agents(more: Boolean = false) = perform {
