@@ -163,6 +163,43 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return "/v1/projects/$project/domain-claims" + (claim?.let { "/$it" } ?: "")
     }
 
+    internal suspend fun hostnameStatus(token: String, org: String, project: String): CoreHostnameAttachment? =
+        decodeHostnameStatus(call(token, hostnamePath(project), requireJson = true, maxResponseBytes = 4096), org, project)
+
+    internal suspend fun hostnameReview(
+        token: String,
+        org: String,
+        project: String,
+        claim: CoreDomainClaim,
+        publication: CoreHostnamePublication,
+    ): CoreHostnameReviewResponse {
+        val selection = buildJsonObject {
+            put("claimId", claim.id)
+            put("claimGeneration", claim.generation)
+            put("targetId", publication.targetId)
+            put("targetVersion", publication.targetVersion)
+        }.toString()
+        return decodeHostnameReview(call(token, hostnamePath(project) + "/review", HttpMethod.Post, selection,
+            requireJson = true, maxResponseBytes = 4096), org, project, claim, publication)
+    }
+
+    internal suspend fun submitHostnameCommand(
+        token: String,
+        org: String,
+        project: String,
+        command: CoreHostnameCommand,
+        key: String,
+    ): CoreHostnameReceipt {
+        require(coreIdentifier.matches(key) && command.base?.id?.let(coreIdentifier::matches) != false)
+        return decodeHostnameReceipt(call(token, hostnamePath(project) + command.suffix, HttpMethod.Post, command.body,
+            key = key, requireJson = true, maxResponseBytes = 4096), org, project, command)
+    }
+
+    private fun hostnamePath(project: String): String {
+        require(coreIdentifier.matches(project))
+        return "/v1/projects/$project/hostname-attachment"
+    }
+
     internal suspend fun onboardingSummary(token: String): CoreOnboardingSummary {
         var tag: List<String>? = null
         val response = decodeConnectedOnboarding<CoreOnboardingSummary>(call(token, "/v1/onboarding",

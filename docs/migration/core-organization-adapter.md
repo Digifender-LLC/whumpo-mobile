@@ -56,6 +56,23 @@ It reports the confirmed version or the absence of a current publication. The
 result describes publication state at the time of the check. Manual TXT
 verification remains in its existing Domains screen.
 
+In a ready owner workspace, **Website hostname** reads the selected project's
+current attachment in the local debug app. Reserved, Eligible at last check,
+Reproof required, and Detaching describe the recorded attachment state. The
+screen presents the hostname as text.
+
+Attach or resume reviews match a current website publication and a currently
+verified domain. A review shows the hostname and website version. A disable
+review binds the held attachment and remains available when a TXT proof or
+publication is unavailable. Disabling closes local serving and keeps the
+reservation until removal is confirmed.
+
+After an uncertain response, **Retry original request** uses the same request
+details in the original session. **Check current status** reads the latest
+attachment. Confirmed responses, conflicts, and replacement sessions recover
+through status reads. Project and session changes clear the screen's
+in-memory review and pending write.
+
 From **Work**, choose **New task**, a workspace, and a project. The preview reads
 available choices from `GET /v1/workspaces` and `GET /v1/projects?workspaceId=…`,
 then submits the title and optional description to `POST /v1/tasks`. A valid

@@ -33,6 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -50,8 +52,11 @@ import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.coreApiClient
 import com.whumpo.android.ui.domains.SiteDomainActions
 import com.whumpo.android.ui.domains.SiteDomainContent
+import com.whumpo.android.ui.domains.SiteHostnameActions
+import com.whumpo.android.ui.domains.SiteHostnameContent
 import com.whumpo.android.ui.domains.rememberDomainTime
 import com.whumpo.core.auth.CoreSiteDomainController
+import com.whumpo.core.auth.CoreSiteHostnameController
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import com.whumpo.core.auth.CoreOwnershipController
 import com.whumpo.core.auth.CorePartnerController
@@ -68,6 +73,7 @@ import com.whumpo.android.ui.ownership.CoreOwnershipSection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlin.time.Clock
 
 /** Debug harness only. The caller must set up the authorized local Worker and qualified RP. */
 class CorePreviewActivity : ComponentActivity() {
@@ -156,6 +162,8 @@ internal fun CorePreview(
     }
     DisposableEffect(domains) { onDispose { domains?.retire() } }
     var showDomains by remember(active?.epoch) { mutableStateOf(false) }
+    var showHostname by remember(active?.epoch) { mutableStateOf(false) }
+    var restoreHostnameFocus by remember(active?.epoch) { mutableStateOf(false) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var discoveryWorkTask by remember(active?.epoch) { mutableStateOf<CoreWorkTask?>(null) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
@@ -366,6 +374,15 @@ internal fun CorePreview(
         }
         return
     }
+    if (active != null && ready && active.session.role == CoreRole.owner && showHostname) {
+        key(active.epoch) {
+            CoreHostnamePreview(controller, active, freshSignIn) {
+                showHostname = false
+                restoreHostnameFocus = true
+            }
+        }
+        return
+    }
     if (active != null && ready && showWork) {
         key(active.epoch) {
             CoreWorkPreview(
@@ -418,6 +435,11 @@ internal fun CorePreview(
         openPartner = { showPartner = true },
         openDiscovery = openDiscovery,
         openDomains = if (active != null && ready && domains != null) ({ showDomains = true }) else null,
+        openHostname = if (active?.session?.role == CoreRole.owner && ready) ({
+            restoreHostnameFocus = false
+            showHostname = true
+        }) else null,
+        restoreHostnameFocus = restoreHostnameFocus,
         tryPartner = { showPartnerSample = true },
         tryOnboarding = { showOnboarding = true },
         signIn = { showSecurity = true },
@@ -425,6 +447,49 @@ internal fun CorePreview(
         next = { cursor = it },
         signOut = signOut,
     )
+}
+
+@Composable
+private fun CoreHostnamePreview(
+    sessions: CoreOrganizationSessionController,
+    active: CoreOrganizationSessionController.State.Active,
+    signIn: () -> Unit,
+    close: () -> Unit,
+) {
+    val controller = remember(sessions, active) { CoreSiteHostnameController(sessions, active) }
+    DisposableEffect(controller) { onDispose { controller.retire() } }
+    val state by controller.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    val closeScreen = {
+        if (state.review == null) close() else controller.cancelReview()
+    }
+    val now = rememberDomainTime(state.claims.orEmpty())
+    val deadline = state.review?.expiresAt ?: state.pendingUntil
+    LaunchedEffect(controller) { controller.refresh() }
+    LaunchedEffect(controller, deadline) {
+        if (deadline != null) {
+            delay((deadline - Clock.System.now()).inWholeMilliseconds.coerceAtLeast(1))
+            controller.expireReview()
+        }
+    }
+    BackHandler(onBack = closeScreen)
+    SiteHostnameContent(state, now, SiteHostnameActions(
+        refresh = { scope.launch { controller.refresh() } },
+        chooseDifferentProject = { scope.launch { controller.chooseDifferentProject() } },
+        chooseWorkspace = { scope.launch { controller.chooseWorkspace(it) } },
+        moreWorkspaces = { scope.launch { controller.moreWorkspaces() } },
+        chooseProject = { scope.launch { controller.chooseProject(it) } },
+        moreProjects = { scope.launch { controller.moreProjects() } },
+        loadClaims = { scope.launch { controller.loadClaims() } },
+        reviewClaim = { scope.launch { controller.reviewClaim(it) } },
+        reviewDisable = controller::reviewDisable,
+        confirm = { scope.launch { controller.confirm(it) } },
+        cancelReview = controller::cancelReview,
+        retry = { scope.launch { controller.retry() } },
+        checkStatus = { scope.launch { controller.checkStatus() } },
+        signIn = signIn,
+        back = closeScreen,
+    ))
 }
 
 @Composable
@@ -439,6 +504,8 @@ private fun CorePreviewContent(
     openPartner: () -> Unit,
     openDiscovery: (() -> Unit)?,
     openDomains: (() -> Unit)?,
+    openHostname: (() -> Unit)?,
+    restoreHostnameFocus: Boolean,
     tryPartner: () -> Unit,
     tryOnboarding: () -> Unit,
     signIn: () -> Unit,
@@ -446,6 +513,10 @@ private fun CorePreviewContent(
     next: (String?) -> Unit,
     signOut: () -> Unit,
 ) {
+    val hostnameFocus = remember { FocusRequester() }
+    LaunchedEffect(openHostname != null, restoreHostnameFocus) {
+        if (openHostname != null && restoreHostnameFocus) hostnameFocus.requestFocus()
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         when (state) {
             CoreOrganizationSessionController.State.SignedOut -> {
@@ -484,6 +555,12 @@ private fun CorePreviewContent(
                 if (openDomains != null) {
                     WhumpoQuietButton(onClick = openDomains, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Domain ownership")
+                    }
+                }
+                if (openHostname != null) {
+                    WhumpoQuietButton(onClick = openHostname,
+                        modifier = Modifier.focusRequester(hostnameFocus).heightIn(min = 48.dp)) {
+                        Text("Website hostname")
                     }
                 }
                 OrganizationActions(memberships, choose, next, signOut)
