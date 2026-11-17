@@ -288,7 +288,7 @@ internal fun CorePreview(
             page == null || liveSetup.busy || (!nextStepChosen && liveSetup.nextStepProject(session.session.orgId) != null) ||
             ownershipSignInReview || ownershipState?.review != null || ownershipState?.busy == true ||
             showWork || showToday || showOfflineWork || showPartner || showInvitations || showDiscovery ||
-            showHandoff || showDomains || showHostname) return null
+            showHandoff || showDomains || showHostname || showSourceHistory) return null
         return session.epoch
     }
     SideEffect { publishShortcutReady(::shortcutHubEpoch) }
