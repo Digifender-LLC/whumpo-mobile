@@ -60,6 +60,7 @@ internal fun CoreTodayPreview(
     active: CoreOrganizationSessionController.State.Active,
     organizationName: String,
     focus: CoreAdaptiveHomeController? = null,
+    readGeneration: Long = 0L,
     availability: (Set<CoreAdaptiveCategory>) -> Unit = {},
     openFocus: (CoreAdaptiveCategory) -> Unit = {},
     close: () -> Unit,
@@ -84,7 +85,7 @@ internal fun CoreTodayPreview(
         }
     }
     BackHandler(onBack = goBack)
-    key(task, receipt, refresh) {
+    key(task, receipt, refresh, readGeneration) {
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
