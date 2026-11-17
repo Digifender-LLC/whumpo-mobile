@@ -112,10 +112,11 @@ reviewed project.
 
 Set the local build property `-Pwhumpo.localWorkWebOrigin=https://work.example.test`
 to your configured HTTPS Web origin. In a verified organization, choose **Work**,
-then **Open Work link**. Paste the root Web link with its
+then **Open Work link**. Paste the Web link on `/` or the exact `/work-link` path with its
 `#work/task/v1/<taskId>/<creationEventId>` fragment and choose **Open link in this
 organization**. To try another organization, return to the organization chooser
-and paste the link again after choosing it.
+and paste the link again after choosing it. Use the configured HTTPS Web origin
+without a query, encoded path or trailing slash on `/work-link`.
 
 The core API verifies the scoped bookmark and original creation event before
 reading the current task. The result shows current Work state. Link input and
