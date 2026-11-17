@@ -79,6 +79,8 @@ import com.whumpo.android.ui.work.OfflineWorkActions
 import com.whumpo.android.ui.work.OfflineWorkContent
 import java.io.File
 import kotlinx.coroutines.delay
+import com.whumpo.core.api.CoreAdaptiveCategory
+import com.whumpo.core.auth.CoreAdaptiveHomeController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -89,6 +91,7 @@ class CorePreviewActivity : ComponentActivity() {
     private lateinit var controller: CoreOrganizationSessionController
     private lateinit var account: CoreAccountSecurityController
     private val activities = ActivityTracker()
+    private var adaptiveForeground by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -108,7 +111,7 @@ class CorePreviewActivity : ComponentActivity() {
             WhumpoEntryTheme {
                 Surface {
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                        CorePreview(controller, account, passkeys, offlineWork, workWebOrigin, passkeysConfigured = rpId != null)
+                        CorePreview(controller, account, passkeys, offlineWork, workWebOrigin, passkeysConfigured = rpId != null, adaptiveForeground = adaptiveForeground)
                     }
                 }
             }
@@ -118,6 +121,16 @@ class CorePreviewActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         activities.started(this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        adaptiveForeground = true
+    }
+
+    override fun onPause() {
+        adaptiveForeground = false
+        super.onPause()
     }
 
     override fun onStop() {
@@ -145,6 +158,7 @@ internal fun CorePreview(
     offlineWork: CoreOfflineWorkStore,
     workWebOrigin: CoreWorkWebOrigin?,
     passkeysConfigured: Boolean,
+    adaptiveForeground: Boolean = false,
 ) {
     val state by controller.state.collectAsState()
     val active = state as? CoreOrganizationSessionController.State.Active
@@ -190,10 +204,43 @@ internal fun CorePreview(
     var showPartnerSample by remember(state) { mutableStateOf(false) }
     var showOnboarding by remember(state) { mutableStateOf(false) }
     var showSecurity by remember { mutableStateOf(false) }
+    val securityPresented = active == null && showSecurity
+    val focus = remember(controller, active, ready) {
+        active?.takeIf { ready }?.let { CoreAdaptiveHomeController(controller, it) }
+    }
+    val focusForeground = focus != null && adaptiveForeground && !securityPresented
+    var primaryAvailability by remember(focus) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
+    var todayAvailability by remember(focus) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
+    var requestedFocus by remember(focus) { mutableStateOf<CoreAdaptiveCategory?>(null) }
+    DisposableEffect(focus, focusForeground) {
+        focus?.foreground(focusForeground)
+        onDispose { focus?.foreground(false) }
+    }
+    LaunchedEffect(focus, focusForeground) {
+        if (!focusForeground) requestedFocus = null
+        if (focus != null && focusForeground) {
+            while (true) {
+                if (showToday) focus.refresh()
+                delay(300_000)
+            }
+        }
+    }
+    fun destinationRead(category: CoreAdaptiveCategory, readable: Boolean) {
+        if (!focusForeground || active == null) return
+        controller.commitIfCurrent(active.epoch) {
+            primaryAvailability = if (readable) primaryAvailability + category else primaryAvailability - category
+            focus?.availability(primaryAvailability + todayAvailability)
+            if (requestedFocus == category) {
+                requestedFocus = null
+                if (readable) actions.launch { focus?.open(category) }
+            }
+        }
+    }
     val accountState by account.state.collectAsState()
     var cursor by remember(active?.epoch) { mutableStateOf<String?>(null) }
     LaunchedEffect(active?.epoch) {
         if (active != null) {
+            controller.commitIfCurrent(active.epoch) { showSecurity = false }
             while (true) {
                 val remaining = active.session.expiresAt - System.currentTimeMillis()
                 if (remaining <= 0) {
@@ -398,7 +445,7 @@ internal fun CorePreview(
         LocalPartnerSample { showPartnerSample = false }
         return
     }
-    if (active == null && showSecurity) {
+    if (securityPresented) {
         AccountSecurityScreen(account, accountState, passkeys, passkeysConfigured) { showSecurity = false }
         return
     }
@@ -447,7 +494,9 @@ internal fun CorePreview(
                 openOfflineWork = { showOfflineWork = true },
                 workWebOrigin = workWebOrigin,
                 signOut = signOut,
+                onReadable = { destinationRead(CoreAdaptiveCategory.Work, it) },
             ) {
+                requestedFocus = null
                 showWork = false
                 discoveryWorkTask = null
             }
@@ -463,16 +512,53 @@ internal fun CorePreview(
                     account.clear()
                     showSecurity = true
                 },
-                close = { showPartner = false },
+                close = { requestedFocus = null; showPartner = false },
+                onReadable = { destinationRead(CoreAdaptiveCategory.Partner, it) },
             )
         }
         return
     }
     if (active != null && ready && showToday) {
         key(active.epoch) {
-            CoreTodayPreview(controller, active, page?.profile?.displayName ?: active.session.orgId) {
-                showToday = false
+            LaunchedEffect(focus, focusForeground) {
+                if (focus != null && focusForeground) {
+                    suspend fun readable(read: suspend () -> Unit): Boolean = try {
+                        read()
+                        true
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) { false }
+                    val destinations = buildSet {
+                        if (readable { controller.work() }) add(CoreAdaptiveCategory.Work)
+                        if (partner != null && readable { partner.readableDirectory() }) add(CoreAdaptiveCategory.Partner)
+                    }
+                    controller.commitIfCurrent(active.epoch) {
+                        primaryAvailability = destinations
+                        focus.availability(primaryAvailability + todayAvailability)
+                    }
+                    focus.enterToday()
+                }
             }
+            DisposableEffect(focus) { onDispose { focus?.leaveToday() } }
+            CoreTodayPreview(controller, active, page?.profile?.displayName ?: active.session.orgId,
+                focus = focus.takeIf { focusForeground },
+                availability = { destinations ->
+                    controller.commitIfCurrent(active.epoch) {
+                        todayAvailability = destinations
+                        focus?.availability(primaryAvailability + destinations)
+                    }
+                },
+                openFocus = { category ->
+                    controller.commitIfCurrent(active.epoch) {
+                        if (focusForeground && category in primaryAvailability) {
+                            requestedFocus = category
+                            showToday = false
+                            if (category == CoreAdaptiveCategory.Work) showWork = true
+                            if (category == CoreAdaptiveCategory.Partner) showPartner = true
+                        }
+                    }
+                },
+            ) { showToday = false }
         }
         return
     }
@@ -494,9 +580,9 @@ internal fun CorePreview(
             }
         },
         openToday = { showToday = true },
-        openWork = { showWork = true },
+        openWork = { requestedFocus = CoreAdaptiveCategory.Work; showWork = true },
         openInvitations = if (active?.session?.role == CoreRole.owner && ready) ({ showInvitations = true }) else null,
-        openPartner = { showPartner = true },
+        openPartner = { requestedFocus = CoreAdaptiveCategory.Partner; showPartner = true },
         openDiscovery = openDiscovery,
         openDomains = if (active != null && ready && domains != null) ({ showDomains = true }) else null,
         openHostname = if (active?.session?.role == CoreRole.owner && ready) ({

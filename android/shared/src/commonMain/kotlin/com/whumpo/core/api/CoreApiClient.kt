@@ -370,6 +370,32 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
     }
 
     /** The route accepts no query parameters. */
+    internal suspend fun adaptiveProfile(token: String, initialize: Boolean = false): CoreAdaptiveProfile =
+        adaptive(token, "profile", if (initialize) HttpMethod.Post else HttpMethod.Get, if (initialize) "{}" else null)
+
+    internal suspend fun adaptiveVisit(token: String, command: CoreAdaptiveVisit): CoreAdaptiveProfile =
+        adaptive(token, "visit", HttpMethod.Post, json.encodeToString(command))
+
+    internal suspend fun adaptiveControl(token: String, command: CoreAdaptiveControl): CoreAdaptiveReceipt =
+        if (command.learningEnabled == null) adaptive(token, "reset", HttpMethod.Post, json.encodeToString(command), command.commandId)
+        else adaptive(token, "preferences", HttpMethod.Put, json.encodeToString(command), command.commandId)
+
+    internal suspend fun adaptiveRegister(token: String, command: CoreAdaptiveRegistration): CoreAdaptiveWriter =
+        adaptive(token, "writers", HttpMethod.Post, json.encodeToString(command), command.commandId)
+
+    internal suspend fun adaptiveWriter(token: String, id: String): CoreAdaptiveWriter {
+        require(coreAdaptiveUuid.matches(id))
+        return adaptive(token, "writers/$id", HttpMethod.Get)
+    }
+
+    internal suspend fun adaptiveContribute(token: String, command: CoreAdaptiveContribution): CoreAdaptiveContributionResult =
+        adaptive(token, "contributions", HttpMethod.Post, json.encodeToString(command))
+
+    private suspend inline fun <reified T> adaptive(token: String, suffix: String, verb: HttpMethod,
+                                                 payload: String? = null, key: String? = null): T =
+        Json.decodeFromString(call(token, "/v1/adaptive-home/$suffix", verb, payload, key = key,
+            maxResponseBytes = 8192, requireJson = true))
+
     internal suspend fun todayBriefing(token: String): CoreTodayBriefing =
         json.decodeFromString(call(token, "/v1/briefing/today", maxResponseBytes = CORE_TODAY_MAX_BYTES))
 
