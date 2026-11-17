@@ -1,6 +1,8 @@
 package com.whumpo.android.core
 
+import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.WindowManager
 import com.whumpo.android.BuildConfig
 import com.whumpo.core.auth.CoreAccountSecurityController
@@ -25,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -82,6 +85,8 @@ import kotlinx.coroutines.delay
 import com.whumpo.core.api.CoreAdaptiveCategory
 import com.whumpo.core.auth.CoreAdaptiveHomeController
 import com.whumpo.core.auth.CoreAdaptiveProfileCache
+import com.whumpo.core.auth.CoreStaticShortcut
+import com.whumpo.core.auth.CoreStaticShortcutRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -95,6 +100,10 @@ class CorePreviewActivity : ComponentActivity() {
     private var adaptiveForeground by mutableStateOf(false)
     private var adaptiveGeneration by mutableStateOf(0L)
     private var adaptiveCacheFailure by mutableStateOf(false)
+    private var shortcutReadyEpoch: () -> Long? = { null }
+    private var shortcut by mutableStateOf<CoreStaticShortcutRequest?>(null)
+    private var shortcutLifetime = 0L
+    private var shortcutWindowFocused by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -122,11 +131,42 @@ class CorePreviewActivity : ComponentActivity() {
                             isForegroundGeneration = { adaptiveForeground && it == adaptiveGeneration },
                             adaptiveCache = adaptiveCache, cacheFailure = { adaptiveCacheFailure = true },
                             eraseCacheActor = { if (!adaptiveCache.eraseActor(api.origin, it)) adaptiveCacheFailure = true },
-                            showCacheFailure = adaptiveCacheFailure)
+                            showCacheFailure = adaptiveCacheFailure, shortcut = shortcut,
+                            shortcutForeground = adaptiveForeground && shortcutWindowFocused,
+                            isShortcutForeground = { adaptiveForeground && hasWindowFocus() },
+                            publishShortcutReady = { shortcutReadyEpoch = it },
+                            shortcutLifetime = { shortcutLifetime }, interruptShortcut = ::interruptShortcut,
+                            finishShortcut = { if (shortcut === it) shortcut = null })
                     }
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val current = (controller.state.value as? CoreOrganizationSessionController.State.Active)?.epoch
+        val ready = shortcutReadyEpoch()?.takeIf { it == current && controller.commitIfCurrent(it) {} }
+        interruptShortcut()
+        shortcut = CoreStaticShortcutRequest.receive(intent.action, ready, SystemClock.elapsedRealtime(), shortcutLifetime)
+        updateShortcutForeground()
+    }
+
+    private fun updateShortcutForeground(hasFocus: Boolean = hasWindowFocus()) {
+        shortcutWindowFocused = hasFocus
+        if (shortcut?.observeForeground(adaptiveForeground, shortcutWindowFocused, SystemClock.elapsedRealtime()) == false) {
+            interruptShortcut()
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        updateShortcutForeground(hasFocus)
+    }
+
+    private fun interruptShortcut() {
+        shortcutLifetime++
+        shortcut = null
     }
 
     override fun onStart() {
@@ -137,11 +177,13 @@ class CorePreviewActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         adaptiveForeground = true
+        updateShortcutForeground()
     }
 
     override fun onPause() {
         adaptiveForeground = false
         adaptiveGeneration++
+        updateShortcutForeground()
         super.onPause()
     }
 
@@ -177,6 +219,13 @@ internal fun CorePreview(
     cacheFailure: () -> Unit,
     eraseCacheActor: (String) -> Unit,
     showCacheFailure: Boolean,
+    shortcut: CoreStaticShortcutRequest?,
+    shortcutForeground: Boolean,
+    isShortcutForeground: () -> Boolean,
+    publishShortcutReady: (() -> Long?) -> Unit,
+    shortcutLifetime: () -> Long,
+    interruptShortcut: () -> Unit,
+    finishShortcut: (CoreStaticShortcutRequest) -> Unit,
 ) {
     val state by controller.state.collectAsState()
     val active = state as? CoreOrganizationSessionController.State.Active
@@ -199,6 +248,7 @@ internal fun CorePreview(
     }
     val ready = setupState.canOpenWorkspace && setupState.readiness?.orgId == active?.session?.orgId
     val ownership = remember(controller, active) { active?.let { CoreOwnershipController(controller, it) } }
+    var ownershipSignInReview by remember(active?.epoch) { mutableStateOf(false) }
     val actions = rememberCoroutineScope()
     var message by remember(active?.epoch) { mutableStateOf<String?>(null) }
     var memberships by remember(active?.epoch) { mutableStateOf<CoreMembershipPage?>(null) }
@@ -215,6 +265,7 @@ internal fun CorePreview(
     var showOfflineWork by remember(active?.epoch) { mutableStateOf(false) }
     var discoveryWorkTask by remember(active?.epoch) { mutableStateOf<CoreWorkTask?>(null) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
+    var shortcutToday by remember(active?.epoch) { mutableStateOf(false) }
     var showPartner by remember(active?.epoch) { mutableStateOf(false) }
     var showDiscovery by remember(active?.epoch) { mutableStateOf(false) }
     var nextStepChosen by remember(active?.epoch) { mutableStateOf(false) }
@@ -228,7 +279,47 @@ internal fun CorePreview(
             CoreAdaptiveHomeController(controller, it, cache = adaptiveCache, onCacheFailure = cacheFailure)
         }
     }
-    val focusForeground = focus != null && adaptiveForeground && !securityPresented
+    fun shortcutHubEpoch(): Long? {
+        val session = active ?: return null
+        val liveSetup = setup?.state?.value ?: return null
+        val ownershipState = ownership?.state?.value
+        if (!liveSetup.canOpenWorkspace || liveSetup.readiness?.orgId != session.session.orgId ||
+            page == null || liveSetup.busy || (!nextStepChosen && liveSetup.nextStepProject(session.session.orgId) != null) ||
+            ownershipSignInReview || ownershipState?.review != null || ownershipState?.busy == true ||
+            showWork || showToday || showOfflineWork || showPartner || showInvitations || showDiscovery ||
+            showHandoff || showDomains || showHostname) return null
+        return session.epoch
+    }
+    SideEffect { publishShortcutReady(::shortcutHubEpoch) }
+    LaunchedEffect(shortcut, shortcutForeground, adaptiveGeneration, active?.epoch) {
+        val request = shortcut ?: return@LaunchedEffect
+        if (!shortcutForeground) return@LaunchedEffect
+        try {
+            val session = active ?: return@LaunchedEffect
+            fun currentEpoch(): Long? = session.epoch.takeIf {
+                shortcutHubEpoch() == it && isShortcutForeground() &&
+                    isForegroundGeneration(adaptiveGeneration) && controller.commitIfCurrent(it) {}
+            }
+            val admissionLifetime = shortcutLifetime()
+            if (!request.verify(::currentEpoch, SystemClock::elapsedRealtime, shortcutLifetime) {
+                    controller.organizationWhenReady(session) != null
+                }) return@LaunchedEffect
+            controller.commitIfCurrent(session.epoch) {
+                if (currentEpoch() == null || shortcutLifetime() != admissionLifetime) return@commitIfCurrent
+                when (request.destination) {
+                    CoreStaticShortcut.Today -> { shortcutToday = true; showToday = true }
+                    CoreStaticShortcut.Work -> { showWork = true }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A failed current readiness read leaves ordinary workspace navigation in place.
+        } finally {
+            finishShortcut(request)
+        }
+    }
+    val focusForeground = focus != null && adaptiveForeground && !securityPresented && !(showToday && shortcutToday)
     var primaryAvailability by remember(focus, adaptiveGeneration) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
     var todayAvailability by remember(focus, adaptiveGeneration) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
     var requestedFocus by remember(focus, adaptiveGeneration) { mutableStateOf<CoreAdaptiveCategory?>(null) }
@@ -317,6 +408,7 @@ internal fun CorePreview(
         }
     }
     val choose: (String) -> Unit = { org ->
+        interruptShortcut()
         message = null
         actions.launch {
             try {
@@ -329,6 +421,7 @@ internal fun CorePreview(
         }
     }
     val signOut: () -> Unit = {
+        interruptShortcut()
         message = null
         actions.launch {
             try {
@@ -347,10 +440,11 @@ internal fun CorePreview(
         }
     }
     val freshSignIn: () -> Unit = {
+        interruptShortcut()
         account.clear()
         showSecurity = true
     }
-    val openDiscovery: (() -> Unit)? = if (discovery == null) null else { { showDiscovery = true } }
+    val openDiscovery: (() -> Unit)? = if (discovery == null) null else { { interruptShortcut(); showDiscovery = true } }
     if (active != null && ready && handoff != null && showDiscovery && showHandoff) {
         key(active.epoch) {
             val handoffState by handoff.state.collectAsState()
@@ -603,27 +697,33 @@ internal fun CorePreview(
         ownership = {
             if (active != null && ownership != null) {
                 key(active.epoch) {
-                    CoreOwnershipSection(ownership, active.session.userId, active.session.role) {
+                    CoreOwnershipSection(ownership, active.session.userId, active.session.role,
+                        onSignInReview = { ownershipSignInReview = it },
+                        onReviewOpened = interruptShortcut) {
                         account.clear()
                         showSecurity = true
                     }
                 }
             }
         },
-        openToday = { showToday = true },
-        openWork = { requestedFocus = CoreAdaptiveCategory.Work; showWork = true },
-        openInvitations = if (active?.session?.role == CoreRole.owner && ready) ({ showInvitations = true }) else null,
-        openPartner = { requestedFocus = CoreAdaptiveCategory.Partner; showPartner = true },
+        openToday = { interruptShortcut(); shortcutToday = false; showToday = true },
+        openWork = { interruptShortcut(); requestedFocus = CoreAdaptiveCategory.Work; showWork = true },
+        openInvitations = if (active?.session?.role == CoreRole.owner && ready) ({
+            interruptShortcut()
+            showInvitations = true
+        }) else null,
+        openPartner = { interruptShortcut(); requestedFocus = CoreAdaptiveCategory.Partner; showPartner = true },
         openDiscovery = openDiscovery,
-        openDomains = if (active != null && ready && domains != null) ({ showDomains = true }) else null,
+        openDomains = if (active != null && ready && domains != null) ({ interruptShortcut(); showDomains = true }) else null,
         openHostname = if (active?.session?.role == CoreRole.owner && ready) ({
             restoreHostnameFocus = false
+            interruptShortcut()
             showHostname = true
         }) else null,
         restoreHostnameFocus = restoreHostnameFocus,
         tryPartner = { showPartnerSample = true },
         tryOnboarding = { showOnboarding = true },
-        signIn = { showSecurity = true },
+        signIn = { interruptShortcut(); showSecurity = true },
         choose = choose,
         next = { cursor = it },
         signOut = signOut,

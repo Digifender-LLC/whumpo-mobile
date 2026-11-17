@@ -1,0 +1,4 @@
+<resources>
+    <string name="core_today_shortcut">Open Today</string>
+    <string name="core_work_shortcut">Open Work</string>
+</resources>

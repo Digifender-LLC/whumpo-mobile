@@ -34,17 +34,25 @@ fun CoreOwnershipSection(
     controller: CoreOwnershipController,
     userId: String,
     role: CoreRole,
+    onSignInReview: (Boolean) -> Unit = {},
+    onReviewOpened: () -> Unit = {},
     signIn: () -> Unit,
 ) {
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
     var signInReview by remember { mutableStateOf(false) }
+    fun setSignInReview(present: Boolean) {
+        if (present) onReviewOpened()
+        signInReview = present
+        onSignInReview(present)
+    }
     val designation = state.snapshot?.designation
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("Primary owner", style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
         OwnershipButton(if (expanded) "Hide primary owner details" else "Show primary owner details") {
             expanded = !expanded
+            if (!expanded) setSignInReview(false)
             if (expanded && designation == null) scope.launch { controller.refresh() }
         }
         if (expanded) {
@@ -69,14 +77,17 @@ fun CoreOwnershipSection(
                 OwnershipButton("Retry exact request", enabled = !state.busy) { scope.launch { controller.retry() } }
             }
             if (state.notice == CoreOwnershipNotice.SignInAgain) {
-                OwnershipButton("Sign in again", enabled = !state.busy) { signInReview = true }
+                OwnershipButton("Sign in again", enabled = !state.busy) { setSignInReview(true) }
             }
             for ((action, label) in listOf(
                 CoreOwnershipAction.Claim to "Review primary owner claim",
                 CoreOwnershipAction.Accept to "Review acceptance",
                 CoreOwnershipAction.Cancel to "Review cancellation",
             )) {
-                if (controller.canReview(action)) OwnershipButton(label) { controller.review(action) }
+                if (controller.canReview(action)) OwnershipButton(label) {
+                    onReviewOpened()
+                    controller.review(action)
+                }
             }
             if (!state.retry && role == CoreRole.owner && designation?.primaryOwnerUserId == userId &&
                 designation.pendingTransfer == null
@@ -90,7 +101,10 @@ fun CoreOwnershipSection(
                     candidates.drop(offset).take(20).forEach { candidate ->
                         OwnershipButton("Review offer to ${candidate.userId}",
                             enabled = controller.canReview(CoreOwnershipAction.Offer, candidate),
-                        ) { controller.review(CoreOwnershipAction.Offer, candidate) }
+                        ) {
+                            onReviewOpened()
+                            controller.review(CoreOwnershipAction.Offer, candidate)
+                        }
                     }
                     if (offset > 0) OwnershipButton("Previous owners") { offset -= 20 }
                     if (offset + 20 < candidates.size) OwnershipButton("More owners") { offset += 20 }
@@ -122,11 +136,14 @@ fun CoreOwnershipSection(
     }
     if (signInReview && expanded) {
         AlertDialog(
-            onDismissRequest = { signInReview = false },
+            onDismissRequest = { setSignInReview(false) },
             title = { Text("Sign in again?") },
             text = { Text("This leaves the workspace on this device. Use your account’s sign-in method, then select the workspace and review the change again.") },
-            confirmButton = { OwnershipButton("Continue to sign-in", onClick = signIn) },
-            dismissButton = { OwnershipButton("Stay signed in") { signInReview = false } },
+            confirmButton = { OwnershipButton("Continue to sign-in") {
+                setSignInReview(false)
+                signIn()
+            } },
+            dismissButton = { OwnershipButton("Stay signed in") { setSignInReview(false) } },
         )
     }
 }
