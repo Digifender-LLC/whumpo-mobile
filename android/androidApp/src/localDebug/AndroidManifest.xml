@@ -1,5 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <activity android:name=".MainActivity">
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/core_work_shortcuts" />
+        </activity>
+        <activity
+            android:name=".core.CoreShortcutActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
         <activity
             android:name=".core.CorePreviewActivity"
             android:exported="false"

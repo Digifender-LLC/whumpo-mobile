@@ -1,6 +1,8 @@
 package com.whumpo.android.core
 
+import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.WindowManager
 import com.whumpo.android.BuildConfig
 import com.whumpo.core.auth.CoreAccountSecurityController
@@ -25,6 +27,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -82,6 +86,8 @@ import kotlinx.coroutines.delay
 import com.whumpo.core.api.CoreAdaptiveCategory
 import com.whumpo.core.auth.CoreAdaptiveHomeController
 import com.whumpo.core.auth.CoreAdaptiveProfileCache
+import com.whumpo.core.auth.CoreStaticShortcut
+import com.whumpo.core.auth.CoreStaticShortcutRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -95,6 +101,8 @@ class CorePreviewActivity : ComponentActivity() {
     private var adaptiveForeground by mutableStateOf(false)
     private var adaptiveGeneration by mutableStateOf(0L)
     private var adaptiveCacheFailure by mutableStateOf(false)
+    private var shortcutReadyEpoch: Long? = null
+    private var shortcut by mutableStateOf<CoreStaticShortcutRequest?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -122,11 +130,20 @@ class CorePreviewActivity : ComponentActivity() {
                             isForegroundGeneration = { adaptiveForeground && it == adaptiveGeneration },
                             adaptiveCache = adaptiveCache, cacheFailure = { adaptiveCacheFailure = true },
                             eraseCacheActor = { if (!adaptiveCache.eraseActor(api.origin, it)) adaptiveCacheFailure = true },
-                            showCacheFailure = adaptiveCacheFailure)
+                            showCacheFailure = adaptiveCacheFailure, shortcut = shortcut,
+                            publishShortcutReady = { shortcutReadyEpoch = it },
+                            finishShortcut = { if (shortcut === it) shortcut = null })
                     }
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val current = (controller.state.value as? CoreOrganizationSessionController.State.Active)?.epoch
+        val ready = shortcutReadyEpoch?.takeIf { it == current && controller.commitIfCurrent(it) {} }
+        shortcut = CoreStaticShortcutRequest.receive(intent.action, ready, SystemClock.elapsedRealtime())
     }
 
     override fun onStart() {
@@ -142,6 +159,7 @@ class CorePreviewActivity : ComponentActivity() {
     override fun onPause() {
         adaptiveForeground = false
         adaptiveGeneration++
+        shortcut = null
         super.onPause()
     }
 
@@ -177,6 +195,9 @@ internal fun CorePreview(
     cacheFailure: () -> Unit,
     eraseCacheActor: (String) -> Unit,
     showCacheFailure: Boolean,
+    shortcut: CoreStaticShortcutRequest?,
+    publishShortcutReady: (Long?) -> Unit,
+    finishShortcut: (CoreStaticShortcutRequest) -> Unit,
 ) {
     val state by controller.state.collectAsState()
     val active = state as? CoreOrganizationSessionController.State.Active
@@ -215,6 +236,7 @@ internal fun CorePreview(
     var showOfflineWork by remember(active?.epoch) { mutableStateOf(false) }
     var discoveryWorkTask by remember(active?.epoch) { mutableStateOf<CoreWorkTask?>(null) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
+    var shortcutToday by remember(active?.epoch) { mutableStateOf(false) }
     var showPartner by remember(active?.epoch) { mutableStateOf(false) }
     var showDiscovery by remember(active?.epoch) { mutableStateOf(false) }
     var nextStepChosen by remember(active?.epoch) { mutableStateOf(false) }
@@ -228,7 +250,39 @@ internal fun CorePreview(
             CoreAdaptiveHomeController(controller, it, cache = adaptiveCache, onCacheFailure = cacheFailure)
         }
     }
-    val focusForeground = focus != null && adaptiveForeground && !securityPresented
+    val shortcutHub = ready && page != null && !setupState.busy &&
+        (nextStepChosen || active?.let { setupState.nextStepProject(it.session.orgId) } == null) &&
+        !securityPresented && !showWork && !showToday && !showOfflineWork && !showPartner &&
+        !showInvitations && !showDiscovery && !showHandoff && !showDomains && !showHostname
+    val currentShortcutHub by rememberUpdatedState(shortcutHub)
+    SideEffect { publishShortcutReady(active?.epoch?.takeIf { shortcutHub }) }
+    LaunchedEffect(shortcut, adaptiveForeground, adaptiveGeneration, active?.epoch, shortcutHub) {
+        val request = shortcut ?: return@LaunchedEffect
+        if (!adaptiveForeground) return@LaunchedEffect
+        try {
+            val session = active ?: return@LaunchedEffect
+            fun currentEpoch(): Long? = session.epoch.takeIf {
+                currentShortcutHub && isForegroundGeneration(adaptiveGeneration) && controller.commitIfCurrent(it) {}
+            }
+            if (!request.verify(::currentEpoch, SystemClock::elapsedRealtime) {
+                    controller.organizationWhenReady(session) != null
+                }) return@LaunchedEffect
+            controller.commitIfCurrent(session.epoch) {
+                if (currentEpoch() == null) return@commitIfCurrent
+                when (request.destination) {
+                    CoreStaticShortcut.Today -> { shortcutToday = true; showToday = true }
+                    CoreStaticShortcut.Work -> { showWork = true }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A failed current readiness read leaves ordinary workspace navigation in place.
+        } finally {
+            finishShortcut(request)
+        }
+    }
+    val focusForeground = focus != null && adaptiveForeground && !securityPresented && !(showToday && shortcutToday)
     var primaryAvailability by remember(focus, adaptiveGeneration) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
     var todayAvailability by remember(focus, adaptiveGeneration) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
     var requestedFocus by remember(focus, adaptiveGeneration) { mutableStateOf<CoreAdaptiveCategory?>(null) }
@@ -610,7 +664,7 @@ internal fun CorePreview(
                 }
             }
         },
-        openToday = { showToday = true },
+        openToday = { shortcutToday = false; showToday = true },
         openWork = { requestedFocus = CoreAdaptiveCategory.Work; showWork = true },
         openInvitations = if (active?.session?.role == CoreRole.owner && ready) ({ showInvitations = true }) else null,
         openPartner = { requestedFocus = CoreAdaptiveCategory.Partner; showPartner = true },
