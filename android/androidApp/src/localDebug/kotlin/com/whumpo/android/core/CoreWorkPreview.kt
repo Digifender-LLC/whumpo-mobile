@@ -142,8 +142,8 @@ internal fun CoreWorkPreview(
                             Text("Capture offline task")
                         }
                     }
-                    WorkRead(controller, epoch, { controller.work(workCursor) }, onUnavailable = { onReadable(false) }) { page ->
-                        LaunchedEffect(page) { onReadable(true) }
+                    WorkRead(controller, epoch, { controller.work(workCursor) },
+                        onUnavailable = { onReadable(false) }, onRead = { onReadable(true) }) { page ->
                         if (page.items.isEmpty()) {
                             Card(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -264,14 +264,19 @@ internal fun <T> WorkRead(
     epoch: Long,
     read: suspend () -> T,
     onUnavailable: () -> Unit = {},
+    onRead: (T) -> Unit = {},
+    readGeneration: Long = 0L,
     content: @Composable (T) -> Unit,
 ) {
-    var result by remember { mutableStateOf<WorkReadResult<T>>(WorkReadResult.Loading) }
+    var result by remember(epoch, readGeneration) { mutableStateOf<WorkReadResult<T>>(WorkReadResult.Loading) }
     var attempt by remember { mutableStateOf(0) }
-    LaunchedEffect(epoch, attempt) {
+    LaunchedEffect(epoch, attempt, readGeneration) {
         try {
             val value = read()
-            controller.commitIfCurrent(epoch) { result = WorkReadResult.Ready(value) }
+            controller.commitIfCurrent(epoch) {
+                result = WorkReadResult.Ready(value)
+                onRead(value)
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {

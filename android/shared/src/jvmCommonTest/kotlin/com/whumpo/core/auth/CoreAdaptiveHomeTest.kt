@@ -1,6 +1,7 @@
 package com.whumpo.core.auth
 
 import com.whumpo.core.api.CoreAdaptiveCategory
+import com.whumpo.core.api.CoreAdaptiveProfile
 import com.whumpo.core.api.CoreApiClient
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreRole
@@ -11,9 +12,12 @@ import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.headersOf
+import java.nio.file.Files
 import java.time.Instant
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -31,6 +35,18 @@ class CoreAdaptiveHomeTest {
     private val token = "A".repeat(43)
     private val generation = "10000000-0000-4000-8000-000000000001"
     private val now = Instant.parse("2026-01-02T12:00:00Z").toEpochMilli()
+
+    @Test
+    fun explicitOpenIsConsumedOnceAndCannotBeRecreditedOnForegroundRevalidation() {
+        val tapped = CoreAdaptiveOpenIntent(4)
+        assertTrue(tapped.consume(4))
+        assertFalse(tapped.consume(4))
+        assertFalse(tapped.consume(5))
+        val lateRead = CoreAdaptiveOpenIntent(4)
+        assertFalse(lateRead.consume(5))
+        val freshTap = CoreAdaptiveOpenIntent(5)
+        assertTrue(freshTap.consume(5))
+    }
 
     @Test
     fun learnedOrderWaitsForNextVisitAndUnavailableDestinationLeavesItsSlot() = runTest {
@@ -101,6 +117,76 @@ class CoreAdaptiveHomeTest {
             assertEquals(null, home.state.value.review)
             assertTrue(home.state.value.shortcuts.isEmpty())
             assertEquals(listOf("/v1/auth/session", "/v1/adaptive-home/profile"), calls)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun coldProjectionOnlyFollowsCurrentReadabilityAndExpiresWhileCanonicalGetIsHeld() = runTest {
+        val arrived = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val calls = mutableListOf<String>()
+        val directory = Files.createTempDirectory("adaptive-projection").toFile()
+        try {
+            CoreApiClient(MockEngine { request ->
+                val route = request.url.encodedPath
+                calls += route
+                assertEquals(HttpMethod.Get, request.method)
+                respond(when (route) {
+                    "/v1/auth/session" -> session
+                    "/v1/adaptive-home/profile" -> {
+                        arrived.complete(Unit)
+                        release.await()
+                        profile(2).replace("2026-01-02T12:00:00.000Z", "2026-01-02T12:00:02.408Z")
+                    }
+                    else -> error("A cached projection must not issue a write")
+                }, headers = headers)
+            }, CoreOrigin.allowlisted(origin, setOf(origin))).use { client ->
+                val sessions = CoreOrganizationSessionController(client) { now }
+                val active = sessions.establish(token)
+                var deviceWall = now
+                val cache = CoreAdaptiveProfileCache(directory) { deviceWall }
+                val started = cache.beginCanonicalRead { 0L }
+                val learned = Json.decodeFromString<CoreAdaptiveProfile>(profile(2)).copy(
+                    serverTime = Instant.ofEpochMilli(now + 1_408L).toString(),
+                )
+                cache.save(client.origin, active.session, learned, started) { 0L }
+                deviceWall += 57_592L
+                val cacheFile = directory.resolve("profiles-v1.bin")
+                val expire = CompletableDeferred<Unit>()
+                var elapsed = 0L
+                val home = CoreAdaptiveHomeController(sessions, active, cache = cache, waitForProjectionExpiry = { wait ->
+                    assertEquals(1_000L, wait)
+                    expire.await()
+                }) { elapsed }
+                home.foreground(true)
+                home.availability(setOf(work, partner))
+                home.foreground(false)
+                home.foreground(true)
+                home.availability(setOf(work))
+                val held = launch { home.enterToday() }
+                arrived.await()
+                val retained = cacheFile.readBytes()
+                assertEquals(listOf(work), home.state.value.provisional)
+                assertEquals(null, home.state.value.review)
+                home.open(work)
+                home.availability(setOf(partner))
+                assertEquals(listOf(partner), home.state.value.provisional)
+                elapsed = 1_000
+                expire.complete(Unit)
+                runCurrent()
+                assertEquals(emptyList(), home.state.value.provisional)
+                assertEquals(null, home.state.value.review)
+                home.foreground(false)
+                sessions.clear()
+                release.complete(Unit)
+                held.join()
+                assertEquals(null, home.state.value.review)
+                kotlin.test.assertContentEquals(retained, cacheFile.readBytes())
+                assertEquals(listOf("/v1/auth/session", "/v1/adaptive-home/profile"), calls)
+            }
+        } finally {
+            directory.deleteRecursively()
         }
     }
 

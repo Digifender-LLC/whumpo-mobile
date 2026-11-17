@@ -69,6 +69,7 @@ import kotlinx.serialization.json.JsonPrimitive
  */
 class CoreOrganizationSessionController(
     private val api: CoreApiClient,
+    private val onAuthorityLost: (CoreSession) -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     sealed interface State {
@@ -76,6 +77,8 @@ class CoreOrganizationSessionController(
         data object Transitioning : State
         data class Active(val epoch: Long, val session: CoreSession, val scope: CoreAccountScope) : State
     }
+
+    internal val origin get() = api.origin
 
     private class Credential(val state: State.Active, val token: String)
 
@@ -140,7 +143,7 @@ class CoreOrganizationSessionController(
     /** Drops local authority before returning the exact session's revocation. */
     internal fun clearForRevocation(): (suspend () -> Unit)? = synchronized(lock) {
         val token = credential?.token
-        clearLocked()
+        clearLocked(notifyLoss = true)
         token?.let { { api.revokeSession(it) } }
     }
 
@@ -794,7 +797,7 @@ class CoreOrganizationSessionController(
 
     fun expireIfCurrent(capturedEpoch: Long) = synchronized(lock) {
         val current = credential ?: return@synchronized
-        if (current.state.epoch == capturedEpoch && current.state.session.expiresAt <= now()) clearLocked()
+        if (current.state.epoch == capturedEpoch && current.state.session.expiresAt <= now()) clearLocked(notifyLoss = true)
     }
 
     private fun beginTransition(): Long {
@@ -803,16 +806,18 @@ class CoreOrganizationSessionController(
         return ++epoch
     }
 
-    private fun clearLocked() {
+    private fun clearLocked(notifyLoss: Boolean = false) {
+        val previous = credential?.state?.session
         ++epoch
         credential = null
         mutableState.value = State.SignedOut
+        if (notifyLoss && previous != null) onAuthorityLost(previous)
     }
 
     private fun requireCredential(): Credential {
         val current = checkNotNull(credential) { "No active core session" }
         if (current.state.session.expiresAt <= now()) {
-            clearLocked()
+            clearLocked(notifyLoss = true)
             throw CoreHttpException(401)
         }
         return current
@@ -836,6 +841,11 @@ class CoreOrganizationSessionController(
                 replacement.expiresAt != source.expiresAt) throw CoreProtocolException()
             return verifyAndActivate(transition, replacement.token, source.userId,
                 targetOrgId ?: source.orgId, replacement.expiresAt, role = role)
+        } catch (error: CoreHttpException) {
+            if (error.status == 401) synchronized(lock) {
+                if (epoch == transition && mutableState.value == State.Transitioning) onAuthorityLost(source)
+            }
+            throw error
         } finally {
             abortTransition(transition)
         }
@@ -937,7 +947,7 @@ class CoreOrganizationSessionController(
                 if (credential !== current) {
                     throw CancellationException("Core session changed")
                 }
-                if (credential === current && error is CoreHttpException && error.status == 401) clearLocked()
+                if (credential === current && error is CoreHttpException && error.status == 401) clearLocked(notifyLoss = true)
             }
             throw error
         }

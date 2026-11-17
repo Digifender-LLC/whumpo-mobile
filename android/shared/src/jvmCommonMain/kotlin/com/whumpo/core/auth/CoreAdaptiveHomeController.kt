@@ -18,6 +18,9 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -32,8 +35,20 @@ data class CoreAdaptiveReview internal constructor(
     internal val preferenceRevision: Long,
 )
 
+/** A destination tap may count at most once after its read succeeds in the same foreground. */
+class CoreAdaptiveOpenIntent(private val generation: Long) {
+    private var consumed = false
+
+    fun consume(currentGeneration: Long): Boolean {
+        if (consumed || generation != currentGeneration) return false
+        consumed = true
+        return true
+    }
+}
+
 data class CoreAdaptiveHomeState(
     val shortcuts: List<CoreAdaptiveCategory?> = emptyList(),
+    val provisional: List<CoreAdaptiveCategory> = emptyList(),
     val pins: List<CoreAdaptiveCategory> = emptyList(),
     val learningEnabled: Boolean = false,
     val review: CoreAdaptiveReview? = null,
@@ -45,18 +60,23 @@ data class CoreAdaptiveHomeState(
 class CoreAdaptiveHomeController(
     private val sessions: CoreOrganizationSessionController,
     private val active: CoreOrganizationSessionController.State.Active,
+    private val cache: CoreAdaptiveProfileCache? = null,
+    private val onCacheFailure: () -> Unit = {},
+    private val waitForProjectionExpiry: suspend (Long) -> Unit = { delay(it) },
     private val monotonicMillis: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     private val serial = Mutex()
     private val mutableState = MutableStateFlow(CoreAdaptiveHomeState())
     val state = mutableState.asStateFlow()
-    private val owner = UUID.randomUUID()
+    private var owner = UUID.randomUUID()
     private var foreground = false
+    private var foregroundIsCurrent: () -> Boolean = { true }
     private var window = 0L
     private var visiting = false
     private var visitPending: UUID? = null
     private var availability = emptySet<CoreAdaptiveCategory>()
     private var profile: CoreAdaptiveProfile? = null
+    private var projection: Pair<CoreAdaptiveProjection, Long>? = null
     private var sample: Pair<Instant, Long>? = null
     private var pending: CoreAdaptiveControl? = null
     private var receipt: CoreAdaptiveReceipt? = null
@@ -66,32 +86,80 @@ class CoreAdaptiveHomeController(
     private val opens = mutableMapOf<CoreAdaptiveCategory, Long>()
     private val buffered = mutableMapOf<CoreAdaptiveCategory, CoreAdaptiveBucket>()
 
-    fun foreground(visible: Boolean) {
+    fun foreground(visible: Boolean, isCurrent: () -> Boolean = { true }) {
+        foregroundIsCurrent = isCurrent
         if (foreground == visible) return
         foreground = visible
         window++
-        if (!visible) sample = null
+        if (!visible) {
+            owner = UUID.randomUUID()
+            sample = null
+            buffered.clear()
+            availability = emptySet()
+            projection = null
+            visiting = false
+            visitPending = null
+            mutableState.value = mutableState.value.copy(shortcuts = emptyList(), provisional = emptyList(), review = null)
+        }
     }
 
     fun availability(value: Set<CoreAdaptiveCategory>) {
         availability = value
         mutableState.value = mutableState.value.copy(
             shortcuts = mutableState.value.shortcuts.map { it?.takeIf(value::contains) },
+            provisional = provisionalShortcuts(),
         )
     }
 
     suspend fun enterToday() {
-        if (visiting) return
+        val stamp = window
+        if (visiting || !current(stamp)) return
         visiting = true
         visitPending = UUID.randomUUID()
-        mutableState.value = mutableState.value.copy(shortcuts = profile?.shortcuts(availability).orEmpty())
-        refresh()
+        if (profile == null) {
+            val started = monotonicMillis()
+            sessions.commitIfCurrent(active.epoch) {
+                projection = cache?.load(sessions.origin, active.session)?.let { it to started }
+            }
+        }
+        mutableState.value = mutableState.value.copy(
+            shortcuts = profile?.takeIf { sample != null }?.shortcuts(availability).orEmpty(),
+            provisional = provisionalShortcuts(),
+        )
+        val lease = projection
+        coroutineScope {
+            val expiry = lease?.let {
+                launch {
+                    waitForProjectionExpiry((it.first.remainingMillis - (monotonicMillis() - it.second)).coerceAtLeast(0L))
+                    if (current(stamp) && projection === it) clearProjection()
+                }
+            }
+            try {
+                refresh()
+            } finally {
+                expiry?.cancel()
+                if (projection === lease) clearProjection()
+            }
+        }
     }
 
     fun leaveToday() {
         visiting = false
         visitPending = null
+        clearProjection()
         mutableState.value = mutableState.value.copy(shortcuts = emptyList())
+    }
+
+    private fun provisionalShortcuts(): List<CoreAdaptiveCategory> {
+        val (cached, started) = projection ?: return emptyList()
+        val elapsed = monotonicMillis() - started
+        return if (foreground && foregroundIsCurrent() && visiting && elapsed in 0 until cached.remainingMillis) cached.shortcuts(availability)
+        else emptyList()
+    }
+
+    private fun clearProjection() {
+        projection = null
+        mutableState.value = mutableState.value.copy(provisional = emptyList())
     }
 
     suspend fun refresh() = run {
@@ -112,7 +180,7 @@ class CoreAdaptiveHomeController(
     }
 
     suspend fun open(category: CoreAdaptiveCategory) {
-        if (!foreground || category !in availability || pending != null || profile?.learningEnabled != true) return
+        if (!foreground || !foregroundIsCurrent() || category !in availability || pending != null || profile?.learningEnabled != true) return
         val current = time() ?: return
         val now = monotonicMillis()
         if (opens[category]?.let { now - it < 1_800_000 } == true || category in buffered) return
@@ -171,7 +239,7 @@ class CoreAdaptiveHomeController(
         }
     }
 
-    private fun current(stamp: Long): Boolean = foreground && stamp == window && sessions.commitIfCurrent(active.epoch) {}
+    private fun current(stamp: Long): Boolean = foreground && foregroundIsCurrent() && stamp == window && sessions.commitIfCurrent(active.epoch) {}
     private fun guardCurrent(stamp: Long) { if (!current(stamp)) throw CancellationException("Adaptive view changed") }
 
     private suspend fun <T> request(stamp: Long, action: suspend (CoreApiClient, String) -> T): T {
@@ -201,19 +269,39 @@ class CoreAdaptiveHomeController(
             if (before != null) mutableState.value = mutableState.value.copy(shortcuts = mutableState.value.shortcuts.map { null })
         }
         profile = value
-        if (sampled) sample = server to monotonicMillis()
+        if (sampled) {
+            sample = server to monotonicMillis()
+            clearProjection()
+        }
         mutableState.value = mutableState.value.copy(pins = value.pins, learningEnabled = value.learningEnabled, review = review(value))
     }
 
     private fun review(value: CoreAdaptiveProfile) = CoreAdaptiveReview(owner, value.generation, value.preferenceRevision)
 
     private suspend fun readProfile(stamp: Long, initialize: Boolean) {
+        guardCurrent(stamp)
+        val started = cache?.beginCanonicalRead(monotonicMillis)
         val data = try { request(stamp) { api, token -> api.adaptiveProfile(token) } }
         catch (error: CoreHttpException) {
+            if (error.status == 404 || error.status == 403 || error.status == 423) {
+                guardCurrent(stamp)
+                clearProjection()
+                profile = null
+                sample = null
+                forgetUsage()
+                mutableState.value = mutableState.value.copy(shortcuts = emptyList(), review = null)
+                sessions.commitIfCurrent(active.epoch) {
+                    if (cache?.eraseScope(sessions.origin, active.session) == false) onCacheFailure()
+                }
+            }
             if (error.status != 404 || !initialize || pending != null) throw error
             request(stamp) { api, token -> api.adaptiveProfile(token, initialize = true) }
+            return readProfile(stamp, initialize = false)
         }
         install(data, stamp, sampled = true)
+        if (cache != null && started != null) sessions.commitIfCurrent(active.epoch) {
+            cache.save(sessions.origin, active.session, data, started, monotonicMillis)
+        }
     }
 
     private suspend fun settleControl(stamp: Long) {

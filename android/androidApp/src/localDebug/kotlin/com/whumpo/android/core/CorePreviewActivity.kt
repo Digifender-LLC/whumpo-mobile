@@ -81,6 +81,7 @@ import java.io.File
 import kotlinx.coroutines.delay
 import com.whumpo.core.api.CoreAdaptiveCategory
 import com.whumpo.core.auth.CoreAdaptiveHomeController
+import com.whumpo.core.auth.CoreAdaptiveProfileCache
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -92,6 +93,8 @@ class CorePreviewActivity : ComponentActivity() {
     private lateinit var account: CoreAccountSecurityController
     private val activities = ActivityTracker()
     private var adaptiveForeground by mutableStateOf(false)
+    private var adaptiveGeneration by mutableStateOf(0L)
+    private var adaptiveCacheFailure by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -100,7 +103,10 @@ class CorePreviewActivity : ComponentActivity() {
         val origin = BuildConfig.WHUMPO_LOCAL_CORE_ORIGIN
         val rpId = BuildConfig.WHUMPO_LOCAL_CORE_RP.takeIf(String::isNotBlank)
         api = coreApiClient(CoreOrigin.allowlisted(origin, setOfNotNull(rpId?.let { "https://$it" }), debugLoopback = true))
-        controller = CoreOrganizationSessionController(api)
+        val adaptiveCache = CoreAdaptiveProfileCache(File(noBackupFilesDir, "core-adaptive-home"))
+        controller = CoreOrganizationSessionController(api, onAuthorityLost = { expired ->
+            if (!adaptiveCache.eraseActor(api.origin, expired.userId)) adaptiveCacheFailure = true
+        })
         account = CoreAccountSecurityController(api, controller, rpId)
         val offlineWork = CoreOfflineWorkStore(File(noBackupFilesDir, "core-offline-work")) {
             KeystoreSecretBox("whumpo.core.offline-work.v1")
@@ -111,7 +117,12 @@ class CorePreviewActivity : ComponentActivity() {
             WhumpoEntryTheme {
                 Surface {
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                        CorePreview(controller, account, passkeys, offlineWork, workWebOrigin, passkeysConfigured = rpId != null, adaptiveForeground = adaptiveForeground)
+                        CorePreview(controller, account, passkeys, offlineWork, workWebOrigin, passkeysConfigured = rpId != null,
+                            adaptiveForeground = adaptiveForeground, adaptiveGeneration = adaptiveGeneration,
+                            isForegroundGeneration = { adaptiveForeground && it == adaptiveGeneration },
+                            adaptiveCache = adaptiveCache, cacheFailure = { adaptiveCacheFailure = true },
+                            eraseCacheActor = { if (!adaptiveCache.eraseActor(api.origin, it)) adaptiveCacheFailure = true },
+                            showCacheFailure = adaptiveCacheFailure)
                     }
                 }
             }
@@ -130,6 +141,7 @@ class CorePreviewActivity : ComponentActivity() {
 
     override fun onPause() {
         adaptiveForeground = false
+        adaptiveGeneration++
         super.onPause()
     }
 
@@ -158,7 +170,13 @@ internal fun CorePreview(
     offlineWork: CoreOfflineWorkStore,
     workWebOrigin: CoreWorkWebOrigin?,
     passkeysConfigured: Boolean,
-    adaptiveForeground: Boolean = false,
+    adaptiveForeground: Boolean,
+    adaptiveGeneration: Long,
+    isForegroundGeneration: (Long) -> Boolean,
+    adaptiveCache: CoreAdaptiveProfileCache,
+    cacheFailure: () -> Unit,
+    eraseCacheActor: (String) -> Unit,
+    showCacheFailure: Boolean,
 ) {
     val state by controller.state.collectAsState()
     val active = state as? CoreOrganizationSessionController.State.Active
@@ -206,33 +224,35 @@ internal fun CorePreview(
     var showSecurity by remember { mutableStateOf(false) }
     val securityPresented = active == null && showSecurity
     val focus = remember(controller, active, ready) {
-        active?.takeIf { ready }?.let { CoreAdaptiveHomeController(controller, it) }
+        active?.takeIf { ready }?.let {
+            CoreAdaptiveHomeController(controller, it, cache = adaptiveCache, onCacheFailure = cacheFailure)
+        }
     }
     val focusForeground = focus != null && adaptiveForeground && !securityPresented
-    var primaryAvailability by remember(focus) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
-    var todayAvailability by remember(focus) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
-    var requestedFocus by remember(focus) { mutableStateOf<CoreAdaptiveCategory?>(null) }
-    DisposableEffect(focus, focusForeground) {
-        focus?.foreground(focusForeground)
+    var primaryAvailability by remember(focus, adaptiveGeneration) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
+    var todayAvailability by remember(focus, adaptiveGeneration) { mutableStateOf(emptySet<CoreAdaptiveCategory>()) }
+    var requestedFocus by remember(focus, adaptiveGeneration) { mutableStateOf<CoreAdaptiveCategory?>(null) }
+    DisposableEffect(focus, focusForeground, adaptiveGeneration) {
+        focus?.foreground(focusForeground) { isForegroundGeneration(adaptiveGeneration) }
         onDispose { focus?.foreground(false) }
     }
-    LaunchedEffect(focus, focusForeground) {
+    LaunchedEffect(focus, focusForeground, adaptiveGeneration) {
         if (!focusForeground) requestedFocus = null
         if (focus != null && focusForeground) {
             while (true) {
-                if (showToday) focus.refresh()
                 delay(300_000)
+                if (showToday && isForegroundGeneration(adaptiveGeneration)) focus.refresh()
             }
         }
     }
     fun destinationRead(category: CoreAdaptiveCategory, readable: Boolean) {
-        if (!focusForeground || active == null) return
+        if (!focusForeground || !isForegroundGeneration(adaptiveGeneration) || active == null) return
         controller.commitIfCurrent(active.epoch) {
             primaryAvailability = if (readable) primaryAvailability + category else primaryAvailability - category
-            focus?.availability(primaryAvailability + todayAvailability)
+            focus.availability(primaryAvailability + todayAvailability)
             if (requestedFocus == category) {
                 requestedFocus = null
-                if (readable) actions.launch { focus?.open(category) }
+                if (readable) actions.launch { if (isForegroundGeneration(adaptiveGeneration)) focus.open(category) }
             }
         }
     }
@@ -263,6 +283,7 @@ internal fun CorePreview(
                 },
                 signOut = {
                     account.clear()
+                    eraseCacheActor(active.session.userId)
                     showSecurity = false
                 },
                 close = { showOfflineWork = false },
@@ -318,6 +339,10 @@ internal fun CorePreview(
             } catch (_: Exception) {
                 account.clear()
                 showSecurity = false
+            } finally {
+                if (controller.state.value is CoreOrganizationSessionController.State.SignedOut) {
+                    active?.session?.userId?.let(eraseCacheActor)
+                }
             }
         }
     }
@@ -520,7 +545,7 @@ internal fun CorePreview(
     }
     if (active != null && ready && showToday) {
         key(active.epoch) {
-            LaunchedEffect(focus, focusForeground) {
+            LaunchedEffect(focus, focusForeground, adaptiveGeneration) {
                 if (focus != null && focusForeground) {
                     suspend fun readable(read: suspend () -> Unit): Boolean = try {
                         read()
@@ -532,6 +557,7 @@ internal fun CorePreview(
                         if (readable { controller.work() }) add(CoreAdaptiveCategory.Work)
                         if (partner != null && readable { partner.readableDirectory() }) add(CoreAdaptiveCategory.Partner)
                     }
+                    if (!isForegroundGeneration(adaptiveGeneration)) return@LaunchedEffect
                     controller.commitIfCurrent(active.epoch) {
                         primaryAvailability = destinations
                         focus.availability(primaryAvailability + todayAvailability)
@@ -542,15 +568,17 @@ internal fun CorePreview(
             DisposableEffect(focus) { onDispose { focus?.leaveToday() } }
             CoreTodayPreview(controller, active, page?.profile?.displayName ?: active.session.orgId,
                 focus = focus.takeIf { focusForeground },
+                readGeneration = if (focusForeground) adaptiveGeneration else -1L,
+                canCreditOpen = { focusForeground && isForegroundGeneration(adaptiveGeneration) },
                 availability = { destinations ->
-                    controller.commitIfCurrent(active.epoch) {
+                    if (focusForeground && isForegroundGeneration(adaptiveGeneration)) controller.commitIfCurrent(active.epoch) {
                         todayAvailability = destinations
-                        focus?.availability(primaryAvailability + destinations)
+                        focus.availability(primaryAvailability + destinations)
                     }
                 },
                 openFocus = { category ->
                     controller.commitIfCurrent(active.epoch) {
-                        if (focusForeground && category in primaryAvailability) {
+                        if (focusForeground && isForegroundGeneration(adaptiveGeneration) && category in primaryAvailability) {
                             requestedFocus = category
                             showToday = false
                             if (category == CoreAdaptiveCategory.Work) showWork = true
@@ -568,7 +596,7 @@ internal fun CorePreview(
         }
         return
     }
-    CorePreviewContent(state, page, memberships, message,
+    CorePreviewContent(state, page, memberships, message ?: "Focus cache could not be cleared on this device.".takeIf { showCacheFailure },
         ownership = {
             if (active != null && ownership != null) {
                 key(active.epoch) {

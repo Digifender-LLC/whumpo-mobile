@@ -38,6 +38,11 @@ fun CoreAdaptiveFocus(
     var resetRequested by remember(review) { mutableStateOf(false) }
     val control = Modifier.heightIn(min = 48.dp)
     Text("Your focus", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+    if (review == null && state.provisional.isNotEmpty()) {
+        for (category in state.provisional) Text(category.label(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Checking your home suggestions…", modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+        return
+    }
     state.shortcuts.forEachIndexed { index, shortcut ->
         key(index) {
             if (shortcut == null) Spacer(control)

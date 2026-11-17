@@ -9,6 +9,7 @@ import com.whumpo.android.ui.home.CoreAdaptiveFocus
 import com.whumpo.android.ui.home.CoreTodayFocusPlacement
 import com.whumpo.core.api.CoreAdaptiveCategory
 import com.whumpo.core.auth.CoreAdaptiveHomeController
+import com.whumpo.core.auth.CoreAdaptiveOpenIntent
 import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
@@ -50,8 +51,12 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
-private data class TodayTask(val today: CoreOrganizationSessionController.Today, val source: CoreTodayTaskSource)
-private data class TodayReceipt(val today: CoreOrganizationSessionController.Today, val activity: CoreTodaySiteActivity)
+private data class TodayTask(
+    val today: CoreOrganizationSessionController.Today,
+    val source: CoreTodayTaskSource,
+    val open: CoreAdaptiveOpenIntent,
+)
+private data class TodayReceipt(val today: CoreOrganizationSessionController.Today, val activity: CoreTodaySiteActivity, val open: CoreAdaptiveOpenIntent)
 
 /** Mounted under the session epoch key, so an organization change or sign-out discards all of this state. */
 @Composable
@@ -60,6 +65,8 @@ internal fun CoreTodayPreview(
     active: CoreOrganizationSessionController.State.Active,
     organizationName: String,
     focus: CoreAdaptiveHomeController? = null,
+    readGeneration: Long = 0L,
+    canCreditOpen: () -> Boolean = { false },
     availability: (Set<CoreAdaptiveCategory>) -> Unit = {},
     openFocus: (CoreAdaptiveCategory) -> Unit = {},
     close: () -> Unit,
@@ -84,6 +91,11 @@ internal fun CoreTodayPreview(
         }
     }
     BackHandler(onBack = goBack)
+    fun credit(intent: CoreAdaptiveOpenIntent, category: CoreAdaptiveCategory) {
+        if (canCreditOpen() && intent.consume(readGeneration)) {
+            actions.launch { if (canCreditOpen()) focus?.open(category) }
+        }
+    }
     key(task, receipt, refresh) {
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -96,8 +108,8 @@ internal fun CoreTodayPreview(
             }
             Text(organizationName, style = MaterialTheme.typography.labelLarge)
             when {
-                openTask != null -> WorkRead(controller, epoch, { controller.todayTask(openTask.today, openTask.source) }) { detail ->
-                    LaunchedEffect(openTask) { focus?.open(CoreAdaptiveCategory.Work) }
+                openTask != null -> WorkRead(controller, epoch, { controller.todayTask(openTask.today, openTask.source) },
+                    onRead = { credit(openTask.open, CoreAdaptiveCategory.Work) }) { detail ->
                     Text(detail.title, style = MaterialTheme.typography.headlineMedium)
                     Text(detail.status.label, style = MaterialTheme.typography.titleMedium)
                     detail.description?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
@@ -106,11 +118,11 @@ internal fun CoreTodayPreview(
                 }
                 openReceipt != null -> {
                     Text("Website receipt", style = MaterialTheme.typography.headlineMedium)
-                    WorkRead(controller, epoch, { controller.todayWebsiteReceipt(openReceipt.today, openReceipt.activity) }) { item ->
+                    WorkRead(controller, epoch, { controller.todayWebsiteReceipt(openReceipt.today, openReceipt.activity) },
+                        onRead = { if (it != null) credit(openReceipt.open, CoreAdaptiveCategory.WebsiteActivity) }) { item ->
                         if (item == null) {
                             Text("This receipt is no longer listed in the website history.")
                         } else {
-                            LaunchedEffect(openReceipt) { focus?.open(CoreAdaptiveCategory.WebsiteActivity) }
                             TodayCard {
                                 Text(
                                     if (item.operation == CoreWebsiteOperation.Publish) "Website published" else "Website withdrawn",
@@ -129,18 +141,17 @@ internal fun CoreTodayPreview(
                     WhumpoQuietButton(onClick = { inbox = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Task notifications")
                     }
-                    WorkRead(controller, epoch, { controller.today() }, onUnavailable = { availability(emptySet()) }) { today ->
-                        val readable = buildSet {
-                            if (today.briefing.sections.siteActivity?.items?.any {
-                                    it.decisionAccess == null && !it.source.kind.review
-                                } == true) add(CoreAdaptiveCategory.WebsiteActivity)
-                            if (today.briefing.sections.verified.items.isNotEmpty()) add(CoreAdaptiveCategory.VerifiedResults)
-                        }
-                        LaunchedEffect(today) { availability(readable) }
+                    WorkRead(controller, epoch, { controller.today() }, onUnavailable = { availability(emptySet()) },
+                        onRead = { availability(it.adaptiveDestinations()) }, readGeneration = readGeneration) { today ->
+                        val readable = today.adaptiveDestinations()
                         TodayBriefing(
                             today,
-                            openTask = { source -> controller.commitIfCurrent(epoch) { task = TodayTask(today, source) } },
-                            openReceipt = { activity -> controller.commitIfCurrent(epoch) { receipt = TodayReceipt(today, activity) } },
+                            openTask = { source ->
+                                controller.commitIfCurrent(epoch) { task = TodayTask(today, source, CoreAdaptiveOpenIntent(readGeneration)) }
+                            },
+                            openReceipt = { activity ->
+                                controller.commitIfCurrent(epoch) { receipt = TodayReceipt(today, activity, CoreAdaptiveOpenIntent(readGeneration)) }
+                            },
                             websiteAnchor = websiteAnchor,
                             resultsAnchor = resultsAnchor,
                             focusSection = {
@@ -153,7 +164,7 @@ internal fun CoreTodayPreview(
                                                 if (category in readable) actions.launch {
                                                     if (category == CoreAdaptiveCategory.WebsiteActivity) websiteAnchor.bringIntoView()
                                                     else resultsAnchor.bringIntoView()
-                                                    focus.open(category)
+                                                    if (canCreditOpen()) focus.open(category)
                                                 }
                                             }
                                         }
@@ -322,3 +333,10 @@ private val timeFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIU
 
 private fun readable(value: String): String =
     runCatching { Instant.parse(value).atZone(ZoneId.systemDefault()).format(timeFormat) }.getOrDefault(value)
+
+private fun CoreOrganizationSessionController.Today.adaptiveDestinations(): Set<CoreAdaptiveCategory> = buildSet {
+    if (briefing.sections.siteActivity?.items?.any { it.decisionAccess == null && !it.source.kind.review } == true) {
+        add(CoreAdaptiveCategory.WebsiteActivity)
+    }
+    if (briefing.sections.verified.items.isNotEmpty()) add(CoreAdaptiveCategory.VerifiedResults)
+}
