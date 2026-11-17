@@ -19,6 +19,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
+import androidx.test.espresso.Espresso.pressBack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.whumpo.android.core.CoreLauncher
@@ -67,6 +68,13 @@ class CoreLauncherTest {
     fun defaultLauncherKeepsLegacyEntry() {
         launch().use {
             awaitLegacyEntry()
+            if (BuildConfig.WHUMPO_ENVIRONMENT == "local") {
+                click("Explore setup preview")
+                awaitText("Account security and sign-in")
+                compose.onNodeWithText("Review your next step").assertDoesNotExist()
+                pressBack()
+                awaitLegacyEntry()
+            }
         }
     }
 

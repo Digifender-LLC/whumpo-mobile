@@ -71,6 +71,7 @@ import com.whumpo.core.auth.CoreDiscoveryHandoffController
 import com.whumpo.core.auth.DiscoveryHandoffState
 import com.whumpo.android.ui.onboarding.BusinessDiscoveryContent
 import com.whumpo.android.ui.onboarding.ConnectedSetupContent
+import com.whumpo.android.ui.onboarding.ConnectedSetupNextStepContent
 import com.whumpo.android.ui.onboarding.DiscoveryHandoffContent
 import com.whumpo.android.ui.onboarding.DiscoveryHandoffInventory
 import com.whumpo.android.ui.ownership.CoreOwnershipSection
@@ -183,6 +184,7 @@ internal fun CorePreview(
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
     var showPartner by remember(active?.epoch) { mutableStateOf(false) }
     var showDiscovery by remember(active?.epoch) { mutableStateOf(false) }
+    var nextStepChosen by remember(active?.epoch) { mutableStateOf(false) }
     var showHandoff by remember(active?.epoch) { mutableStateOf(false) }
     var showPartnerSample by remember(state) { mutableStateOf(false) }
     var showOnboarding by remember(state) { mutableStateOf(false) }
@@ -345,6 +347,24 @@ internal fun CorePreview(
                 },
             )
         }
+        return
+    }
+    val nextStepProject = active?.let { setupState.nextStepProject(it.session.orgId) }
+    if (active != null && setup != null && discovery != null && nextStepProject != null && !nextStepChosen) {
+        fun continueSetup(review: Boolean) {
+            controller.commitIfCurrent(active.epoch) {
+                if (!nextStepChosen && setup.state.value.nextStepProject(active.session.orgId) == nextStepProject) {
+                    nextStepChosen = true
+                    showDiscovery = review
+                }
+            }
+        }
+        BackHandler { continueSetup(review = false) }
+        ConnectedSetupNextStepContent(
+            onReview = { continueSetup(review = true) },
+            onContinue = { continueSetup(review = false) },
+            modifier = Modifier.fillMaxSize(),
+        )
         return
     }
     if (active != null && setup != null && !ready) {

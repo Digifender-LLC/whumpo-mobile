@@ -1,5 +1,7 @@
 package com.whumpo.android.ui.onboarding
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,6 +32,28 @@ import com.whumpo.core.auth.CoreConnectedSetupState
 import com.whumpo.core.auth.CoreSetupNotice
 import com.whumpo.core.auth.CoreSetupQuestion
 import java.time.ZoneId
+
+@Composable
+fun ConnectedSetupNextStepContent(
+    onReview: () -> Unit,
+    onContinue: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Your workspace is ready", style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.semantics { heading() })
+        Text("You can review your starter plan now or continue to your workspace.")
+        WhumpoPrimaryButton(onClick = onReview, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+            Text("Review your next step")
+        }
+        WhumpoQuietButton(onClick = onContinue, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("Continue to workspace")
+        }
+    }
+}
 
 @Composable
 fun ConnectedSetupContent(
