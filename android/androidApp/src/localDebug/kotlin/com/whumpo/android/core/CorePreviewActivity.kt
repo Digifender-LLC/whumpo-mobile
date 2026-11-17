@@ -179,6 +179,7 @@ internal fun CorePreview(
     var showHostname by remember(active?.epoch) { mutableStateOf(false) }
     var restoreHostnameFocus by remember(active?.epoch) { mutableStateOf(false) }
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
+    var showInvitations by remember(active?.epoch) { mutableStateOf(false) }
     var showOfflineWork by remember(active?.epoch) { mutableStateOf(false) }
     var discoveryWorkTask by remember(active?.epoch) { mutableStateOf<CoreWorkTask?>(null) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
@@ -475,6 +476,12 @@ internal fun CorePreview(
         }
         return
     }
+    if (active?.session?.role == CoreRole.owner && ready && showInvitations) {
+        key(active.epoch) {
+            CoreOwnerInvitationsPreview(controller, active) { showInvitations = false }
+        }
+        return
+    }
     CorePreviewContent(state, page, memberships, message,
         ownership = {
             if (active != null && ownership != null) {
@@ -488,6 +495,7 @@ internal fun CorePreview(
         },
         openToday = { showToday = true },
         openWork = { showWork = true },
+        openInvitations = if (active?.session?.role == CoreRole.owner && ready) ({ showInvitations = true }) else null,
         openPartner = { showPartner = true },
         openDiscovery = openDiscovery,
         openDomains = if (active != null && ready && domains != null) ({ showDomains = true }) else null,
@@ -601,6 +609,7 @@ private fun CorePreviewContent(
     ownership: @Composable () -> Unit,
     openToday: () -> Unit,
     openWork: () -> Unit,
+    openInvitations: (() -> Unit)?,
     openPartner: () -> Unit,
     openDiscovery: (() -> Unit)?,
     openDomains: (() -> Unit)?,
@@ -644,6 +653,11 @@ private fun CorePreviewContent(
                     Text(if (page.coverage.siteBuildAvailable) "Site building available" else "Site building unavailable")
                 }
                 ownership()
+                if (openInvitations != null) {
+                    WhumpoQuietButton(onClick = openInvitations, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("Manage team invitations")
+                    }
+                }
                 Button(onClick = openToday) { Text("Open Today") }
                 WhumpoQuietButton(onClick = openPartner, modifier = Modifier.heightIn(min = 48.dp)) { Text("Open Partner") }
                 Button(onClick = openWork) { Text("Open Work") }
