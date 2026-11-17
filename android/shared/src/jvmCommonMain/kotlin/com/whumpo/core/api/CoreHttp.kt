@@ -1,5 +1,6 @@
 package com.whumpo.core.api
 
+import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.okhttp.OkHttp
 
 /** The replacement session endpoint revokes the original bearer, so transport replay is unsafe. */
@@ -13,3 +14,5 @@ fun coreApiClient(origin: CoreOrigin): CoreApiClient = CoreApiClient(
     },
     origin,
 )
+
+fun coreApiClient(origin: CoreOrigin, engine: HttpClientEngine): CoreApiClient = CoreApiClient(engine, origin)

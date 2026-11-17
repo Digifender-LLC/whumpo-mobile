@@ -85,6 +85,7 @@ internal fun AccountSecurityScreen(
     state: AccountSecurityState?,
     passkeys: AccountPasskeys,
     passkeysConfigured: Boolean,
+    existingAccountOnly: Boolean = false,
     close: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -318,7 +319,7 @@ internal fun AccountSecurityScreen(
             close()
         } else run {
             try {
-                controller.leave()
+                if (existingAccountOnly) controller.signOutWorkspace() else controller.leave()
                 recovery = null
                 totpSetup = null
                 close()
@@ -365,7 +366,10 @@ internal fun AccountSecurityScreen(
                 } else when (state?.purpose) {
                     null -> when (entry) {
                         Entry.Choose -> {
-                            if (checkingCompletion) {
+                            if (existingAccountOnly) {
+                                StepTitle("Sign in to Core")
+                                if (!passkeysConfigured) Text("Passkey sign-in requires a verified Android association.")
+                            } else if (checkingCompletion) {
                                 StepTitle("Check account setup")
                             } else {
                                 StepTitle("Choose how to secure your account")
@@ -388,7 +392,7 @@ internal fun AccountSecurityScreen(
                             WhumpoQuietButton(onClick = { entry = Entry.Password }, enabled = !busy) { Text("Sign in with password and authenticator") }
                             if (checkingCompletion) {
                                 WhumpoQuietButton(onClick = { restart(Entry.Choose) }, enabled = !busy) { Text("Back to account security") }
-                            } else {
+                            } else if (!existingAccountOnly) {
                                 WhumpoQuietButton(onClick = { entry = Entry.Recovery }, enabled = !busy) { Text("Recover an account") }
                                 WhumpoQuietButton(onClick = { entry = Entry.Reserved }, enabled = !busy) { Text("Use a reserved invitation") }
                                 WhumpoQuietButton(onClick = { entry = Entry.ResumeReserved }, enabled = !busy) { Text("Resume reserved setup") }
@@ -500,8 +504,10 @@ internal fun AccountSecurityScreen(
                                     }
                                 }
                             }
-                            WhumpoQuietButton(onClick = { joining = true }, enabled = !busy) {
-                                Text("Join with a person invitation")
+                            if (!existingAccountOnly) {
+                                WhumpoQuietButton(onClick = { joining = true }, enabled = !busy) {
+                                    Text("Join with a person invitation")
+                                }
                             }
                         }
                     }

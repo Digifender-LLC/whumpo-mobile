@@ -20,6 +20,10 @@
       "dataExtractionRulesExcludeEveryDomainForCloudAndTransfer",
       "fullBackupContentExcludesEveryDomain"
     ],
+    "com.whumpo.android.CoreLauncherTest": [
+      "defaultLauncherKeepsLegacyEntry",
+      "syntheticLauncherVerifiesReadinessAndRevokesTheExactSession"
+    ],
     "com.whumpo.android.CredentialHygieneTest": [
       "aSignedInSessionNeverReachesTheDeviceLogOrAPlainFile",
       "theBackupManagerRefusesThePackageWhileProtectedStateExists"

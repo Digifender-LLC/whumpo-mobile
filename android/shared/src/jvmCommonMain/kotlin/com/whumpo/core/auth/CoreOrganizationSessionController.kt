@@ -21,6 +21,7 @@ import com.whumpo.core.api.CoreTaskCommandStatus
 import com.whumpo.core.api.CoreTaskOutcome
 import com.whumpo.core.api.CoreWorkspaceChoices
 import com.whumpo.core.api.CoreOrganizationEntitlements
+import com.whumpo.core.api.CoreOrganizationReadiness
 import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreProtocolException
 import com.whumpo.core.api.CoreRole
@@ -135,6 +136,13 @@ class CoreOrganizationSessionController(
         synchronized(lock) { clearLocked() }
     }
 
+    /** Drops local authority before returning the exact session's revocation. */
+    internal fun clearForRevocation(): (suspend () -> Unit)? = synchronized(lock) {
+        val token = credential?.token
+        clearLocked()
+        token?.let { { api.revokeSession(it) } }
+    }
+
     suspend fun switchOrganization(targetOrgId: String): State.Active {
         require(coreIdentifier.matches(targetOrgId))
         return replace(targetOrgId) { api.switch(it, targetOrgId) }
@@ -148,6 +156,22 @@ class CoreOrganizationSessionController(
     suspend fun profile(): CoreOrganizationProfile = request {
         api.profile(it.token).also { profile -> verifyOrganization(profile.orgId, it) }
     }
+
+    suspend fun organizationWhenReady(active: State.Active): CoreOrganizationProfile? {
+        if (!readiness(active).ready) return null
+        return requestForActiveSession(active) { api, token ->
+            api.profile(token).also {
+                if (it.orgId != active.session.orgId) throw CoreProtocolException()
+            }
+        }
+    }
+
+    internal suspend fun readiness(active: State.Active): CoreOrganizationReadiness =
+        requestForActiveSession(active) { api, token -> api.organizationReadiness(token) }.also {
+            val projectId = it.projectId
+            if (it.orgId != active.session.orgId ||
+                (projectId != null && (!it.ready || !coreIdentifier.matches(projectId)))) throw CoreProtocolException()
+        }
 
     suspend fun rename(name: String, version: Long, key: String): CoreOrganizationProfile = request {
         api.rename(it.token, name, version, key).also { profile -> verifyOrganization(profile.orgId, it) }

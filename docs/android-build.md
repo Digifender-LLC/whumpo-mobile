@@ -67,6 +67,33 @@ Release configuration reads `WHUMPO_UPLOAD_STORE_FILE`, `WHUMPO_UPLOAD_STORE_PAS
 Do not provide these to public contribution jobs. If signing configuration is incomplete, a release build uses the debug identity
 and a `-debugsigned` suffix. Official releases require complete signing configuration. This repository contains no release publishing job.
 
+### Synthetic Core launcher
+
+The standard launcher still opens the legacy mobile shell. For local
+development only, assemble `deployedDebug` with the exact reserved test origin:
+
+```sh
+./gradlew assembleDeployedDebug assembleDeployedDebugAndroidTest \
+  -Pwhumpo.syntheticCoreEntryOrigin=https://core.example.test
+```
+
+The opt-in opens an existing-account Core entry through `MainActivity`.
+It uses a separate HTTPS client without redirects. The device test supplies an
+in-process transport for that origin. Use synthetic accounts only. The build
+property has no effect on the local preview or on release builds.
+
+The launcher asks the user to choose an organization after verified sign-in.
+It reads readiness and a matching organization profile before showing the
+organization name and role. Sign-out clears local account and workspace
+authority before attempting revocation of the exact workspace session and
+account grant. A failed request leaves the device signed out and reports that
+service sign-out is unconfirmed.
+
+The test exercises the existing password and authenticator flow. Passkey sign-in
+requires the signed Android association and server-side native origin
+qualification. A confirmed launch audience, production Core endpoint, and
+release acceptance are still required.
+
 ### Primary owner controls
 
 In the connected Core preview, open **Show primary owner details** on the Organization screen. The designation shows the stored user ID, version and source. Owners can review a claim when the organization is undesignated. The current primary owner can load eligible owners and review an offer for a specific recipient. The recipient can review acceptance, and the parties can review cancellation.
