@@ -35,6 +35,17 @@ data class CoreAdaptiveReview internal constructor(
     internal val preferenceRevision: Long,
 )
 
+/** A destination tap may count at most once after its read succeeds in the same foreground. */
+class CoreAdaptiveOpenIntent(private val generation: Long) {
+    private var consumed = false
+
+    fun consume(currentGeneration: Long): Boolean {
+        if (consumed || generation != currentGeneration) return false
+        consumed = true
+        return true
+    }
+}
+
 data class CoreAdaptiveHomeState(
     val shortcuts: List<CoreAdaptiveCategory?> = emptyList(),
     val provisional: List<CoreAdaptiveCategory> = emptyList(),

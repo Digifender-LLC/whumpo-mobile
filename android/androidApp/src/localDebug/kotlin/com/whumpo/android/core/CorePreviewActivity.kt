@@ -252,7 +252,7 @@ internal fun CorePreview(
             focus.availability(primaryAvailability + todayAvailability)
             if (requestedFocus == category) {
                 requestedFocus = null
-                if (readable) actions.launch { focus.open(category) }
+                if (readable) actions.launch { if (isForegroundGeneration(adaptiveGeneration)) focus.open(category) }
             }
         }
     }
@@ -568,7 +568,8 @@ internal fun CorePreview(
             DisposableEffect(focus) { onDispose { focus?.leaveToday() } }
             CoreTodayPreview(controller, active, page?.profile?.displayName ?: active.session.orgId,
                 focus = focus.takeIf { focusForeground },
-                readGeneration = adaptiveGeneration,
+                readGeneration = if (focusForeground) adaptiveGeneration else -1L,
+                canCreditOpen = { focusForeground && isForegroundGeneration(adaptiveGeneration) },
                 availability = { destinations ->
                     if (focusForeground && isForegroundGeneration(adaptiveGeneration)) controller.commitIfCurrent(active.epoch) {
                         todayAvailability = destinations

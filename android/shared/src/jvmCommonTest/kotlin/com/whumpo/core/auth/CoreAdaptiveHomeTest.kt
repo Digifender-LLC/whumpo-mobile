@@ -37,6 +37,18 @@ class CoreAdaptiveHomeTest {
     private val now = Instant.parse("2026-01-02T12:00:00Z").toEpochMilli()
 
     @Test
+    fun explicitOpenIsConsumedOnceAndCannotBeRecreditedOnForegroundRevalidation() {
+        val tapped = CoreAdaptiveOpenIntent(4)
+        assertTrue(tapped.consume(4))
+        assertFalse(tapped.consume(4))
+        assertFalse(tapped.consume(5))
+        val lateRead = CoreAdaptiveOpenIntent(4)
+        assertFalse(lateRead.consume(5))
+        val freshTap = CoreAdaptiveOpenIntent(5)
+        assertTrue(freshTap.consume(5))
+    }
+
+    @Test
     fun learnedOrderWaitsForNextVisitAndUnavailableDestinationLeavesItsSlot() = runTest {
         var revision = 1
         var visits = 0
