@@ -102,6 +102,7 @@ class CorePreviewActivity : ComponentActivity() {
     private var adaptiveCacheFailure by mutableStateOf(false)
     private var shortcutReadyEpoch: () -> Long? = { null }
     private var shortcut by mutableStateOf<CoreStaticShortcutRequest?>(null)
+    private var shortcutLifetime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -131,6 +132,7 @@ class CorePreviewActivity : ComponentActivity() {
                             eraseCacheActor = { if (!adaptiveCache.eraseActor(api.origin, it)) adaptiveCacheFailure = true },
                             showCacheFailure = adaptiveCacheFailure, shortcut = shortcut,
                             publishShortcutReady = { shortcutReadyEpoch = it },
+                            shortcutLifetime = { shortcutLifetime }, interruptShortcut = ::interruptShortcut,
                             finishShortcut = { if (shortcut === it) shortcut = null })
                     }
                 }
@@ -142,7 +144,13 @@ class CorePreviewActivity : ComponentActivity() {
         super.onNewIntent(intent)
         val current = (controller.state.value as? CoreOrganizationSessionController.State.Active)?.epoch
         val ready = shortcutReadyEpoch()?.takeIf { it == current && controller.commitIfCurrent(it) {} }
-        shortcut = CoreStaticShortcutRequest.receive(intent.action, ready, SystemClock.elapsedRealtime())
+        interruptShortcut()
+        shortcut = CoreStaticShortcutRequest.receive(intent.action, ready, SystemClock.elapsedRealtime(), shortcutLifetime)
+    }
+
+    private fun interruptShortcut() {
+        shortcutLifetime++
+        shortcut = null
     }
 
     override fun onStart() {
@@ -158,7 +166,7 @@ class CorePreviewActivity : ComponentActivity() {
     override fun onPause() {
         adaptiveForeground = false
         adaptiveGeneration++
-        shortcut = null
+        interruptShortcut()
         super.onPause()
     }
 
@@ -196,6 +204,8 @@ internal fun CorePreview(
     showCacheFailure: Boolean,
     shortcut: CoreStaticShortcutRequest?,
     publishShortcutReady: (() -> Long?) -> Unit,
+    shortcutLifetime: () -> Long,
+    interruptShortcut: () -> Unit,
     finishShortcut: (CoreStaticShortcutRequest) -> Unit,
 ) {
     val state by controller.state.collectAsState()
@@ -270,11 +280,12 @@ internal fun CorePreview(
             fun currentEpoch(): Long? = session.epoch.takeIf {
                 shortcutHubEpoch() == it && isForegroundGeneration(adaptiveGeneration) && controller.commitIfCurrent(it) {}
             }
-            if (!request.verify(::currentEpoch, SystemClock::elapsedRealtime) {
+            val admissionLifetime = shortcutLifetime()
+            if (!request.verify(::currentEpoch, SystemClock::elapsedRealtime, shortcutLifetime) {
                     controller.organizationWhenReady(session) != null
                 }) return@LaunchedEffect
             controller.commitIfCurrent(session.epoch) {
-                if (currentEpoch() == null) return@commitIfCurrent
+                if (currentEpoch() == null || shortcutLifetime() != admissionLifetime) return@commitIfCurrent
                 when (request.destination) {
                     CoreStaticShortcut.Today -> { shortcutToday = true; showToday = true }
                     CoreStaticShortcut.Work -> { showWork = true }
@@ -377,6 +388,7 @@ internal fun CorePreview(
         }
     }
     val choose: (String) -> Unit = { org ->
+        interruptShortcut()
         message = null
         actions.launch {
             try {
@@ -389,6 +401,7 @@ internal fun CorePreview(
         }
     }
     val signOut: () -> Unit = {
+        interruptShortcut()
         message = null
         actions.launch {
             try {
@@ -407,10 +420,11 @@ internal fun CorePreview(
         }
     }
     val freshSignIn: () -> Unit = {
+        interruptShortcut()
         account.clear()
         showSecurity = true
     }
-    val openDiscovery: (() -> Unit)? = if (discovery == null) null else { { showDiscovery = true } }
+    val openDiscovery: (() -> Unit)? = if (discovery == null) null else { { interruptShortcut(); showDiscovery = true } }
     if (active != null && ready && handoff != null && showDiscovery && showHandoff) {
         key(active.epoch) {
             val handoffState by handoff.state.collectAsState()
@@ -664,27 +678,32 @@ internal fun CorePreview(
             if (active != null && ownership != null) {
                 key(active.epoch) {
                     CoreOwnershipSection(ownership, active.session.userId, active.session.role,
-                        onSignInReview = { ownershipSignInReview = it }) {
+                        onSignInReview = { ownershipSignInReview = it },
+                        onReviewOpened = interruptShortcut) {
                         account.clear()
                         showSecurity = true
                     }
                 }
             }
         },
-        openToday = { shortcutToday = false; showToday = true },
-        openWork = { requestedFocus = CoreAdaptiveCategory.Work; showWork = true },
-        openInvitations = if (active?.session?.role == CoreRole.owner && ready) ({ showInvitations = true }) else null,
-        openPartner = { requestedFocus = CoreAdaptiveCategory.Partner; showPartner = true },
+        openToday = { interruptShortcut(); shortcutToday = false; showToday = true },
+        openWork = { interruptShortcut(); requestedFocus = CoreAdaptiveCategory.Work; showWork = true },
+        openInvitations = if (active?.session?.role == CoreRole.owner && ready) ({
+            interruptShortcut()
+            showInvitations = true
+        }) else null,
+        openPartner = { interruptShortcut(); requestedFocus = CoreAdaptiveCategory.Partner; showPartner = true },
         openDiscovery = openDiscovery,
-        openDomains = if (active != null && ready && domains != null) ({ showDomains = true }) else null,
+        openDomains = if (active != null && ready && domains != null) ({ interruptShortcut(); showDomains = true }) else null,
         openHostname = if (active?.session?.role == CoreRole.owner && ready) ({
             restoreHostnameFocus = false
+            interruptShortcut()
             showHostname = true
         }) else null,
         restoreHostnameFocus = restoreHostnameFocus,
         tryPartner = { showPartnerSample = true },
         tryOnboarding = { showOnboarding = true },
-        signIn = { showSecurity = true },
+        signIn = { interruptShortcut(); showSecurity = true },
         choose = choose,
         next = { cursor = it },
         signOut = signOut,

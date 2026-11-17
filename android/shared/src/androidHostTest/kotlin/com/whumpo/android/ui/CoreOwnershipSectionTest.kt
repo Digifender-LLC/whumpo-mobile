@@ -64,9 +64,13 @@ class CoreOwnershipSectionTest : RobolectricUiTest() {
             val sessions = CoreOrganizationSessionController(api) { 1L }
             val active = runBlocking { sessions.establish("A".repeat(43)) }
             val ownership = CoreOwnershipController(sessions, active) { 1L }
+            val reviewOpens = AtomicInteger()
             launch(Screen.Compact, dark = true, fontScale = 2f) {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    CoreOwnershipSection(ownership, "fixture-owner", CoreRole.owner, signIn = { error("Unexpected sign-in") })
+                    CoreOwnershipSection(ownership, "fixture-owner", CoreRole.owner, onReviewOpened = {
+                        check(ownership.state.value.review == null)
+                        reviewOpens.incrementAndGet()
+                    }, signIn = { error("Unexpected sign-in") })
                 }
             }.use {
                 compose.onNodeWithText("Primary owner").assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
@@ -75,6 +79,7 @@ class CoreOwnershipSectionTest : RobolectricUiTest() {
                 assertEquals(1, reads.get())
                 assertEquals(0, writes.get())
                 compose.onNodeWithText("Review primary owner claim").performScrollTo().performClick()
+                assertEquals(1, reviewOpens.get())
                 compose.onNodeWithText("New primary owner: fixture-owner (You)").performScrollTo().assertIsDisplayed()
                 assertEquals(0, writes.get())
                 compose.onNodeWithText("Confirm primary owner claim").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()

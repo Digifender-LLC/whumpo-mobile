@@ -35,6 +35,7 @@ fun CoreOwnershipSection(
     userId: String,
     role: CoreRole,
     onSignInReview: (Boolean) -> Unit = {},
+    onReviewOpened: () -> Unit = {},
     signIn: () -> Unit,
 ) {
     val state by controller.state.collectAsState()
@@ -42,6 +43,7 @@ fun CoreOwnershipSection(
     var expanded by remember { mutableStateOf(false) }
     var signInReview by remember { mutableStateOf(false) }
     fun setSignInReview(present: Boolean) {
+        if (present) onReviewOpened()
         signInReview = present
         onSignInReview(present)
     }
@@ -82,7 +84,10 @@ fun CoreOwnershipSection(
                 CoreOwnershipAction.Accept to "Review acceptance",
                 CoreOwnershipAction.Cancel to "Review cancellation",
             )) {
-                if (controller.canReview(action)) OwnershipButton(label) { controller.review(action) }
+                if (controller.canReview(action)) OwnershipButton(label) {
+                    onReviewOpened()
+                    controller.review(action)
+                }
             }
             if (!state.retry && role == CoreRole.owner && designation?.primaryOwnerUserId == userId &&
                 designation.pendingTransfer == null
@@ -96,7 +101,10 @@ fun CoreOwnershipSection(
                     candidates.drop(offset).take(20).forEach { candidate ->
                         OwnershipButton("Review offer to ${candidate.userId}",
                             enabled = controller.canReview(CoreOwnershipAction.Offer, candidate),
-                        ) { controller.review(CoreOwnershipAction.Offer, candidate) }
+                        ) {
+                            onReviewOpened()
+                            controller.review(CoreOwnershipAction.Offer, candidate)
+                        }
                     }
                     if (offset > 0) OwnershipButton("Previous owners") { offset -= 20 }
                     if (offset + 20 < candidates.size) OwnershipButton("More owners") { offset += 20 }
