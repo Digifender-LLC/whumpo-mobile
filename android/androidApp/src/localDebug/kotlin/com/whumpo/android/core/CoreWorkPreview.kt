@@ -57,11 +57,16 @@ internal fun CoreWorkPreview(
     var recovering by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
     var receivingLink by remember { mutableStateOf(false) }
+    var inbox by remember { mutableStateOf(false) }
     var selected by remember(initialTask) { mutableStateOf(initialTask) }
     var openedFromCreation by remember { mutableStateOf(false) }
     var receipts by remember { mutableStateOf(false) }
     var workCursor by remember { mutableStateOf<String?>(null) }
     var historyCursor by remember { mutableStateOf<String?>(null) }
+    if (inbox) {
+        CoreInboxPreview(controller, active, organizationName) { inbox = false }
+        return
+    }
     if (receivingLink && workWebOrigin != null) {
         CoreWorkLinkPreview(controller, active, workWebOrigin, organizationName,
             close = { receivingLink = false }, signOut = signOut)
@@ -113,6 +118,9 @@ internal fun CoreWorkPreview(
             when {
                 task == null -> {
                     Text("Work", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
+                    WhumpoQuietButton(onClick = { inbox = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("Task notifications")
+                    }
                     if (workWebOrigin != null) {
                         WhumpoQuietButton(onClick = { receivingLink = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                             Text("Open Work link")

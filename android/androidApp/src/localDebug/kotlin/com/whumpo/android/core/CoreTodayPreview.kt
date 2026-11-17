@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.core.api.CoreTodayDecisionAccess
 import com.whumpo.core.api.CoreTodayDueState
 import com.whumpo.core.api.CoreTodaySection
@@ -45,10 +47,16 @@ private data class TodayReceipt(val today: CoreOrganizationSessionController.Tod
 @Composable
 internal fun CoreTodayPreview(
     controller: CoreOrganizationSessionController,
-    epoch: Long,
+    active: CoreOrganizationSessionController.State.Active,
     organizationName: String,
     close: () -> Unit,
 ) {
+    val epoch = active.epoch
+    var inbox by remember { mutableStateOf(false) }
+    if (inbox) {
+        CoreInboxPreview(controller, active, organizationName) { inbox = false }
+        return
+    }
     var task by remember { mutableStateOf<TodayTask?>(null) }
     var receipt by remember { mutableStateOf<TodayReceipt?>(null) }
     var refresh by remember { mutableStateOf(0) }
@@ -100,6 +108,9 @@ internal fun CoreTodayPreview(
                 else -> {
                     Text("Today", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
                     OutlinedButton(onClick = { refresh += 1 }) { Text("Refresh") }
+                    WhumpoQuietButton(onClick = { inbox = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("Task notifications")
+                    }
                     WorkRead(controller, epoch, { controller.today() }) { today ->
                         TodayBriefing(
                             today,

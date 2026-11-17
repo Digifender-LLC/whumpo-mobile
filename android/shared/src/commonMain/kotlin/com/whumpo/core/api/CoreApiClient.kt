@@ -259,6 +259,29 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return json.decodeFromString(call(token, "/v1/tasks/$taskId"))
     }
 
+    internal suspend fun inbox(token: String, cursor: String?): CoreInboxWirePage {
+        require(cursor == null || coreDigest.matches(cursor))
+        return decodeInboxPage(call(token, "/v1/notifications", cursor = cursor, limit = CORE_INBOX_PAGE_SIZE, requireJson = true))
+    }
+
+    internal suspend fun resolveInboxItem(token: String, item: CoreInboxItem): CoreInboxResolution {
+        require(coreIdentifier.matches(item.id))
+        return decodeInboxResolution(call(token, "/v1/notifications/${item.id}/resolve", requireJson = true), item)
+    }
+
+    internal suspend fun inboxApproval(token: String, source: CoreInboxResolution.Approval): CoreInboxDetail.Approval =
+        decodeInboxApproval(call(token, "/v1/approvals/${source.approvalId}", requireJson = true,
+            maxResponseBytes = 262_144), source)
+
+    internal suspend fun inboxReceipt(token: String, source: CoreInboxResolution.Confirmed, orgId: String): CoreInboxDetail.ConfirmedResult =
+        decodeInboxReceipt(call(token, "/v1/effects/${source.effectId}/receipts", requireJson = true), source, orgId)
+
+    internal suspend fun acknowledgeInboxItem(token: String, item: CoreInboxItem): String {
+        require(coreIdentifier.matches(item.id))
+        return decodeInboxAck(call(token, "/v1/notifications/${item.id}/acknowledge", HttpMethod.Post, "{}",
+            requireJson = true), item)
+    }
+
     internal suspend fun workLinkHistory(token: String, taskId: String, cursor: String?): CoreWorkLinkEvent? {
         require(coreIdentifier.matches(taskId) && (cursor == null || workLinkEventId.matches(cursor)))
         return decodeWorkLinkHistory(call(token, "/v1/tasks/$taskId/history", cursor = cursor, limit = 1,
