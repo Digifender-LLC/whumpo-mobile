@@ -181,21 +181,25 @@ class CoreAccountSecurityController(
 
     fun clear() {
         synchronized(lock) {
-            epoch++
-            grant = null
-            login = null
-            pendingEnrollment = null
-            pendingPublicStart = null
-            pendingReservedSetup = null
-            pendingMutation = null
-            pendingCancellation = null
-            reservedEnrollment = false
-            expectedSignIn = null
-            mutableRetry.value = null
-            mutableRecoveryReview.value = null
-            mutableState.value = null
+            clearAccountLocked()
             workspace.clear()
         }
+    }
+
+    private fun clearAccountLocked() {
+        epoch++
+        grant = null
+        login = null
+        pendingEnrollment = null
+        pendingPublicStart = null
+        pendingReservedSetup = null
+        pendingMutation = null
+        pendingCancellation = null
+        reservedEnrollment = false
+        expectedSignIn = null
+        mutableRetry.value = null
+        mutableRecoveryReview.value = null
+        mutableState.value = null
     }
 
     fun checkCompletionThroughSignIn() {
@@ -827,6 +831,26 @@ class CoreAccountSecurityController(
         verify(operation)
         workspace.establishAccountSession(scoped, accountId, membership.orgId) { current(operation, authority) }
         verify(operation)
+    }
+
+    /** Signs out the established workspace and its account grant without keeping either in local state. */
+    suspend fun signOutWorkspace() {
+        val (revokeWorkspace, accountGrant) = synchronized(lock) {
+            val revoke = workspace.clearForRevocation()
+            val authority = grant?.takeIf { it.purpose == SecurityPurpose.Account && it.expiresAt > now() }
+            clearAccountLocked()
+            revoke to authority
+        }
+        val workspaceFailure = try {
+            revokeWorkspace?.invoke()
+            null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            error
+        }
+        if (accountGrant != null) api.accountSecurity<JsonObject>("sign-out", accountGrant, body())
+        if (workspaceFailure != null) throw workspaceFailure
     }
 
     suspend fun leave() = exclusive { operation ->

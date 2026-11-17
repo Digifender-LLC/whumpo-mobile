@@ -25,6 +25,8 @@ val uploadSigned = listOf("WHUMPO_UPLOAD_STORE_PASSWORD", "WHUMPO_UPLOAD_KEY_ALI
 val localCoreOrigin = providers.gradleProperty("whumpo.localCoreOrigin").getOrElse("http://127.0.0.1:5173")
 val localCoreRp = providers.gradleProperty("whumpo.localCoreRp").getOrElse("")
 val localWorkWebOrigin = providers.gradleProperty("whumpo.localWorkWebOrigin").getOrElse("")
+val syntheticCoreOrigin = providers.gradleProperty("whumpo.syntheticCoreEntryOrigin").getOrElse("")
+require(syntheticCoreOrigin.isEmpty() || syntheticCoreOrigin == "https://core.example.test")
 require(Regex("https://[a-z0-9]+(?:[-.][a-z0-9]+)+|http://127\\.0\\.0\\.1:[1-9][0-9]{0,4}").matches(localCoreOrigin))
 require(localCoreRp.isEmpty() || Regex("[a-z0-9]+(?:[-.][a-z0-9]+)+").matches(localCoreRp))
 require(!localCoreOrigin.startsWith("https://") || localCoreOrigin == "https://$localCoreRp")
@@ -43,6 +45,7 @@ android {
         // Final package identity, confirmed by the owner on 2026-10-29 (Q-005). It is permanent
         // once uploaded. This is not release authority: signing and Play actions stay with the owner.
         applicationId = "com.whumpo.android"
+        buildConfigField("String", "WHUMPO_SYNTHETIC_CORE_ORIGIN", "\"\"")
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = versionProps.getProperty("versionCodeBase").toInt() + runNumber
@@ -84,6 +87,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "WHUMPO_SYNTHETIC_CORE_ORIGIN", "\"$syntheticCoreOrigin\"")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true

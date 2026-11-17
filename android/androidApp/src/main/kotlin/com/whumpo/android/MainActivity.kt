@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,15 +12,34 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import com.whumpo.android.core.CoreLauncher
+import com.whumpo.android.core.NativeAccountPasskeys
 import com.whumpo.android.ui.WhumpoApp
+import com.whumpo.core.api.CoreApiClient
 import com.whumpo.android.ui.share.SharedItem
 import com.whumpo.android.ui.shell.DeepLink
 import com.whumpo.android.ui.theme.WhumpoTheme
 
 class MainActivity : ComponentActivity() {
+    private var coreClient: CoreApiClient? = null
+
+    override fun onDestroy() {
+        coreClient?.close()
+        super.onDestroy()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        val app = application as WhumpoApplication
+        val core = app.coreLauncherClient()
+        if (core != null) {
+            coreClient = core
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            val passkeys = NativeAccountPasskeys(app, container.activities)
+            setContent { CoreLauncher(core, passkeys) }
+            return
+        }
         val openPreview: (() -> Unit)? = if (BuildConfig.DEBUG && BuildConfig.WHUMPO_ENVIRONMENT == "local") {
             {
                 startActivity(Intent().setClassName(packageName, "com.whumpo.android.core.CorePreviewActivity"))
@@ -53,7 +73,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleIntent(intent)
+        if (coreClient == null) handleIntent(intent)
     }
 
     private fun handleIntent(intent: Intent?) {

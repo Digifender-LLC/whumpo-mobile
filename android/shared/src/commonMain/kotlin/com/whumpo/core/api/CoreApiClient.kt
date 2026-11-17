@@ -52,6 +52,10 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
     internal suspend fun session(token: String): CoreSession =
         json.decodeFromString(call(token, "/v1/auth/session"))
 
+    internal suspend fun revokeSession(token: String) {
+        call(token, "/v1/auth/session", HttpMethod.Delete, expectedStatus = 204)
+    }
+
     internal suspend fun switch(token: String, target: String): CoreSessionToken {
         require(coreIdentifier.matches(target))
         return json.decodeFromString(call(token, "/v1/auth/session/switch", HttpMethod.Post, json.encodeToString(CoreSwitch(target))))

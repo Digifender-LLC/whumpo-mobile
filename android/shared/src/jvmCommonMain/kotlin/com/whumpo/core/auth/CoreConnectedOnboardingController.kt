@@ -169,11 +169,7 @@ class CoreConnectedOnboardingController(
     private fun editableProfile(): CoreOnboardingProfile? =
         current.profile.takeIf { isOwner && current.canEdit && !current.reviewRequired && !current.canOpenWorkspace && pending == null }
 
-    private suspend fun requestedReadiness(): CoreOrganizationReadiness =
-        sessions.requestForActiveSession(active) { api, token -> api.organizationReadiness(token) }.also {
-            requireWire(it.orgId == active.session.orgId && (it.projectId == null ||
-                (it.ready && coreIdentifier.matches(it.projectId))))
-        }
+    private suspend fun requestedReadiness(): CoreOrganizationReadiness = sessions.readiness(active)
 
     private suspend fun requestedSummary(): CoreOnboardingSummary {
         requireWire(isOwner)

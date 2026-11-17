@@ -3,6 +3,10 @@ package com.whumpo.android
 import android.app.Application
 import com.whumpo.android.security.KeystoreSecretBox
 import com.whumpo.core.account.AccountStateStore
+import com.whumpo.core.api.CoreApiClient
+import com.whumpo.core.api.CoreOrigin
+import com.whumpo.core.api.coreApiClient
+import io.ktor.client.engine.HttpClientEngine
 import com.whumpo.core.environment.WhumpoEnvironment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +23,22 @@ open class WhumpoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = createContainer()
-        container.auth.start()
+        if (coreLauncherOrigin() == null) container.auth.start()
+    }
+
+    protected open fun syntheticCoreEndpoint(): String = BuildConfig.WHUMPO_SYNTHETIC_CORE_ORIGIN
+
+    protected open fun syntheticCoreEngine(): HttpClientEngine? = null
+
+    private fun coreLauncherOrigin(): CoreOrigin? {
+        if (!BuildConfig.DEBUG || BuildConfig.WHUMPO_ENVIRONMENT != "test") return null
+        val configured = syntheticCoreEndpoint()
+        if (configured.isEmpty()) return null
+        return CoreOrigin.allowlisted(configured, setOf("https://core.example.test"))
+    }
+
+    internal fun coreLauncherClient(): CoreApiClient? = coreLauncherOrigin()?.let { origin ->
+        syntheticCoreEngine()?.let { coreApiClient(origin, it) } ?: coreApiClient(origin)
     }
 
     /** The instrumented test application supplies a synthetic transport before any session is restored. */
