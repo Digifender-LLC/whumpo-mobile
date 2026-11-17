@@ -59,10 +59,17 @@ internal fun CoreWorkPreview(
     var receivingLink by remember { mutableStateOf(false) }
     var inbox by remember { mutableStateOf(false) }
     var selected by remember(initialTask) { mutableStateOf(initialTask) }
+    var attachmentTask by remember { mutableStateOf<CoreWorkTask?>(null) }
     var openedFromCreation by remember { mutableStateOf(false) }
     var receipts by remember { mutableStateOf(false) }
     var workCursor by remember { mutableStateOf<String?>(null) }
     var historyCursor by remember { mutableStateOf<String?>(null) }
+    attachmentTask?.let { target ->
+        key(epoch, target.id, target.projectId, target.version) {
+            CoreWorkAttachmentPreview(controller, active, target) { attachmentTask = null }
+        }
+        return
+    }
     if (inbox) {
         CoreInboxPreview(controller, active, organizationName) { inbox = false }
         return
@@ -187,6 +194,11 @@ internal fun CoreWorkPreview(
                     detail.dueAt?.let { Text("Due $it") }
                     if (detail.archivedAt != null) Text("Archived")
                     Text("Project ${detail.projectId}", style = MaterialTheme.typography.bodyMedium)
+                    if (active.session.role != CoreRole.viewer && detail.archivedAt == null) {
+                        WhumpoQuietButton(onClick = {
+                            controller.commitIfCurrent(epoch) { attachmentTask = detail }
+                        }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Attach private file") }
+                    }
                     Button(onClick = { selected = detail; receipts = true }) { Text("View website receipts") }
                 }
             }
