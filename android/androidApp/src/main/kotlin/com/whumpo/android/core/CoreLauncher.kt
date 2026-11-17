@@ -31,6 +31,9 @@ import com.whumpo.android.ui.theme.WhumpoEntryTheme
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
 import com.whumpo.android.ui.theme.WhumpoQuietButton
 import com.whumpo.core.api.CoreApiClient
+import com.whumpo.core.api.CoreEntitlementStatus
+import com.whumpo.core.api.CoreMembership
+import com.whumpo.core.api.CoreMembershipPage
 import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreRole
 import com.whumpo.core.auth.AccountPasskeys
@@ -50,6 +53,8 @@ internal fun CoreLauncher(api: CoreApiClient, passkeys: AccountPasskeys) {
     val session by sessions.state.collectAsStateWithLifecycle()
     val account by accounts.state.collectAsStateWithLifecycle()
     var showSignIn by remember(api) { mutableStateOf(false) }
+    var switching by remember(api) { mutableStateOf(false) }
+    var switchUnconfirmed by remember(api) { mutableStateOf(false) }
     var signOutUnconfirmed by remember(api) { mutableStateOf(false) }
     val actions = rememberCoroutineScope()
     DisposableEffect(accounts) {
@@ -79,6 +84,25 @@ internal fun CoreLauncher(api: CoreApiClient, passkeys: AccountPasskeys) {
                         CoreOrganizationEntry(active, sessions, onSessionEnded = {
                             accounts.clear()
                             showSignIn = false
+                        }, onSwitch = { membership ->
+                            if (!switching && sessions.state.value === active) {
+                                switching = true
+                                showSignIn = false
+                                actions.launch(start = CoroutineStart.UNDISPATCHED) {
+                                    try {
+                                        sessions.switchOrganization(active, membership)
+                                    } catch (error: CancellationException) {
+                                        throw error
+                                    } catch (_: Exception) {
+                                        if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) {
+                                            accounts.clear()
+                                            switchUnconfirmed = true
+                                        }
+                                    } finally {
+                                        switching = false
+                                    }
+                                }
+                            }
                         }, signOut = {
                             showSignIn = false
                             actions.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -92,13 +116,16 @@ internal fun CoreLauncher(api: CoreApiClient, passkeys: AccountPasskeys) {
                             }
                         })
                     }
+                } else if (switching) {
+                    Text("Switching organization…", Modifier.padding(24.dp).semantics { liveRegion = LiveRegionMode.Polite })
                 } else if (showSignIn) {
                     AccountSecurityScreen(accounts, account, passkeys, passkeysConfigured = false, existingAccountOnly = true) {
                         showSignIn = false
                     }
                 } else {
-                    CoreSignedOut(signOutUnconfirmed) {
+                    CoreSignedOut(signOutUnconfirmed, switchUnconfirmed) {
                         signOutUnconfirmed = false
+                        switchUnconfirmed = false
                         showSignIn = true
                     }
                 }
@@ -108,7 +135,7 @@ internal fun CoreLauncher(api: CoreApiClient, passkeys: AccountPasskeys) {
 }
 
 @Composable
-private fun CoreSignedOut(signOutUnconfirmed: Boolean, openSignIn: () -> Unit) {
+private fun CoreSignedOut(signOutUnconfirmed: Boolean, switchUnconfirmed: Boolean, openSignIn: () -> Unit) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -119,6 +146,10 @@ private fun CoreSignedOut(signOutUnconfirmed: Boolean, openSignIn: () -> Unit) {
             Text("Signed out on this device. Service sign-out could not be confirmed.",
                 Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         }
+        if (switchUnconfirmed) {
+            Text("Could not verify the organization switch. Sign in again.",
+                Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+        }
         WhumpoPrimaryButton(onClick = openSignIn) { Text("Open Core sign-in") }
     }
 }
@@ -127,7 +158,14 @@ private sealed interface OrganizationEntryState {
     data object Loading : OrganizationEntryState
     data object Unready : OrganizationEntryState
     data object Unavailable : OrganizationEntryState
-    data class Ready(val profile: CoreOrganizationProfile) : OrganizationEntryState
+    data class Ready(val profile: CoreOrganizationProfile, val access: CoreEntitlementStatus?) : OrganizationEntryState
+}
+
+private sealed interface OrganizationChoices {
+    data object Closed : OrganizationChoices
+    data object Loading : OrganizationChoices
+    data object Unavailable : OrganizationChoices
+    data class Loaded(val page: CoreMembershipPage) : OrganizationChoices
 }
 
 @Composable
@@ -135,16 +173,45 @@ private fun CoreOrganizationEntry(
     active: CoreOrganizationSessionController.State.Active,
     sessions: CoreOrganizationSessionController,
     onSessionEnded: () -> Unit,
+    onSwitch: (CoreMembership) -> Unit,
     signOut: () -> Unit,
 ) {
     var state by remember { mutableStateOf<OrganizationEntryState>(OrganizationEntryState.Loading) }
     var retry by remember { mutableStateOf(0) }
+    var choices by remember { mutableStateOf<OrganizationChoices>(OrganizationChoices.Closed) }
+    val actions = rememberCoroutineScope()
+
+    fun loadChoices(cursor: String?) {
+        if (choices == OrganizationChoices.Loading) return
+        choices = OrganizationChoices.Loading
+        actions.launch {
+            try {
+                val page = sessions.organizations(active, cursor)
+                sessions.commitIfCurrent(active.epoch) { choices = OrganizationChoices.Loaded(page) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) onSessionEnded()
+                else sessions.commitIfCurrent(active.epoch) { choices = OrganizationChoices.Unavailable }
+            }
+        }
+    }
     LaunchedEffect(active, retry) {
         state = OrganizationEntryState.Loading
         try {
             val profile = sessions.organizationWhenReady(active)
+            val availability = profile?.let {
+                try {
+                    sessions.entitlements(active).status
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) throw error
+                    null
+                }
+            }
             sessions.commitIfCurrent(active.epoch) {
-                state = if (profile == null) OrganizationEntryState.Unready else OrganizationEntryState.Ready(profile)
+                state = if (profile == null) OrganizationEntryState.Unready else OrganizationEntryState.Ready(profile, availability)
             }
         } catch (error: CancellationException) {
             throw error
@@ -156,7 +223,10 @@ private fun CoreOrganizationEntry(
             }
         }
     }
-    CoreOrganizationContent(state, active.session.orgId, active.session.role, { retry++ }, signOut)
+    CoreOrganizationContent(
+        state, active.session.orgId, active.session.role, choices, { retry++ },
+        loadChoices = ::loadChoices, closeChoices = { choices = OrganizationChoices.Closed }, onSwitch = onSwitch, signOut = signOut,
+    )
 }
 
 @Composable
@@ -164,7 +234,11 @@ private fun CoreOrganizationContent(
     state: OrganizationEntryState,
     organizationId: String,
     role: CoreRole,
+    choices: OrganizationChoices,
     retry: () -> Unit,
+    loadChoices: (String?) -> Unit,
+    closeChoices: () -> Unit,
+    onSwitch: (CoreMembership) -> Unit,
     signOut: () -> Unit,
 ) {
     Column(
@@ -182,10 +256,41 @@ private fun CoreOrganizationContent(
                 Text(state.profile.displayName ?: organizationId, Modifier.semantics { heading() },
                     style = MaterialTheme.typography.titleLarge)
                 Text("Role: ${role.name}")
+                Text(when (state.access) {
+                    CoreEntitlementStatus.active -> "Organization access is active."
+                    CoreEntitlementStatus.scheduled -> "Organization access is scheduled."
+                    CoreEntitlementStatus.expired -> "Organization access has expired."
+                    CoreEntitlementStatus.suspended -> "Organization access is suspended."
+                    CoreEntitlementStatus.unconfigured -> "Organization access is unconfigured."
+                    null -> "Could not verify organization access."
+                }, Modifier.semantics { liveRegion = LiveRegionMode.Polite })
             }
         }
         if (state == OrganizationEntryState.Unready || state == OrganizationEntryState.Unavailable) {
             WhumpoQuietButton(onClick = retry) { Text("Check again") }
+        }
+        when (choices) {
+            OrganizationChoices.Closed -> WhumpoQuietButton(onClick = { loadChoices(null) }) { Text("Switch organization") }
+            OrganizationChoices.Loading -> Text("Checking your organizations…", Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            OrganizationChoices.Unavailable -> {
+                Text("Could not verify your organization choices.", Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                WhumpoQuietButton(onClick = { loadChoices(null) }) { Text("Check organizations again") }
+                WhumpoQuietButton(onClick = closeChoices) { Text("Close organization choices") }
+            }
+            is OrganizationChoices.Loaded -> {
+                Text("Choose an organization", Modifier.semantics { heading() })
+                val otherOrganizations = choices.page.items.filter { !it.active }
+                if (otherOrganizations.isEmpty()) Text("No other organizations on this page.")
+                otherOrganizations.forEach { membership ->
+                    WhumpoQuietButton(onClick = { onSwitch(membership) }) {
+                        Text("Switch to ${membership.orgId} · ${membership.role.name}")
+                    }
+                }
+                choices.page.nextCursor?.let { cursor ->
+                    WhumpoQuietButton(onClick = { loadChoices(cursor) }) { Text("More organizations") }
+                }
+                WhumpoQuietButton(onClick = closeChoices) { Text("Close organization choices") }
+            }
         }
         WhumpoQuietButton(onClick = signOut) { Text("Sign out of Core") }
     }

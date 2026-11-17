@@ -5,6 +5,7 @@ import com.whumpo.core.api.CoreApiClient
 import com.whumpo.core.api.CoreHttpException
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreProtocolException
+import com.whumpo.core.api.CoreRole
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
@@ -29,8 +30,8 @@ class CoreOrganizationSessionControllerTest {
     private val target = "E".repeat(43)
     private val replacement = """{"token":"$target","expiresAt":9000}"""
 
-    private fun session(org: String, user: String = "user-1") =
-        """{"sessionId":"session-$org","orgId":"$org","userId":"$user","role":"owner","expiresAt":9000,"addedField":true}"""
+    private fun session(org: String, user: String = "user-1", role: String = "owner") =
+        """{"sessionId":"session-$org","orgId":"$org","userId":"$user","role":"$role","expiresAt":9000,"addedField":true}"""
 
     @Test
     fun switchRevokesSourceEpochAndGuardsAgainstLateUnauthorizedResponse() = runTest {
@@ -105,6 +106,54 @@ class CoreOrganizationSessionControllerTest {
             assertIs<CoreOrganizationSessionController.State.SignedOut>(controller.state.value)
             assertFailsWith<IllegalStateException> { controller.switchOrganization("team") }
             assertEquals(2, switches)
+        }
+    }
+
+    @Test
+    fun accessibleUnselectedMembershipSwitchesAndReplacementRoleMustMatch() = runTest {
+        var targetRole = "owner"
+        var posted = 0
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/v1/auth/session" -> when (request.headers["Authorization"]) {
+                    "Bearer $source" -> respond(session("solo"))
+                    "Bearer $target" -> respond(session("team", role = targetRole))
+                    else -> error("Unexpected session bearer")
+                }
+                "/v1/auth/organizations" -> {
+                    assertEquals("Bearer $source", request.headers["Authorization"])
+                    respond("""{"items":[{"orgId":"solo","role":"owner","active":true},
+                        {"orgId":"team","role":"operator","active":false}],"nextCursor":null}""")
+                }
+                "/v1/auth/session/switch" -> {
+                    assertEquals("Bearer $source", request.headers["Authorization"])
+                    assertEquals("""{"orgId":"team"}""", request.body.toByteArray().decodeToString())
+                    posted++
+                    respond(replacement)
+                }
+                else -> error("Unexpected path")
+            }
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val controller = CoreOrganizationSessionController(api) { 1 }
+            val before = controller.establish(source)
+            val (selected, other) = controller.organizations(before).items
+            assertTrue(selected.active)
+            assertFalse(other.active)
+            assertFailsWith<IllegalArgumentException> { controller.switchOrganization(before, selected) }
+            assertEquals(0, posted)
+            assertFailsWith<CoreProtocolException> { controller.switchOrganization(before, other) }
+            assertIs<CoreOrganizationSessionController.State.SignedOut>(controller.state.value)
+            assertFalse(controller.commitIfCurrent(before.epoch) { error("Stale commit") })
+            assertFailsWith<IllegalStateException> { controller.profile() }
+
+            targetRole = "operator"
+            val again = controller.establish(source)
+            val unselected = controller.organizations(again).items.single { !it.active }
+            val activated = controller.switchOrganization(again, unselected)
+            assertEquals(CoreRole.operator, activated.session.role)
+            assertEquals("team", activated.session.orgId)
+            assertEquals(2, posted)
         }
     }
 

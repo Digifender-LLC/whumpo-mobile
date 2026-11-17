@@ -1,7 +1,11 @@
 package com.whumpo.android
 
 import android.content.Intent
+import android.view.KeyEvent
+import androidx.activity.compose.setContent
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -10,10 +14,17 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.whumpo.android.core.CoreLauncher
+import com.whumpo.android.core.NativeAccountPasskeys
+import com.whumpo.core.api.CoreOrigin
+import com.whumpo.core.api.coreApiClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
@@ -22,6 +33,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -98,6 +111,7 @@ class CoreLauncherTest {
                 click("Check again")
                 awaitText("Fixture organization")
                 compose.onNodeWithText("Role: viewer").assertIsDisplayed()
+                awaitText("Organization access is active.")
                 click("Sign out of Core")
                 awaitText("Open Core sign-in")
                 compose.onNodeWithText("Fixture organization").assertDoesNotExist()
@@ -116,6 +130,7 @@ class CoreLauncherTest {
                         "GET /v1/organization/readiness",
                         "GET /v1/organization/readiness",
                         "GET /v1/organization",
+                        "GET /v1/organization/entitlements",
                         "DELETE /v1/auth/session",
                         "POST /v1/account-security/sign-out",
                     ),
@@ -124,6 +139,72 @@ class CoreLauncherTest {
             }
         } finally {
             fixture.releaseRevocation.complete(Unit)
+        }
+    }
+
+    @Test
+    fun syntheticLauncherSwitchesOnlyVerifiedMembershipsAndDiscardsOldScope() {
+        val fixture = CoreLauncherFixture(multipleOrganizations = true)
+        val localClient = if (BuildConfig.WHUMPO_ENVIRONMENT == "local") {
+            // Exercise the same mounted launcher with a synthetic engine without enabling the default local entry.
+            coreApiClient(CoreOrigin.allowlisted("https://core.example.test", setOf("https://core.example.test")), fixture.engine())
+        } else null
+        app.coreLauncherEngine = fixture::engine
+        fixture.readiness = CoreLauncherFixture.Readiness.Ready
+        try {
+            launch().use { scenario ->
+                if (localClient != null) scenario.onActivity { activity ->
+                    val passkeys = NativeAccountPasskeys(app, app.container.activities)
+                    activity.setContent { CoreLauncher(localClient, passkeys) }
+                }
+                click("Open Core sign-in")
+                click("Sign in with password and authenticator")
+                input("Username", CoreLauncherFixture.USERNAME)
+                input("Password", CoreLauncherFixture.PASSWORD)
+                click("Continue")
+                awaitText("Enter your authenticator code")
+                input("Authenticator code", CoreLauncherFixture.TOTP)
+                click("Sign in")
+                click("Load organizations")
+                click("fixture-org · viewer")
+                compose.waitUntil(10_000) { fixture.oldEntitlementRequested.isCompleted }
+
+                click("Switch organization")
+                awaitText("Switch to other-org · operator")
+                compose.onNodeWithText("Switch to revoked-org · viewer").assertDoesNotExist()
+                compose.onNodeWithText("Switch to fixture-org · viewer").assertDoesNotExist()
+                val target = compose.onNodeWithText("Switch to other-org · operator").performScrollTo()
+                InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_TAB)
+                target.assertIsFocused().performKeyInput { pressKey(Key.Enter) }
+                awaitText("Switching organization…")
+                compose.onNodeWithText("Fixture organization").assertDoesNotExist()
+                compose.onNodeWithText("Other organization").assertDoesNotExist()
+                fixture.releaseSwitch.complete(Unit)
+
+                awaitText("Other organization")
+                compose.onNodeWithText("Role: operator").assertIsDisplayed()
+                awaitText("Organization access has expired.")
+                fixture.releaseOldEntitlement.complete(Unit)
+                compose.waitUntil(10_000) { fixture.oldEntitlementReleased.isCompleted }
+                compose.waitForIdle()
+                compose.onNodeWithText("Organization access is active.").assertDoesNotExist()
+                compose.onNodeWithText("Fixture organization").assertDoesNotExist()
+
+                click("Switch organization")
+                fixture.denySwitch = true
+                click("Switch to fixture-org · viewer")
+                awaitText("Could not verify the organization switch. Sign in again.")
+                awaitText("Open Core sign-in")
+                compose.onNodeWithText("Other organization").assertDoesNotExist()
+                compose.onNodeWithText("Organization access has expired.").assertDoesNotExist()
+                assertEquals(2, fixture.requests.count { it == "POST /v1/auth/session/switch" })
+                assertEquals(2, fixture.requests.count { it == "GET /v1/auth/session" })
+                assertEquals(1, fixture.requests.count { it == "POST /v1/account-security/session" })
+            }
+        } finally {
+            fixture.releaseSwitch.complete(Unit)
+            fixture.releaseOldEntitlement.complete(Unit)
+            localClient?.close()
         }
     }
 
@@ -150,23 +231,32 @@ class CoreLauncherTest {
     }
 }
 
-private class CoreLauncherFixture {
+private class CoreLauncherFixture(private val multipleOrganizations: Boolean = false) {
     enum class Readiness { Unready, Foreign, Ready }
 
     val requests = CopyOnWriteArrayList<String>()
     val releaseRevocation = CompletableDeferred<Unit>()
+    val releaseSwitch = CompletableDeferred<Unit>()
+    val oldEntitlementRequested = CompletableDeferred<Unit>()
+    val releaseOldEntitlement = CompletableDeferred<Unit>()
+    val oldEntitlementReleased = CompletableDeferred<Unit>()
+    @Volatile var denySwitch = false
     @Volatile var readiness = Readiness.Unready
     private val deadline = System.currentTimeMillis() + 300_000
     private val grant = "ag1." + "g".repeat(42) + "A"
     private val token = "t".repeat(42) + "A"
+    private val switchedToken = "v".repeat(42) + "A"
 
     fun engine() = MockEngine { request ->
         assertEquals("https", request.url.protocol.name)
         assertEquals("core.example.test", request.url.host)
         assertEquals(443, request.url.port)
-        assertTrue(request.url.parameters.isEmpty())
         val route = "${request.method.value} ${request.url.encodedPath}"
+        if (route == "GET /v1/auth/organizations") assertEquals("25", request.url.parameters["limit"])
+        else assertTrue(request.url.parameters.isEmpty())
         val authorization = request.headers[HttpHeaders.Authorization]
+        val switched = authorization == "Bearer $switchedToken"
+        val organization = if (switched) "other-org" else "fixture-org"
         if (route != "DELETE /v1/auth/session") requests += route
         val body = when (route) {
             "POST /v1/account-security/password/login/start" -> {
@@ -195,20 +285,58 @@ private class CoreLauncherFixture {
                 """{"token":"$token","expiresAt":$deadline}"""
             }
             "GET /v1/auth/session" -> {
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
+                val session = if (switched) "other-session" else "fixture-session"
+                val role = if (switched) "operator" else "viewer"
+                """{"sessionId":"$session","orgId":"$organization","userId":"fixture-account","role":"$role","expiresAt":$deadline}"""
+            }
+            "GET /v1/auth/organizations" -> {
+                assertTrue(multipleOrganizations)
+                val expected = if (requests.count { it == route } == 1) token else switchedToken
+                assertEquals("Bearer $expected", authorization)
+                """{"items":[{"orgId":"fixture-org","role":"viewer","active":${!switched}},
+                    {"orgId":"other-org","role":"operator","active":$switched}],"nextCursor":null}"""
+            }
+            "POST /v1/auth/session/switch" -> {
+                assertTrue(multipleOrganizations)
+                val values = Json.parseToJsonElement(request.body.toByteArray().decodeToString()).jsonObject
+                assertEquals(setOf("orgId"), values.keys)
+                if (denySwitch) {
+                    assertEquals("Bearer $switchedToken", authorization)
+                    assertEquals("fixture-org", values.getValue("orgId").jsonPrimitive.content)
+                    return@MockEngine respond("{}", HttpStatusCode.NotFound)
+                }
                 assertEquals("Bearer $token", authorization)
-                """{"sessionId":"fixture-session","orgId":"fixture-org","userId":"fixture-account","role":"viewer","expiresAt":$deadline}"""
+                assertEquals("other-org", values.getValue("orgId").jsonPrimitive.content)
+                releaseSwitch.await()
+                """{"token":"$switchedToken","expiresAt":$deadline}"""
             }
             "GET /v1/organization/readiness" -> {
-                assertEquals("Bearer $token", authorization)
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
                 when (readiness) {
                     Readiness.Unready -> """{"orgId":"fixture-org","ready":false}"""
                     Readiness.Foreign -> """{"orgId":"other-org","ready":true,"projectId":"fixture-project"}"""
-                    Readiness.Ready -> """{"orgId":"fixture-org","ready":true,"projectId":"fixture-project"}"""
+                    Readiness.Ready -> """{"orgId":"$organization","ready":true,"projectId":"fixture-project"}"""
                 }
             }
             "GET /v1/organization" -> {
-                assertEquals("Bearer $token", authorization)
-                """{"orgId":"fixture-org","displayName":"Fixture organization","version":1}"""
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
+                val name = if (switched) "Other organization" else "Fixture organization"
+                """{"orgId":"$organization","displayName":"$name","version":1}"""
+            }
+            "GET /v1/organization/entitlements" -> {
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
+                if (multipleOrganizations && !switched) {
+                    oldEntitlementRequested.complete(Unit)
+                    withContext(NonCancellable) {
+                        releaseOldEntitlement.await()
+                        oldEntitlementReleased.complete(Unit)
+                    }
+                }
+                val status = if (switched) "expired" else "active"
+                """{"orgId":"$organization","status":"$status","membershipMode":"business_team","humanSeatLimit":5,
+                    "activeHumanSeats":2,"reservedHumanSeats":0,"availableHumanSeats":0,"teamAdmissionAvailable":false,
+                    "siteBuildAvailable":false,"revision":1,"effectiveFrom":1,"expiresAt":$deadline}"""
             }
             "DELETE /v1/auth/session" -> {
                 assertEquals("Bearer $token", authorization)

@@ -12,6 +12,7 @@ import com.whumpo.core.api.CORE_MAX_VERSION
 import com.whumpo.core.api.CoreApiClient
 import com.whumpo.core.api.CoreEffectState
 import com.whumpo.core.api.CoreHttpException
+import com.whumpo.core.api.CoreMembership
 import com.whumpo.core.api.CoreMembershipPage
 import com.whumpo.core.api.CoreNewTask
 import com.whumpo.core.api.CoreProjectChoice
@@ -148,10 +149,26 @@ class CoreOrganizationSessionController(
         return replace(targetOrgId) { api.switch(it, targetOrgId) }
     }
 
+    suspend fun switchOrganization(active: State.Active, membership: CoreMembership): State.Active {
+        // The server lists accessible memberships. "active" marks the current session's organization.
+        require(!membership.active && coreIdentifier.matches(membership.orgId) && membership.orgId != active.session.orgId)
+        return replace(membership.orgId, active, membership.role) { api.switch(it, membership.orgId) }
+    }
+
     suspend fun rotate(): State.Active = replace(null) { api.rotate(it) }
 
     suspend fun organizations(cursor: String? = null, limit: Int = 25): CoreMembershipPage =
         request { api.organizations(it.token, cursor, limit) }
+
+    suspend fun organizations(active: State.Active, cursor: String? = null): CoreMembershipPage =
+        requestForActiveSession(active) { client, token ->
+            client.organizations(token, cursor, 25).also { page ->
+                if (page.items.size > 25 || page.items.distinctBy { it.orgId }.size != page.items.size ||
+                    page.items.any { !coreIdentifier.matches(it.orgId) || it.active != (it.orgId == active.session.orgId) } ||
+                    page.nextCursor?.let { !coreIdentifier.matches(it) || it == cursor } == true
+                ) throw CoreProtocolException()
+            }
+        }
 
     suspend fun profile(): CoreOrganizationProfile = request {
         api.profile(it.token).also { profile -> verifyOrganization(profile.orgId, it) }
@@ -180,6 +197,13 @@ class CoreOrganizationSessionController(
     suspend fun entitlements(): CoreOrganizationEntitlements = request {
         api.entitlements(it.token).also { coverage -> verifyOrganization(coverage.orgId, it) }
     }
+
+    suspend fun entitlements(active: State.Active): CoreOrganizationEntitlements =
+        requestForActiveSession(active) { client, token ->
+            client.entitlements(token).also {
+                if (it.orgId != active.session.orgId) throw CoreProtocolException()
+            }
+        }
 
     suspend fun work(cursor: String? = null, limit: Int = 10): CoreWorkPage = request { current ->
         api.work(current.token, cursor, limit).also { page ->
@@ -796,16 +820,22 @@ class CoreOrganizationSessionController(
 
     private suspend fun replace(
         targetOrgId: String?,
+        active: State.Active? = null,
+        role: CoreRole? = null,
         exchange: suspend (String) -> CoreSessionToken,
     ): State.Active {
-        val (current, transition) = synchronized(lock) { requireCredential() to beginTransition() }
+        val (current, transition) = synchronized(lock) {
+            val current = requireCredential()
+            if (active != null && current.state !== active) throw CancellationException("Core session changed")
+            current to beginTransition()
+        }
         val source = current.state.session
         try {
             val replacement = exchange(current.token)
             if (!coreBearer.matches(replacement.token) || replacement.token == current.token ||
                 replacement.expiresAt != source.expiresAt) throw CoreProtocolException()
             return verifyAndActivate(transition, replacement.token, source.userId,
-                targetOrgId ?: source.orgId, replacement.expiresAt)
+                targetOrgId ?: source.orgId, replacement.expiresAt, role = role)
         } finally {
             abortTransition(transition)
         }
@@ -818,13 +848,14 @@ class CoreOrganizationSessionController(
         orgId: String? = null,
         expiresAt: Long? = null,
         validGrant: () -> Boolean = { true },
+        role: CoreRole? = null,
     ): State.Active {
         try {
             val session = api.session(token)
             if (!coreIdentifier.matches(session.sessionId) || !coreIdentifier.matches(session.userId) ||
                 !coreIdentifier.matches(session.orgId) || session.expiresAt <= now() ||
                 (userId != null && session.userId != userId) || (orgId != null && session.orgId != orgId) ||
-                (expiresAt != null && session.expiresAt != expiresAt)) throw CoreProtocolException()
+                (expiresAt != null && session.expiresAt != expiresAt) || (role != null && session.role != role)) throw CoreProtocolException()
             currentCoroutineContext().ensureActive()
             if (!validGrant()) throw CancellationException("Account grant changed")
             return synchronized(lock) {
