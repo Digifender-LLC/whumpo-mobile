@@ -28,7 +28,7 @@ class CoreAdaptiveProfileCacheTest {
     @Test
     fun projectionIsScopedReadOnlyAndPersistsNoRawIdentityOrAuthority() = withCache { directory, cache ->
         val session = session()
-        cache.save(origin, session, profile(session))
+        cache.saveImmediate(origin, session, profile(session))
         val reopened = CoreAdaptiveProfileCache(directory) { now }
         val projection = assertNotNull(reopened.load(origin, session.copy(sessionId = "new-session")))
         assertEquals(listOf(Partner, Work), projection.shortcuts(categories))
@@ -42,41 +42,76 @@ class CoreAdaptiveProfileCacheTest {
         for (secret in listOf(origin.value, session.userId, session.orgId, session.sessionId, "test-generation", "evidence-text")) {
             assertFalse(secret in raw)
         }
-        cache.save(origin, session, profile(session.copy(userId = "different-account")))
+        cache.saveImmediate(origin, session, profile(session.copy(userId = "different-account")))
         assertContentEquals(bytes, directory.resolve("profiles-v1.bin").readBytes())
     }
 
     @Test
     fun exactAgeSessionExpiryAndClockRollbackFailClosed() = withCache { _, cache ->
         val session = session()
-        cache.save(origin, session, profile(session, server = sample - 86_399_999L))
+        val started = cache.beginCanonicalRead { 0 }
+        now += 86_399_999L
+        cache.save(origin, session, profile(session), started) { 86_399_999L }
         assertEquals(1L, assertNotNull(cache.load(origin, session)).remainingMillis)
         now++
         assertNull(cache.load(origin, session))
         now = sample
         assertNull(cache.load(origin, session))
-        cache.save(origin, session, profile(session))
+        cache.saveImmediate(origin, session, profile(session))
         assertEquals(7L, assertNotNull(cache.load(origin, session.copy(expiresAt = now + 7))).remainingMillis)
         assertNull(cache.load(origin, session.copy(expiresAt = now)))
         now--
         assertNull(cache.load(origin, session))
         now++
         assertNull(cache.load(origin, session))
-        cache.save(origin, session, profile(session, server = sample + 1))
+
+    }
+
+    @Test
+    fun canonicalServerOffsetDoesNotExtendLeaseAndColdReadDebitsFlight() = withCache { directory, cache ->
+        val session = session()
+        val started = cache.beginCanonicalRead { 200L }
+        now += 250
+        cache.save(origin, session, profile(session, server = sample + 1_408), started) { 450L }
+        val reopened = CoreAdaptiveProfileCache(directory) { now }
+        val projection = assertNotNull(reopened.load(origin, session))
+        assertEquals(86_399_750L, projection.remainingMillis)
+        val nearerExpiry = session.copy(expiresAt = sample + 2_000)
+        assertEquals(342L, assertNotNull(reopened.load(origin, nearerExpiry)).remainingMillis)
+        assertEquals(listOf(Partner, Work), projection.shortcuts(categories))
+        now = sample + 86_400_000L
+        assertNull(reopened.load(origin, session))
+        now = sample + 5_000
+        assertNull(reopened.load(origin, session))
+    }
+
+    @Test
+    fun retreatInconsistentFlightAndExpiredSessionCannotSave() = withCache { _, cache ->
+        val session = session()
+        val started = cache.beginCanonicalRead { 200L }
+        now--
+        cache.save(origin, session, profile(session, server = sample + 1_408), started) { 201L }
+        assertNull(cache.load(origin, session))
+        now = sample + 5L
+        cache.save(origin, session, profile(session), started) { 210L }
+        assertNull(cache.load(origin, session))
+        cache.save(origin, session, profile(session), started) { 199L }
+        assertNull(cache.load(origin, session))
+        cache.save(origin, session.copy(expiresAt = now), profile(session), started) { 205L }
         assertNull(cache.load(origin, session))
     }
 
     @Test
     fun lruAndErasureAreScopedByOriginAndActor() = withCache { _, cache ->
         val scopes = (0..8).map { session(org = "organization-$it") }
-        scopes.take(8).forEach { cache.save(origin, it, profile(it)) }
+        scopes.take(8).forEach { cache.saveImmediate(origin, it, profile(it)) }
         assertNotNull(cache.load(origin, scopes[0]))
-        cache.save(origin, scopes[8], profile(scopes[8]))
+        cache.saveImmediate(origin, scopes[8], profile(scopes[8]))
         assertNull(cache.load(origin, scopes[1]))
         assertNotNull(cache.load(origin, scopes[0]))
         val other = session(user = "other-account")
-        cache.save(origin, other, profile(other))
-        cache.save(otherOrigin, scopes[8], profile(scopes[8]))
+        cache.saveImmediate(origin, other, profile(other))
+        cache.saveImmediate(otherOrigin, scopes[8], profile(scopes[8]))
         assertTrue(cache.eraseScope(origin, scopes[0]))
         assertNull(cache.load(origin, scopes[0]))
         assertNotNull(cache.load(origin, scopes[8]))
@@ -89,7 +124,7 @@ class CoreAdaptiveProfileCacheTest {
     @Test
     fun corruptOrOversizedFilesAreDiscardedAndCanBeRecreated() = withCache { directory, cache ->
         val session = session()
-        cache.save(origin, session, profile(session))
+        cache.saveImmediate(origin, session, profile(session))
         val file = directory.resolve("profiles-v1.bin")
         val valid = file.readBytes()
         for (corrupt in listOf(valid.copyOf(8), valid + ByteArray(16_385), valid.copyOf().apply { this[12] = 9 })) {
@@ -97,7 +132,7 @@ class CoreAdaptiveProfileCacheTest {
             assertNull(cache.load(origin, session))
             assertFalse(file.exists())
         }
-        cache.save(origin, session, profile(session))
+        cache.saveImmediate(origin, session, profile(session))
         assertNotNull(cache.load(origin, session))
     }
 
@@ -105,8 +140,8 @@ class CoreAdaptiveProfileCacheTest {
     fun rollbackAboveSaveTimeInvalidatesEvenAfterReopeningAndAcrossScopes() = withCache { directory, cache ->
         val first = session()
         val other = session(org = "second-organization")
-        cache.save(origin, first, profile(first))
-        cache.save(origin, other, profile(other))
+        cache.saveImmediate(origin, first, profile(first))
+        cache.saveImmediate(origin, other, profile(other))
         now = sample + 23 * 3_600_000L
         assertEquals(3_600_000L, assertNotNull(cache.load(origin, first)).remainingMillis)
         now = sample + 3_600_000L
@@ -120,14 +155,14 @@ class CoreAdaptiveProfileCacheTest {
     fun olderCanonicalSaveObservesTimeWithoutReplacingOrderOrAllowingRollback() = withCache { directory, cache ->
         val session = session()
         val olderProfile = profile(session, server = sample - 1).copy(pins = listOf(Work))
-        cache.save(origin, session, profile(session))
+        cache.saveImmediate(origin, session, profile(session))
         now = sample + 23 * 3_600_000L
-        cache.save(origin, session, olderProfile)
+        cache.saveImmediate(origin, session, olderProfile)
         val reopened = CoreAdaptiveProfileCache(directory) { now }
         assertEquals(listOf(Partner, Work), assertNotNull(reopened.load(origin, session)).shortcuts(categories))
 
         now += 1_000
-        cache.save(origin, session, olderProfile)
+        cache.saveImmediate(origin, session, olderProfile)
         now -= 500
         assertNull(CoreAdaptiveProfileCache(directory) { now }.load(origin, session))
     }
@@ -135,7 +170,7 @@ class CoreAdaptiveProfileCacheTest {
     @Test
     fun undeletableCacheReportsFailureAndDeniesReadsFromAReopenedStoreInProcess() = withCache { directory, cache ->
         val session = session()
-        cache.save(origin, session, profile(session))
+        cache.saveImmediate(origin, session, profile(session))
         val file = directory.resolve("profiles-v1.bin")
         val stale = file.readBytes()
         assertTrue(file.delete())
@@ -148,6 +183,10 @@ class CoreAdaptiveProfileCacheTest {
         assertNull(CoreAdaptiveProfileCache(directory) { now }.load(origin, session))
         assertTrue(cache.eraseScope(origin, session))
         assertFalse(file.exists())
+    }
+
+    private fun CoreAdaptiveProfileCache.saveImmediate(origin: CoreOrigin, session: CoreSession, profile: CoreAdaptiveProfile) {
+        save(origin, session, profile, beginCanonicalRead { 0L }) { 0L }
     }
 
     private fun origin(value: String) = CoreOrigin.allowlisted(value, setOf(value))

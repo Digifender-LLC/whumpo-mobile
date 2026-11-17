@@ -34,12 +34,19 @@ class CoreAdaptiveProfileCache(
         val actor: String,
         val scope: String,
         val serverMillis: Long,
-        val observedMillis: Long,
+        val readStartedMillis: Long,
         val order: List<CoreAdaptiveCategory>,
     ) {
         fun remaining(now: Long): Long {
-            if (serverMillis <= 0 || serverMillis > observedMillis || observedMillis > now) return 0
-            return MAX_AGE - (now - serverMillis)
+            if (serverMillis <= 0 || readStartedMillis !in 1..now) return 0
+            return MAX_AGE - (now - readStartedMillis)
+        }
+
+        fun sessionRemaining(expiresAt: Long, now: Long): Long {
+            if (expiresAt <= maxOf(serverMillis, now)) return 0
+            // The server sample arrives after dispatch. Charging the full dispatch
+            // interval gives a conservative upper estimate of server time.
+            return minOf(expiresAt - now, expiresAt - serverMillis - (now - readStartedMillis))
         }
     }
 
@@ -51,22 +58,38 @@ class CoreAdaptiveProfileCache(
         val actor = digest(origin.value, session.userId)
         val entry = entries.firstOrNull { it.scope == scope && it.actor == actor }
             ?: return@synchronized null
-        if (entry != entries.first() && !write(entry, entries, now)) return@synchronized null
-        CoreAdaptiveProjection(entry.order, minOf(entry.remaining(now), session.expiresAt - now))
+        val remaining = minOf(entry.remaining(now), entry.sessionRemaining(session.expiresAt, now))
+        if (remaining <= 0 || entry != entries.first() && !write(entry, entries, now)) return@synchronized null
+        CoreAdaptiveProjection(entry.order, remaining)
     }
 
-    internal fun save(origin: CoreOrigin, session: CoreSession, profile: CoreAdaptiveProfile) = synchronized(lock) {
+    internal data class CanonicalRead(val wallStart: Long, val monotonicAfterWallStart: Long)
+
+    internal fun beginCanonicalRead(monotonicMillis: () -> Long): CanonicalRead =
+        CanonicalRead(wallMillis(), monotonicMillis())
+
+    internal fun save(
+        origin: CoreOrigin,
+        session: CoreSession,
+        profile: CoreAdaptiveProfile,
+        started: CanonicalRead,
+        monotonicMillis: () -> Long,
+    ) = synchronized(lock) {
+        // The wall samples enclose this monotonic interval. A shorter wall interval
+        // indicates retreat or inconsistent clocks. A larger one spends more of the lease.
+        val inFlight = monotonicMillis() - started.monotonicAfterWallStart
         val now = wallMillis()
         val entries = observe(now)
-        if (session.expiresAt <= now || session.userId != profile.userId || session.orgId != profile.orgId) {
+        if (session.expiresAt <= now || session.userId != profile.userId || session.orgId != profile.orgId ||
+            started.wallStart !in 1..now || inFlight < 0 || inFlight > now - started.wallStart) {
             return@synchronized
         }
         val server = runCatching { Instant.parse(profile.serverTime).toEpochMilli() }.getOrNull()
             ?: return@synchronized
         val order = (profile.pins + if (profile.learningEnabled) profile.learnedOrder else CoreAdaptiveCategory.entries)
             .distinct()
-        val entry = Entry(digest(origin.value, session.userId), digest(origin.value, session.userId, session.orgId), server, now, order)
-        if (entry.remaining(now) <= 0 || order.toSet() != CoreAdaptiveCategory.entries.toSet()) return@synchronized
+        val entry = Entry(digest(origin.value, session.userId), digest(origin.value, session.userId, session.orgId), server, started.wallStart, order)
+        if (entry.remaining(now) <= 0 || entry.sessionRemaining(session.expiresAt, now) <= 0 || order.toSet() != CoreAdaptiveCategory.entries.toSet()) return@synchronized
         if (entries.any { it.scope == entry.scope && it.serverMillis > server }) return@synchronized
         write(entry, entries, now)
         Unit
@@ -121,8 +144,8 @@ class CoreAdaptiveProfileCache(
                     val scope = input.readDigest()
                     require(scopes.add(scope))
                     val server = input.readLong()
-                    val observed = input.readLong()
-                    require(observed in 1..observedHighWater)
+                    val readStarted = input.readLong()
+                    require(readStarted in 1..observedHighWater)
                     // UTF lengths are checked before allocation, including for corrupt files.
                     val order = List(CoreAdaptiveCategory.entries.size) {
                         val length = input.readUnsignedByte()
@@ -130,7 +153,7 @@ class CoreAdaptiveProfileCache(
                         CoreAdaptiveCategory.valueOf(ByteArray(length).also(input::readFully).decodeToString(throwOnInvalidSequence = true))
                     }
                     require(order.toSet() == CoreAdaptiveCategory.entries.toSet())
-                    Entry(actor, scope, server, observed, order)
+                    Entry(actor, scope, server, readStarted, order)
                 }
                 require(input.read() == -1)
                 entries.filter { it.remaining(now) > 0 }.also { fresh ->
@@ -163,7 +186,7 @@ class CoreAdaptiveProfileCache(
                     data.write(entry.actor.hexToByteArray())
                     data.write(entry.scope.hexToByteArray())
                     data.writeLong(entry.serverMillis)
-                    data.writeLong(entry.observedMillis)
+                    data.writeLong(entry.readStartedMillis)
                     for (category in entry.order) {
                         val bytes = category.name.encodeToByteArray()
                         data.writeByte(bytes.size)
@@ -196,7 +219,7 @@ class CoreAdaptiveProfileCache(
     }
 
     private companion object {
-        const val VERSION = 1
+        const val VERSION = 2
         // The fixed codec allows at most 212 bytes per entry, below the 16 KiB budget.
         const val CAPACITY = 8
         const val MAX_AGE = 86_400_000L

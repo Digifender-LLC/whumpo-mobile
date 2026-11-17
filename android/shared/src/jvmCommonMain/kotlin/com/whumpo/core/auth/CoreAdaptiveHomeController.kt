@@ -279,6 +279,8 @@ class CoreAdaptiveHomeController(
     private fun review(value: CoreAdaptiveProfile) = CoreAdaptiveReview(owner, value.generation, value.preferenceRevision)
 
     private suspend fun readProfile(stamp: Long, initialize: Boolean) {
+        guardCurrent(stamp)
+        val started = cache?.beginCanonicalRead(monotonicMillis)
         val data = try { request(stamp) { api, token -> api.adaptiveProfile(token) } }
         catch (error: CoreHttpException) {
             if (error.status == 404 || error.status == 403 || error.status == 423) {
@@ -297,7 +299,9 @@ class CoreAdaptiveHomeController(
             return readProfile(stamp, initialize = false)
         }
         install(data, stamp, sampled = true)
-        sessions.commitIfCurrent(active.epoch) { cache?.save(sessions.origin, active.session, data) }
+        if (cache != null && started != null) sessions.commitIfCurrent(active.epoch) {
+            cache.save(sessions.origin, active.session, data, started, monotonicMillis)
+        }
     }
 
     private suspend fun settleControl(stamp: Long) {

@@ -137,18 +137,22 @@ class CoreAdaptiveHomeTest {
                     "/v1/adaptive-home/profile" -> {
                         arrived.complete(Unit)
                         release.await()
-                        profile(2)
+                        profile(2).replace("2026-01-02T12:00:00.000Z", "2026-01-02T12:00:02.408Z")
                     }
                     else -> error("A cached projection must not issue a write")
                 }, headers = headers)
             }, CoreOrigin.allowlisted(origin, setOf(origin))).use { client ->
                 val sessions = CoreOrganizationSessionController(client) { now }
                 val active = sessions.establish(token)
-                val cache = CoreAdaptiveProfileCache(directory) { now }
+                var deviceWall = now
+                val cache = CoreAdaptiveProfileCache(directory) { deviceWall }
+                val started = cache.beginCanonicalRead { 0L }
                 val learned = Json.decodeFromString<CoreAdaptiveProfile>(profile(2)).copy(
-                    serverTime = Instant.ofEpochMilli(now - 86_399_000L).toString(),
+                    serverTime = Instant.ofEpochMilli(now + 1_408L).toString(),
                 )
-                cache.save(client.origin, active.session, learned)
+                cache.save(client.origin, active.session, learned, started) { 0L }
+                deviceWall += 57_592L
+                val cacheFile = directory.resolve("profiles-v1.bin")
                 val expire = CompletableDeferred<Unit>()
                 var elapsed = 0L
                 val home = CoreAdaptiveHomeController(sessions, active, cache = cache, waitForProjectionExpiry = { wait ->
@@ -162,6 +166,7 @@ class CoreAdaptiveHomeTest {
                 home.availability(setOf(work))
                 val held = launch { home.enterToday() }
                 arrived.await()
+                val retained = cacheFile.readBytes()
                 assertEquals(listOf(work), home.state.value.provisional)
                 assertEquals(null, home.state.value.review)
                 home.open(work)
@@ -177,6 +182,7 @@ class CoreAdaptiveHomeTest {
                 release.complete(Unit)
                 held.join()
                 assertEquals(null, home.state.value.review)
+                kotlin.test.assertContentEquals(retained, cacheFile.readBytes())
                 assertEquals(listOf("/v1/auth/session", "/v1/adaptive-home/profile"), calls)
             }
         } finally {
