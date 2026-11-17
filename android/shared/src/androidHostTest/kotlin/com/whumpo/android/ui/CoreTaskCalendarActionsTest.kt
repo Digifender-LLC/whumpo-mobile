@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -17,6 +18,7 @@ import com.whumpo.android.ui.home.CoreTaskCalendarActions
 import com.whumpo.core.api.CoreTaskStatus
 import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.auth.CoreTaskCalendarReview
+import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,6 +30,26 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [35])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CoreTaskCalendarActionsTest : RobolectricUiTest() {
+    @Test
+    fun fallBackShowsEachOffsetAndExactSecondsWhileKeepingUtcPayload() {
+        val draft = checkNotNull(CoreTaskCalendarReview.from(CoreWorkTask("task-a", "project-a",
+            "Review deadline", null, null, "2026-11-01T05:45:17.123Z", CoreTaskStatus.Ready, 6L)))
+        var delivered: Pair<Long, Long>? = null
+        launch(Screen.Compact, fontScale = 2f) {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                CoreTaskCalendarActions(draft, false, null, {}, {
+                    delivered = draft.startMillis to draft.endMillis
+                }, {}, zone = ZoneId.of("America/New_York"))
+            }
+        }.use {
+            compose.onNodeWithText("Starts: 2026-11-01 01:45:17.123 -04:00").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Ends: 2026-11-01 01:15:17.123 -05:00").performScrollTo().assertIsDisplayed()
+            assertEquals(null, delivered)
+            compose.onNodeWithText("Open calendar editor").performScrollTo().performClick()
+            assertEquals(1_793_511_917_123L to 1_793_513_717_123L, delivered)
+        }
+    }
+
     @Test
     fun reviewAndCancelDoNotOpenEditorAndBusyReviewDisablesConfirmation() {
         val draft = checkNotNull(CoreTaskCalendarReview.from(CoreWorkTask("task-a", "project-a",

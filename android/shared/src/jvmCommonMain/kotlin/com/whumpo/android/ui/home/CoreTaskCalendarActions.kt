@@ -13,7 +13,7 @@ import com.whumpo.core.auth.CoreTaskCalendarReview
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
+import java.util.Locale
 
 @Composable
 fun CoreTaskCalendarActions(
@@ -23,13 +23,13 @@ fun CoreTaskCalendarActions(
     onReview: () -> Unit,
     onOpen: () -> Unit,
     onCancel: () -> Unit,
+    zone: ZoneId = ZoneId.systemDefault(),
 ) {
     val control = Modifier.heightIn(min = 48.dp)
     if (review == null) {
         WhumpoQuietButton(onReview, enabled = !busy, modifier = control) { Text("Review calendar event") }
     } else {
-        val dateTime = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
-            .withZone(ZoneId.systemDefault())
+        val dateTime = calendarReviewTime.withZone(zone)
         Text(review.title)
         Text("Starts: ${dateTime.format(Instant.ofEpochMilli(review.startMillis))}")
         Text("Ends: ${dateTime.format(Instant.ofEpochMilli(review.endMillis))}")
@@ -39,3 +39,5 @@ fun CoreTaskCalendarActions(
     }
     notice?.let { Text(it, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
 }
+
+private val calendarReviewTime = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss.SSS xxx", Locale.ROOT)
