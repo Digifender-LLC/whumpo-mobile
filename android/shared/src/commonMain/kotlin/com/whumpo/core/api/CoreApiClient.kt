@@ -69,6 +69,33 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return json.decodeFromString(call(token, "/v1/auth/organizations", cursor = cursor, limit = limit))
     }
 
+    internal suspend fun invitationAccount(token: String): SecurityGrant =
+        decodeInvitation(call(token, "/v1/account-security/exchange", HttpMethod.Post,
+            "{\"version\":1}", requireJson = true))
+
+    internal suspend fun invitationPage(authority: SecurityAuthority, body: String): CoreInvitationPage =
+        invitationCall("list", body, authority)
+
+    internal suspend fun issueInvitation(authority: SecurityAuthority, body: String, key: String): CoreInvitationIssue =
+        invitationCall("issue", body, authority, key)
+
+    internal suspend fun revokeInvitation(authority: SecurityAuthority, body: String, key: String): CorePersonInvitation =
+        invitationCall("revoke", body, authority, key)
+
+    internal suspend fun invitationPreview(code: String): SecurityInvitationPreview {
+        require(newPersonInvitationCode.matches(code))
+        val body = buildJsonObject { put("version", 1); put("invitationCode", code) }.toString()
+        return invitationCall("preview", body)
+    }
+
+    private suspend inline fun <reified T> invitationCall(
+        route: String, body: String, authority: SecurityAuthority? = null, key: String? = null,
+    ): T {
+        require(key == null || coreIdentifier.matches(key))
+        return decodeInvitation(call(null, "/v1/account-security/invitations/$route", HttpMethod.Post,
+            body, key = key, accountAuthority = authority, requireJson = true))
+    }
+
     internal suspend inline fun <reified T> ownership(
         token: String,
         route: OwnershipRoute,
