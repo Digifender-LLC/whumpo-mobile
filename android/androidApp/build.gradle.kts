@@ -24,9 +24,16 @@ val uploadSigned = listOf("WHUMPO_UPLOAD_STORE_PASSWORD", "WHUMPO_UPLOAD_KEY_ALI
 // Public endpoint configuration only. Admission credentials are entered at runtime.
 val localCoreOrigin = providers.gradleProperty("whumpo.localCoreOrigin").getOrElse("http://127.0.0.1:5173")
 val localCoreRp = providers.gradleProperty("whumpo.localCoreRp").getOrElse("")
+val localWorkWebOrigin = providers.gradleProperty("whumpo.localWorkWebOrigin").getOrElse("")
 require(Regex("https://[a-z0-9]+(?:[-.][a-z0-9]+)+|http://127\\.0\\.0\\.1:[1-9][0-9]{0,4}").matches(localCoreOrigin))
 require(localCoreRp.isEmpty() || Regex("[a-z0-9]+(?:[-.][a-z0-9]+)+").matches(localCoreRp))
 require(!localCoreOrigin.startsWith("https://") || localCoreOrigin == "https://$localCoreRp")
+val workHostLabel = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+val workWebOrigin = Regex("https://($workHostLabel(?:\\.$workHostLabel)+)(?::([1-9][0-9]{0,4}))?")
+require(localWorkWebOrigin.isEmpty() || workWebOrigin.matchEntire(localWorkWebOrigin)?.let { match ->
+    match.groupValues[1].length <= 253 &&
+        (match.groupValues[2].isEmpty() || match.groupValues[2].toInt() in 1..65535)
+} == true)
 
 android {
     namespace = "com.whumpo.android"
@@ -53,6 +60,7 @@ android {
             applicationIdSuffix = ".local"
             buildConfigField("String", "WHUMPO_LOCAL_CORE_ORIGIN", "\"$localCoreOrigin\"")
             buildConfigField("String", "WHUMPO_LOCAL_CORE_RP", "\"$localCoreRp\"")
+            buildConfigField("String", "WHUMPO_LOCAL_WORK_WEB_ORIGIN", "\"$localWorkWebOrigin\"")
             versionNameSuffix = "-local"
             buildConfigField("String", "WHUMPO_ENVIRONMENT", "\"local\"")
             buildConfigField("String", "WHUMPO_ORIGIN", "\"http://127.0.0.1:8787\"")

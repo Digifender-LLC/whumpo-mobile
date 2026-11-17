@@ -108,6 +108,21 @@ request** to send the saved request and key. The app clears the draft only
 after checking the creation receipt and reading the current task in the
 reviewed project.
 
+### Open a Work link
+
+Set the local build property `-Pwhumpo.localWorkWebOrigin=https://work.example.test`
+to your configured HTTPS Web origin. In a verified organization, choose **Work**,
+then **Open Work link**. Paste the root Web link with its
+`#work/task/v1/<taskId>/<creationEventId>` fragment and choose **Open link in this
+organization**. To try another organization, return to the organization chooser
+and paste the link again after choosing it.
+
+The core API verifies the scoped bookmark and original creation event before
+reading the current task. The result shows current Work state. Link input and
+task details stay in the open screen and clear when it closes or backgrounds.
+This receiver is available in the opt-in local debug preview. Android App Link
+delivery and signing require separate qualification.
+
 ## Task outcome qualification
 
 The task outcome increment passed 400 shared JVM tests and 501 Android host

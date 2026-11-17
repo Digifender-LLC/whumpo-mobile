@@ -50,6 +50,7 @@ import com.whumpo.core.api.CoreOrganizationEntitlements
 import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreWorkTask
+import com.whumpo.core.api.CoreWorkWebOrigin
 import com.whumpo.core.api.coreApiClient
 import com.whumpo.core.account.CoreOfflineWorkStore
 import com.whumpo.android.ui.domains.SiteDomainActions
@@ -101,11 +102,12 @@ class CorePreviewActivity : ComponentActivity() {
             KeystoreSecretBox("whumpo.core.offline-work.v1")
         }
         val passkeys = NativeAccountPasskeys(applicationContext, activities)
+        val workWebOrigin = CoreWorkWebOrigin.parse(BuildConfig.WHUMPO_LOCAL_WORK_WEB_ORIGIN)
         setContent {
             WhumpoEntryTheme {
                 Surface {
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                        CorePreview(controller, account, passkeys, offlineWork, passkeysConfigured = rpId != null)
+                        CorePreview(controller, account, passkeys, offlineWork, workWebOrigin, passkeysConfigured = rpId != null)
                     }
                 }
             }
@@ -140,6 +142,7 @@ internal fun CorePreview(
     account: CoreAccountSecurityController,
     passkeys: NativeAccountPasskeys,
     offlineWork: CoreOfflineWorkStore,
+    workWebOrigin: CoreWorkWebOrigin?,
     passkeysConfigured: Boolean,
 ) {
     val state by controller.state.collectAsState()
@@ -421,6 +424,8 @@ internal fun CorePreview(
                 canRecoverApplication = active.session.role == CoreRole.owner,
                 initialTask = discoveryWorkTask,
                 openOfflineWork = { showOfflineWork = true },
+                workWebOrigin = workWebOrigin,
+                signOut = signOut,
             ) {
                 showWork = false
                 discoveryWorkTask = null
