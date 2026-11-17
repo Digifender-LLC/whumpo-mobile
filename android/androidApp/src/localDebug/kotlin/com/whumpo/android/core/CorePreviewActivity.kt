@@ -520,6 +520,9 @@ internal fun CorePreview(
                 workWebOrigin = workWebOrigin,
                 signOut = signOut,
                 onReadable = { destinationRead(CoreAdaptiveCategory.Work, it) },
+                calendarForeground = adaptiveForeground,
+                calendarGeneration = adaptiveGeneration,
+                isCalendarForeground = { isForegroundGeneration(adaptiveGeneration) },
             ) {
                 requestedFocus = null
                 showWork = false
