@@ -40,8 +40,8 @@ class CoreWorkLinkTest {
     private val date = "2026-11-16T11:00:00.000Z"
     private val json = headersOf(HttpHeaders.ContentType, "application/json")
 
-    private fun link(event: String = firstEvent) =
-        assertNotNull(CoreWorkLink.parse("https://work.example.test/#work/task/v1/task-1/$event", web))
+    private fun link(event: String = firstEvent, path: String = "/") =
+        assertNotNull(CoreWorkLink.parse("https://work.example.test$path#work/task/v1/task-1/$event", web))
 
     private fun event(id: String, version: Int, operation: String, snapshot: String = "") =
         """{"items":[{"id":"$id","taskVersion":$version,"operation":"$operation","createdAt":"$date"$snapshot}]}"""
@@ -87,15 +87,29 @@ class CoreWorkLinkTest {
     }
 
     @Test
-    fun permitsOnlyTheConfiguredHttpsRootAndBoundedOpaqueVersion() {
+    fun permitsOnlyTheConfiguredHttpsWorkPathsAndBoundedOpaqueVersion() {
         link()
+        val alias = link(path = "/work-link")
+        assertEquals("task-1", alias.taskId)
+        assertEquals(firstEvent, alias.creationEventId)
         assertNotNull(CoreWorkLink.parse("https://work.example.test:443/#work/task/v1/a_~.9/$firstEvent", web))
         val alternate = assertNotNull(CoreWorkWebOrigin.parse("https://work.example.test:8443"))
         assertNotNull(CoreWorkLink.parse("https://work.example.test:8443/#work/task/v1/task-1/$firstEvent", alternate))
+        assertNotNull(CoreWorkLink.parse("https://work.example.test:8443/work-link#work/task/v1/task-1/$firstEvent", alternate))
         assertNull(CoreWorkLink.parse("https://work.example.test/#work/task/v1/task-1/$firstEvent", alternate))
+        assertNull(CoreWorkLink.parse("https://work.example.test/work-link#work/task/v1/task-1/$firstEvent", alternate))
         listOf(
             "https://work.example.test/#work/task/v2/task-1/$firstEvent",
-            "https://work.example.test/work-link#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test/work-link/#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test/work-link.html#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test/%77ork-link#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test/work%2Dlink#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test/work-link%2F#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test/./work-link#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test//work-link#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test/Work-Link#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test/work-link?#work/task/v1/task-1/$firstEvent",
+            "https://work.example.test/work-link?x=1#work/task/v1/task-1/$firstEvent",
             "https://work.example.test#work/task/v1/task-1/$firstEvent",
             "https://work.example.test/?x=1#work/task/v1/task-1/$firstEvent",
             "https://work.example.test/#work/task/v1/task%2F1/$firstEvent",
@@ -106,16 +120,33 @@ class CoreWorkLinkTest {
             "http://work.example.test/#work/task/v1/task-1/$firstEvent",
             "https://work.example.test/#work/task/v1/task-1/$firstEvent\n",
         ).forEach { assertNull(CoreWorkLink.parse(it, web), it) }
-        listOf("", "https://work.example.test/", "https://work.example.test:65536", "https://host-.example.test")
+        listOf("", "https://work.example.test/", "https://work.example.test/work-link", "https://work.example.test:65536",
+            "https://host-.example.test")
             .forEach { assertNull(CoreWorkWebOrigin.parse(it)) }
     }
 
     @Test
+    fun completeAddressBoundIncludesTheLongestLiteralAlias() {
+        val host = listOf(63, 63, 63, 61).joinToString(".") { "a".repeat(it) }
+        val authority = "https://$host:65535"
+        val origin = assertNotNull(CoreWorkWebOrigin.parse(authority))
+        val taskId = "t".repeat(128)
+        val fragment = "#work/task/v1/$taskId/$firstEvent"
+        val root = "$authority/$fragment"
+        val alias = "$authority/work-link$fragment"
+        assertEquals(443, root.length)
+        assertEquals(CoreWorkLink.maxLength, alias.length)
+        assertEquals(taskId, assertNotNull(CoreWorkLink.parse(root, origin)).taskId)
+        assertEquals(taskId, assertNotNull(CoreWorkLink.parse(alias, origin)).taskId)
+        assertNull(CoreWorkLink.parse(alias + "a", origin))
+    }
+
+    @Test
     fun matchesBookmarkAndCreationBeforeReadingTheExactCurrentTask() = runTest {
-        for ((bookmark, creation) in listOf(
-            """{"items":[]}""" to event(firstEvent, 1, "tasks.create@1"),
-            event(laterEvent, 2, "tasks.move@1", ""","snapshot":{"id":"task-1","version":2}""") to
-                event(firstEvent, 1, "tasks.create_selected@1", ""","snapshot":{"id":"task-1","version":1}"""),
+        for ((path, bookmark, creation) in listOf(
+            Triple("/", """{"items":[]}""", event(firstEvent, 1, "tasks.create@1")),
+            Triple("/work-link", event(laterEvent, 2, "tasks.move@1", ""","snapshot":{"id":"task-1","version":2}"""),
+                event(firstEvent, 1, "tasks.create_selected@1", ""","snapshot":{"id":"task-1","version":1}""")),
         )) {
             val fixture = Fixture { path ->
                 Response(when (path) {
@@ -126,7 +157,7 @@ class CoreWorkLinkTest {
                 })
             }
             fixture.use { sessions, active ->
-                val current = sessions.linkedWorkTask(active, link()) { true }
+                val current = sessions.linkedWorkTask(active, link(path = path)) { true }
                 assertEquals("new-project", current.projectId)
                 assertEquals("Updated task", current.title)
                 assertEquals("", current.description)

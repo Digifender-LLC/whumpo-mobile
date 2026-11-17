@@ -24,13 +24,16 @@ class CoreWorkWebOrigin private constructor(private val authority: String) {
 
 class CoreWorkLink private constructor(internal val taskId: String, internal val creationEventId: String) {
     companion object {
-        const val maxLength = 443
+        const val maxLength = 452
 
         fun parse(value: String, origin: CoreWorkWebOrigin): CoreWorkLink? {
             if (value.length > maxLength) return null
-            val route = value.indexOf("/#", startIndex = "https://".length)
-            if (route < 0 || !origin.accepts(value.substring(0, route))) return null
-            val fragment = workLinkFragment.matchEntire(value.substring(route + 2)) ?: return null
+            val pathStart = value.indexOf('/', startIndex = "https://".length)
+            val fragmentStart = value.indexOf('#')
+            if (pathStart < 0 || fragmentStart <= pathStart || !origin.accepts(value.substring(0, pathStart))) return null
+            val path = value.substring(pathStart, fragmentStart)
+            if (path != "/" && path != "/work-link") return null
+            val fragment = workLinkFragment.matchEntire(value.substring(fragmentStart + 1)) ?: return null
             return CoreWorkLink(fragment.groupValues[1], fragment.groupValues[2])
         }
     }
