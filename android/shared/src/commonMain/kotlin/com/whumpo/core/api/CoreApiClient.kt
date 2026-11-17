@@ -350,6 +350,14 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         return json.decodeFromString(call(token, "/v1/workspaces", cursor = cursor, limit = limit))
     }
 
+    internal suspend fun sourceHistory(token: String, projectId: String, prior: SourceHistoryResult?): SourceHistoryResult {
+        require(coreIdentifier.matches(projectId))
+        val cursor = prior?.let { requireNotNull(it.nextCursor) }
+        val body = call(token, "/v1/projects/$projectId/git/history", cursor = cursor,
+            limit = 20, maxResponseBytes = 12_288, requireJson = true)
+        return decodeSourceHistory(body, projectId, prior)
+    }
+
     internal suspend fun projectChoices(token: String, workspaceId: String, cursor: String?, limit: Int): CoreProjectChoices {
         require(coreIdentifier.matches(workspaceId) && limit in 1..25 && (cursor == null || coreIdentifier.matches(cursor)))
         return json.decodeFromString(call(token, "/v1/projects", workspaceId = workspaceId, cursor = cursor, limit = limit))
