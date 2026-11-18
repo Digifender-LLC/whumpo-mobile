@@ -34,10 +34,19 @@ internal fun CoreWorkAttachmentPreview(
     close: () -> Unit,
 ) {
     val controller = remember(sessions, active, task) { CoreWorkAttachmentController(sessions, active, task) }
-    val resolver = LocalContext.current.contentResolver
+    val context = LocalContext.current
+    val resolver = context.contentResolver
     val scope = rememberCoroutineScope()
     val state by controller.state.collectAsState()
     var picking by remember(controller) { mutableStateOf(false) }
+    var photo by remember(controller) { mutableStateOf<CoreWorkDocumentPhoto?>(null) }
+    var readingPhoto by remember(controller) { mutableStateOf(false) }
+    var cameraUnavailable by remember(controller) { mutableStateOf(false) }
+    fun discardPhoto() {
+        photo?.close()
+        photo = null
+        readingPhoto = false
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (picking && uri != null) {
             scope.launch {
@@ -54,16 +63,46 @@ internal fun CoreWorkAttachmentPreview(
             }
         } else picking = false
     }
-    DisposableEffect(controller) { onDispose { controller.retire() } }
+    val takePicture = rememberLauncherForActivityResult(CoreTakeDocumentPhoto()) { success ->
+        val output = photo ?: return@rememberLauncherForActivityResult
+        if (readingPhoto) return@rememberLauncherForActivityResult
+        if (!success || !sessions.commitIfCurrent(active.epoch) {}) {
+            discardPhoto()
+            return@rememberLauncherForActivityResult
+        }
+        readingPhoto = true
+        scope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    try { output.read() } finally { output.close() }
+                }
+                if (photo === output) controller.selectedDocumentPhoto(file)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                if (photo === output) controller.invalidSelection()
+            } finally {
+                if (photo === output) discardPhoto()
+            }
+        }
+    }
+    DisposableEffect(controller) {
+        onDispose {
+            controller.retire()
+            discardPhoto()
+        }
+    }
     val leave = {
         controller.retire()
+        discardPhoto()
         close()
     }
     BackHandler(onBack = leave)
     WorkAttachmentContent(
         task.title, state, picking,
         onChoose = {
-            if (!picking && sessions.commitIfCurrent(active.epoch) {}) {
+            if (!picking && photo == null && sessions.commitIfCurrent(active.epoch) {}) {
+                cameraUnavailable = false
                 picking = true
                 picker.launch(CoreWorkAttachmentFile.allowedMediaTypes.toTypedArray())
             }
@@ -71,6 +110,21 @@ internal fun CoreWorkAttachmentPreview(
         onConfirm = { scope.launch { controller.confirm() } },
         onRetry = { scope.launch { controller.retry() } },
         onClose = leave,
+        onCapture = {
+            if (!picking && photo == null && sessions.commitIfCurrent(active.epoch) {}) {
+                cameraUnavailable = false
+                try {
+                    val output = CoreWorkDocumentPhoto.create(context)
+                    photo = output
+                    takePicture.launch(output.uri)
+                } catch (_: Exception) {
+                    discardPhoto()
+                    cameraUnavailable = true
+                }
+            }
+        },
+        capturing = photo != null,
+        cameraUnavailable = cameraUnavailable,
     )
 }
 

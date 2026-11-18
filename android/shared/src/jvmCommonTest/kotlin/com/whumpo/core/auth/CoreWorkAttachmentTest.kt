@@ -213,6 +213,45 @@ class CoreWorkAttachmentTest {
     }
 
     @Test
+    fun documentPhotoRequiresTheExactCurrentTaskBeforeAnyPreviewOrWrite() = runTest {
+        Fixture().use { fixture ->
+            val controller = fixture.attachment()
+            controller.selectedDocumentPhoto(selected)
+            assertEquals("measurements.txt", controller.state.value.fileName)
+            assertTrue(fixture.writes.isEmpty())
+            assertTrue(fixture.uploads.isEmpty())
+        }
+        Fixture().use { fixture ->
+            val controller = fixture.attachment()
+            fixture.task = original.copy(version = original.version + 1)
+            controller.selectedDocumentPhoto(selected)
+            assertNull(controller.state.value.fileName)
+            assertEquals(CoreAttachmentNotice.DestinationChanged, controller.state.value.notice)
+            controller.confirm()
+            assertTrue(fixture.writes.isEmpty())
+            assertTrue(fixture.uploads.isEmpty())
+        }
+    }
+
+    @Test
+    fun aLateDocumentPhotoReadCannotRestoreAnAttachmentAfterLeavingTheTask() = runTest {
+        Fixture().use { fixture ->
+            val controller = fixture.attachment()
+            val entered = CompletableDeferred<Unit>()
+            val resume = CompletableDeferred<Unit>()
+            fixture.waitTask = { entered.complete(Unit); resume.await() }
+            val check = launch { controller.selectedDocumentPhoto(selected) }
+            entered.await()
+            controller.retire()
+            resume.complete(Unit)
+            check.join()
+            assertEquals(CoreWorkAttachmentState(), controller.state.value)
+            assertTrue(fixture.writes.isEmpty())
+            assertTrue(fixture.uploads.isEmpty())
+        }
+    }
+
+    @Test
     fun selectionRejectsDisallowedNamesTypesAndSizes() {
         for ((name, type) in listOf(
             "../hidden.txt" to "text/plain", "wrong.apk" to "text/plain", "sheet.txt" to "text/html",

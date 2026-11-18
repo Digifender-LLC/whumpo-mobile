@@ -30,6 +30,9 @@ fun WorkAttachmentContent(
     onConfirm: () -> Unit,
     onRetry: () -> Unit,
     onClose: () -> Unit,
+    onCapture: (() -> Unit)? = null,
+    capturing: Boolean = false,
+    cameraUnavailable: Boolean = false,
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -44,29 +47,41 @@ fun WorkAttachmentContent(
             state.attached -> "Attached to task."
             state.saved -> "Saved private file. Attachment not yet verified."
             state.busy -> "Saving private file…"
+            capturing -> "Opening document camera…"
             picking -> "Opening file…"
             else -> null
         }
         status?.let { Text(it, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
         val notice = when (state.notice) {
             CoreAttachmentNotice.InvalidFile -> "Choose a PDF, JPEG, PNG or plain text file up to 4 MiB."
+            CoreAttachmentNotice.CouldNotCheckTask -> "The current task could not be checked. Try again."
             CoreAttachmentNotice.CouldNotConfirm -> "The request could not be confirmed. Retry the original request."
             CoreAttachmentNotice.DestinationChanged -> "Task access changed. Reopen the task to attach a file."
             CoreAttachmentNotice.ReservationExpired -> "This upload expired. Choose the file again."
             null -> null
         }
         notice?.let { Text(it, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+        if (cameraUnavailable) Text("Camera unavailable. Choose a file instead.",
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         when {
             state.attached || state.notice == CoreAttachmentNotice.DestinationChanged -> Unit
             state.canRetry -> WhumpoPrimaryButton(onClick = onRetry, enabled = !state.busy,
                 modifier = Modifier.heightIn(min = 48.dp)) { Text("Retry original request") }
             state.fileName != null -> {
                 Text("This file will be private to your organization.")
-                WhumpoPrimaryButton(onClick = onConfirm, enabled = !state.busy && !picking,
+                WhumpoPrimaryButton(onClick = onConfirm, enabled = !state.busy && !picking && !capturing,
                     modifier = Modifier.heightIn(min = 48.dp)) { Text("Save and attach") }
             }
-            else -> WhumpoPrimaryButton(onClick = onChoose, enabled = !state.busy && !picking,
-                modifier = Modifier.heightIn(min = 48.dp)) { Text("Choose file") }
+            else -> {
+                val canSelect = !state.busy && !picking && !capturing
+                WhumpoPrimaryButton(onClick = onChoose, enabled = canSelect,
+                    modifier = Modifier.heightIn(min = 48.dp)) { Text("Choose file") }
+                onCapture?.let { capture ->
+                    WhumpoQuietButton(onClick = capture, enabled = canSelect, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("Capture document photo")
+                    }
+                }
+            }
         }
         WhumpoQuietButton(onClick = onClose, modifier = Modifier.heightIn(min = 48.dp)) {
             Text(if (state.attached) "Done" else "Back to task")

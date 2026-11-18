@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -51,6 +52,35 @@ class WorkAttachmentContentTest : RobolectricUiTest() {
             compose.runOnIdle { state = state.copy(attached = true, canRetry = false) }
             compose.onNodeWithText("Attached to task.").performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("Retry original request").assertDoesNotExist()
+        }
+    }
+
+    @Test
+    fun cameraIsExplicitAndKeepsTheExistingFileFallbackAndReview() {
+        var state by mutableStateOf(CoreWorkAttachmentState())
+        var capturing by mutableStateOf(false)
+        var unavailable by mutableStateOf(false)
+        var launches = 0
+        var confirmations = 0
+        launch(Screen.Compact, dark = true, fontScale = 2f) {
+            WorkAttachmentContent("Install sign", state, false, onChoose = {}, onConfirm = { confirmations++ },
+                onRetry = {}, onClose = {}, onCapture = { launches++; capturing = true },
+                capturing = capturing, cameraUnavailable = unavailable)
+        }.use {
+            compose.onNodeWithText("Capture document photo").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+            assertEquals(1, launches)
+            compose.onNodeWithText("Choose file").assertIsNotEnabled()
+            compose.onNodeWithText("Save and attach").assertDoesNotExist()
+            compose.runOnIdle { capturing = false; unavailable = true }
+            compose.onNodeWithText("Camera unavailable. Choose a file instead.").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Choose file").performScrollTo().assertIsDisplayed()
+            compose.runOnIdle { unavailable = false; state = CoreWorkAttachmentState("Document photo.jpg", 642) }
+            compose.onNodeWithText("Task: Install sign").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Document photo.jpg").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("642 bytes").performScrollTo().assertIsDisplayed()
+            assertEquals(0, confirmations)
+            compose.onNodeWithText("Save and attach").performScrollTo().performClick()
+            assertEquals(1, confirmations)
         }
     }
 
