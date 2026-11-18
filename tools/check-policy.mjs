@@ -81,6 +81,8 @@ function androidArtifactPathsMatch(android) {
         'android/shared/build/reports/**',
         'android/shared/build/test-results/**',
         'android/shared/build/outputs/roborazzi/**',
+        'android/wearApp/build/reports/**',
+        'android/wearApp/build/test-results/**',
         '!android/**/logcat*'
       ],
       retention: '7', missing: 'ignore', condition: 'always()', compression: undefined

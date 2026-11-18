@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Whumpo</string>
+    <string name="tile_name">Whumpo Today</string>
+    <string name="tile_description">A short summary of Today</string>
+    <string name="today_unavailable">Today is unavailable</string>
+    <string name="today_empty">No approvals, blocks, or deadlines</string>
+    <string name="today_counts">Approvals %1$s\nBlocked %2$s\nDeadlines %3$s</string>
+    <string name="today_updated">Updated %1$s</string>
+</resources>
