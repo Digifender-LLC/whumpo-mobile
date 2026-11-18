@@ -22,6 +22,7 @@
     ],
     "com.whumpo.android.CoreLauncherTest": [
       "defaultLauncherKeepsLegacyEntry",
+      "syntheticLauncherDiscardsReadsWhenWorkspaceSessionIsRevoked",
       "syntheticLauncherSwitchesOnlyVerifiedMembershipsAndDiscardsOldScope",
       "syntheticLauncherVerifiesReadinessAndRevokesTheExactSession"
     ],

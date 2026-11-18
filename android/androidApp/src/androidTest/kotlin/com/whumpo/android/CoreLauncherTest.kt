@@ -109,17 +109,50 @@ class CoreLauncherTest {
                 click("fixture-org · viewer")
                 awaitText("This organization has not finished setup. Continue in the web workspace.")
                 assertTrue("GET /v1/organization" !in fixture.requests)
+                compose.onNodeWithText("Open Today").assertDoesNotExist()
+                compose.onNodeWithText("Open Work").assertDoesNotExist()
 
                 fixture.readiness = CoreLauncherFixture.Readiness.Foreign
                 click("Check again")
                 awaitText("Could not verify this organization.")
                 assertTrue("GET /v1/organization" !in fixture.requests)
+                compose.onNodeWithText("Open Today").assertDoesNotExist()
+                compose.onNodeWithText("Open Work").assertDoesNotExist()
 
                 fixture.readiness = CoreLauncherFixture.Readiness.Ready
                 click("Check again")
                 awaitText("Fixture organization")
                 compose.onNodeWithText("Role: viewer").assertIsDisplayed()
                 awaitText("Organization access is active.")
+                assertTrue(fixture.requests.none { it.endsWith("/briefing/today") || it.endsWith("/work/tasks") })
+                click("Open Today")
+                awaitText("Loading Today…")
+                compose.waitUntil(10_000) { fixture.staleTodayRequested.isCompleted }
+                pressBack()
+                awaitText("Fixture organization")
+                click("Open Today")
+                awaitText("Needs attention")
+                awaitText("Review synthetic checklist")
+                fixture.releaseStaleToday.complete(Unit)
+                compose.waitUntil(10_000) { fixture.staleTodayReleased.isCompleted }
+                compose.waitForIdle()
+                compose.onNodeWithText("Obsolete briefing").assertDoesNotExist()
+                click("Back to organization")
+
+                fixture.denyWork = true
+                click("Open Work")
+                awaitText("Could not verify Work.")
+                compose.onNodeWithText("Current synthetic task").assertDoesNotExist()
+                fixture.denyWork = false
+                click("Try again")
+                awaitText("Current synthetic task")
+                compose.onNodeWithText("Create task").assertDoesNotExist()
+                click("Back to organization")
+                fixture.emptyWork = true
+                click("Open Work")
+                awaitText("No tasks here.")
+                pressBack()
+                awaitText("Fixture organization")
                 click("Sign out of Core")
                 awaitText("Open Core sign-in")
                 compose.onNodeWithText("Fixture organization").assertDoesNotExist()
@@ -139,6 +172,11 @@ class CoreLauncherTest {
                         "GET /v1/organization/readiness",
                         "GET /v1/organization",
                         "GET /v1/organization/entitlements",
+                        "GET /v1/briefing/today",
+                        "GET /v1/briefing/today",
+                        "GET /v1/work/tasks",
+                        "GET /v1/work/tasks",
+                        "GET /v1/work/tasks",
                         "DELETE /v1/auth/session",
                         "POST /v1/account-security/sign-out",
                     ),
@@ -147,6 +185,7 @@ class CoreLauncherTest {
             }
         } finally {
             fixture.releaseRevocation.complete(Unit)
+            fixture.releaseStaleToday.complete(Unit)
         }
     }
 
@@ -216,6 +255,34 @@ class CoreLauncherTest {
         }
     }
 
+    @Test
+    fun syntheticLauncherDiscardsReadsWhenWorkspaceSessionIsRevoked() {
+        if (BuildConfig.WHUMPO_ENVIRONMENT == "local") return
+        val fixture = CoreLauncherFixture()
+        fixture.readiness = CoreLauncherFixture.Readiness.Ready
+        fixture.revokeOnWork = true
+        app.coreLauncherEngine = fixture::engine
+        launch().use {
+            click("Open Core sign-in")
+            click("Sign in with password and authenticator")
+            input("Username", CoreLauncherFixture.USERNAME)
+            input("Password", CoreLauncherFixture.PASSWORD)
+            click("Continue")
+            awaitText("Enter your authenticator code")
+            input("Authenticator code", CoreLauncherFixture.TOTP)
+            click("Sign in")
+            click("Load organizations")
+            click("fixture-org · viewer")
+            awaitText("Fixture organization")
+            click("Open Work")
+            awaitText("Open Core sign-in")
+            compose.onNodeWithText("Fixture organization").assertDoesNotExist()
+            compose.onNodeWithText("Could not verify Work.").assertDoesNotExist()
+            compose.onNodeWithText("Current synthetic task").assertDoesNotExist()
+            assertEquals(1, fixture.requests.count { it == "GET /v1/work/tasks" })
+        }
+    }
+
     private fun launch() = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java)
         .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER))
 
@@ -248,6 +315,12 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
     val oldEntitlementRequested = CompletableDeferred<Unit>()
     val releaseOldEntitlement = CompletableDeferred<Unit>()
     val oldEntitlementReleased = CompletableDeferred<Unit>()
+    val staleTodayRequested = CompletableDeferred<Unit>()
+    val releaseStaleToday = CompletableDeferred<Unit>()
+    val staleTodayReleased = CompletableDeferred<Unit>()
+    @Volatile var revokeOnWork = false
+    @Volatile var denyWork = false
+    @Volatile var emptyWork = false
     @Volatile var denySwitch = false
     @Volatile var readiness = Readiness.Unready
     private val deadline = System.currentTimeMillis() + 300_000
@@ -261,6 +334,7 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
         assertEquals(443, request.url.port)
         val route = "${request.method.value} ${request.url.encodedPath}"
         if (route == "GET /v1/auth/organizations") assertEquals("25", request.url.parameters["limit"])
+        else if (route == "GET /v1/work/tasks") assertEquals("10", request.url.parameters["limit"])
         else assertTrue(request.url.parameters.isEmpty())
         val authorization = request.headers[HttpHeaders.Authorization]
         val switched = authorization == "Bearer $switchedToken"
@@ -345,6 +419,31 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
                 """{"orgId":"$organization","status":"$status","membershipMode":"business_team","humanSeatLimit":5,
                     "activeHumanSeats":2,"reservedHumanSeats":0,"availableHumanSeats":0,"teamAdmissionAvailable":false,
                     "siteBuildAvailable":false,"revision":1,"effectiveFrom":1,"expiresAt":$deadline}"""
+            }
+            "GET /v1/briefing/today" -> {
+                assertEquals("Bearer $token", authorization)
+                val title = if (requests.count { it == route } == 1) {
+                    staleTodayRequested.complete(Unit)
+                    withContext(NonCancellable) {
+                        releaseStaleToday.await()
+                        staleTodayReleased.complete(Unit)
+                    }
+                    "Obsolete briefing"
+                } else "Review synthetic checklist"
+                val emptySection = """{"items":[],"truncated":false}"""
+                """{"generatedAt":"2026-11-14T12:00:00.000Z","dueBefore":"2026-11-15T12:00:00.000Z",
+                    "verifiedSince":"2026-11-13T12:00:00.000Z","empty":false,"sections":{"approvals":$emptySection,
+                    "deadlines":$emptySection,"verified":$emptySection,"blocked":{"items":[{"provenance":"source_record",
+                    "observedAt":"2026-11-14T10:00:00.000Z","source":{"kind":"task","taskId":"fixture-task",
+                    "projectId":"fixture-project","version":1},"title":"$title","status":"blocked","dueAt":null}],"truncated":false}}}"""
+            }
+            "GET /v1/work/tasks" -> {
+                assertEquals("Bearer $token", authorization)
+                if (revokeOnWork) return@MockEngine respond("{}", HttpStatusCode.Unauthorized)
+                if (denyWork) return@MockEngine respond("{}", HttpStatusCode.Forbidden)
+                if (emptyWork) """{"items":[]}"""
+                else """{"items":[{"id":"fixture-task","projectId":"fixture-project","title":"Current synthetic task",
+                    "description":null,"parentTaskId":null,"dueAt":null,"status":"ready","version":1}]}"""
             }
             "DELETE /v1/auth/session" -> {
                 assertEquals("Bearer $token", authorization)

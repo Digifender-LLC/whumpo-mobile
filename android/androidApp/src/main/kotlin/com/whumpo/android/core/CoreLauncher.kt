@@ -1,5 +1,6 @@
 package com.whumpo.android.core
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,12 +37,16 @@ import com.whumpo.core.api.CoreMembership
 import com.whumpo.core.api.CoreMembershipPage
 import com.whumpo.core.api.CoreOrganizationProfile
 import com.whumpo.core.api.CoreRole
+import com.whumpo.core.api.CoreTodayBriefing
+import com.whumpo.core.api.CoreTodayTaskOperation
 import com.whumpo.core.auth.AccountPasskeys
 import com.whumpo.core.auth.CoreAccountSecurityController
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.launch
 
 @Composable
@@ -179,6 +184,7 @@ private fun CoreOrganizationEntry(
     var state by remember { mutableStateOf<OrganizationEntryState>(OrganizationEntryState.Loading) }
     var retry by remember { mutableStateOf(0) }
     var choices by remember { mutableStateOf<OrganizationChoices>(OrganizationChoices.Closed) }
+    var read by remember { mutableStateOf<OrganizationReadAttempt?>(null) }
     val actions = rememberCoroutineScope()
 
     fun loadChoices(cursor: String?) {
@@ -223,9 +229,26 @@ private fun CoreOrganizationEntry(
             }
         }
     }
+    val attempt = read
+    if (attempt != null) {
+        key(attempt) {
+            CoreOrganizationRead(
+                attempt.page, active, sessions, current = { read === attempt && sessions.state.value === active },
+                onSessionEnded = onSessionEnded,
+                onBack = { read = null },
+                onRetry = { if (read === attempt) read = OrganizationReadAttempt(attempt.page) },
+            )
+        }
+        return
+    }
     CoreOrganizationContent(
         state, active.session.orgId, active.session.role, choices, { retry++ },
         loadChoices = ::loadChoices, closeChoices = { choices = OrganizationChoices.Closed }, onSwitch = onSwitch, signOut = signOut,
+        onOpen = { page ->
+            if (read == null && state is OrganizationEntryState.Ready && sessions.state.value === active) {
+                read = OrganizationReadAttempt(page)
+            }
+        },
     )
 }
 
@@ -240,6 +263,7 @@ private fun CoreOrganizationContent(
     closeChoices: () -> Unit,
     onSwitch: (CoreMembership) -> Unit,
     signOut: () -> Unit,
+    onOpen: (OrganizationReadPage) -> Unit,
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -264,6 +288,8 @@ private fun CoreOrganizationContent(
                     CoreEntitlementStatus.unconfigured -> "Organization access is unconfigured."
                     null -> "Could not verify organization access."
                 }, Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                WhumpoPrimaryButton(onClick = { onOpen(OrganizationReadPage.Today) }) { Text("Open Today") }
+                WhumpoQuietButton(onClick = { onOpen(OrganizationReadPage.Work) }) { Text("Open Work") }
             }
         }
         if (state == OrganizationEntryState.Unready || state == OrganizationEntryState.Unavailable) {
@@ -294,4 +320,111 @@ private fun CoreOrganizationContent(
         }
         WhumpoQuietButton(onClick = signOut) { Text("Sign out of Core") }
     }
+}
+
+
+private enum class OrganizationReadPage(val title: String, val emptyLabel: String) {
+    Today("Today", "Nothing needs your attention today."),
+    Work("Work", "No tasks here."),
+}
+
+private class OrganizationReadAttempt(val page: OrganizationReadPage)
+private data class OrganizationReadGroup(val heading: String, val rows: List<String>, val truncated: Boolean = false)
+
+private sealed interface OrganizationReadState {
+    data object Loading : OrganizationReadState
+    data object Unavailable : OrganizationReadState
+    data class Loaded(val groups: List<OrganizationReadGroup>) : OrganizationReadState
+}
+
+@Composable
+private fun CoreOrganizationRead(
+    page: OrganizationReadPage,
+    active: CoreOrganizationSessionController.State.Active,
+    sessions: CoreOrganizationSessionController,
+    current: () -> Boolean,
+    onSessionEnded: () -> Unit,
+    onBack: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    var state by remember { mutableStateOf<OrganizationReadState>(OrganizationReadState.Loading) }
+    LaunchedEffect(Unit) {
+        if (!current()) return@LaunchedEffect
+        try {
+            val groups = when (page) {
+                OrganizationReadPage.Today -> todayGroups(sessions.today().briefing)
+                OrganizationReadPage.Work -> sessions.work().let { work ->
+                    if (work.items.isEmpty()) emptyList()
+                    else listOf(OrganizationReadGroup("Tasks", work.items.map { it.title }, work.nextCursor != null))
+                }
+            }
+            coroutineContext.ensureActive()
+            sessions.commitIfCurrent(active.epoch) {
+                if (current()) state = OrganizationReadState.Loaded(groups)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            coroutineContext.ensureActive()
+            if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) onSessionEnded()
+            else sessions.commitIfCurrent(active.epoch) {
+                if (current()) state = OrganizationReadState.Unavailable
+            }
+        }
+    }
+    BackHandler(onBack = onBack)
+    CoreOrganizationReadContent(page, state, onBack, onRetry)
+}
+
+@Composable
+private fun CoreOrganizationReadContent(
+    page: OrganizationReadPage,
+    state: OrganizationReadState,
+    onBack: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(page.title, Modifier.semantics { heading() }, style = MaterialTheme.typography.headlineMedium)
+        WhumpoQuietButton(onClick = onBack) { Text("Back to organization") }
+        when (state) {
+            OrganizationReadState.Loading -> Text("Loading ${page.title}…",
+                Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            OrganizationReadState.Unavailable -> {
+                Text("Could not verify ${page.title}.", Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                WhumpoQuietButton(onClick = onRetry) { Text("Try again") }
+            }
+            is OrganizationReadState.Loaded -> {
+                if (state.groups.isEmpty()) Text(page.emptyLabel)
+                state.groups.forEach { group ->
+                    Text(group.heading, Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium)
+                    group.rows.forEach { row -> Text(row) }
+                    if (group.truncated) Text("Showing the first results.")
+                }
+            }
+        }
+    }
+}
+
+private fun todayGroups(briefing: CoreTodayBriefing): List<OrganizationReadGroup> {
+    val sections = briefing.sections
+    val site = sections.siteActivity
+    return listOf(
+        OrganizationReadGroup("Task decisions", sections.approvals.items.map { "Approval waiting for a decision" }, sections.approvals.truncated),
+        OrganizationReadGroup("Needs attention", sections.blocked.items.map { it.title }, sections.blocked.truncated),
+        OrganizationReadGroup("Deadlines", sections.deadlines.items.map { it.title }, sections.deadlines.truncated),
+        OrganizationReadGroup("Verified results", sections.verified.items.map {
+            when (it.operation) {
+                CoreTodayTaskOperation.Create -> "Task created"
+                CoreTodayTaskOperation.Update, CoreTodayTaskOperation.Transition -> "Task updated"
+                CoreTodayTaskOperation.Move -> "Task moved"
+                CoreTodayTaskOperation.CreateSelected -> "Selected tasks created"
+            }
+        }, sections.verified.truncated),
+        OrganizationReadGroup("Website activity", site?.items.orEmpty().map {
+            if (it.source.kind.review) "Website change awaiting review" else "Website change verified"
+        }, site?.truncated == true),
+    ).filter { it.rows.isNotEmpty() || it.truncated }
 }
