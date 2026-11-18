@@ -16,4 +16,20 @@
             android:targetPackage="com.whumpo.android.local"
             android:targetClass="com.whumpo.android.core.CoreShortcutActivity" />
     </shortcut>
+    <shortcut android:shortcutId="core-new-task-draft"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/core_new_task_draft_shortcut">
+        <intent android:action="com.whumpo.android.local.shortcut.NEW_TASK_DRAFT"
+            android:targetPackage="com.whumpo.android.local"
+            android:targetClass="com.whumpo.android.core.CoreShortcutActivity" />
+    </shortcut>
+    <shortcut android:shortcutId="core-pending-approvals"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/core_pending_approvals_shortcut">
+        <intent android:action="com.whumpo.android.local.shortcut.PENDING_APPROVALS"
+            android:targetPackage="com.whumpo.android.local"
+            android:targetClass="com.whumpo.android.core.CoreShortcutActivity" />
+    </shortcut>
 </shortcuts>

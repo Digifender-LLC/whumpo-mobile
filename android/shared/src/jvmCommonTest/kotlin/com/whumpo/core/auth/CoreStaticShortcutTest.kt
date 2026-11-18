@@ -1,5 +1,7 @@
 package com.whumpo.core.auth
 
+import com.whumpo.core.api.CoreRole
+
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
@@ -13,6 +15,59 @@ import kotlin.test.assertTrue
 class CoreStaticShortcutTest {
     private val today = "com.whumpo.android.local.shortcut.TODAY"
     private val work = "com.whumpo.android.local.shortcut.WORK"
+
+    @Test
+    fun pendingHeadingFocusIsOneShotAndRechecksScopeAfterScroll() = runTest {
+        var current = true
+        var scrolls = 0
+        var focuses = 0
+        val valid = CorePendingApprovalsFocus { current }
+        valid.reveal({ scrolls++ }) { focuses++ }
+        valid.reveal({ scrolls++ }) { focuses++ }
+        assertEquals(1, scrolls)
+        assertEquals(1, focuses)
+
+        val held = CorePendingApprovalsFocus { current }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val pending = async {
+            held.reveal({
+                entered.complete(Unit)
+                release.await()
+            }) { focuses++ }
+        }
+        entered.await()
+        current = false
+        release.complete(Unit)
+        pending.await()
+        current = true
+        held.reveal({ scrolls++ }) { focuses++ }
+        assertEquals(1, scrolls)
+        assertEquals(1, focuses)
+    }
+
+    @Test
+    fun draftAndApprovalActionsAdmitOnlyExplicitNavigationForCurrentRoles() = runTest {
+        val draft = "com.whumpo.android.local.shortcut.NEW_TASK_DRAFT"
+        val approvals = "com.whumpo.android.local.shortcut.PENDING_APPROVALS"
+        assertNull(CoreStaticShortcutRequest.receive(draft, 4, 7, 1))
+        assertNull(CoreStaticShortcutRequest.receive(approvals, 4, 7, 1))
+        assertNull(CoreStaticShortcutRequest.receive(draft, null, 7, 1, CoreRole.owner))
+        assertNull(CoreStaticShortcutRequest.receive(approvals, null, 7, 1, CoreRole.owner))
+        assertNull(CoreStaticShortcutRequest.receive(approvals + "/approval-a", 4, 7, 1, CoreRole.owner))
+        var readinessReads = 0
+        for (role in CoreRole.entries) {
+            val draftRequest = CoreStaticShortcutRequest.receive(draft, 4, 7, 1, role)
+            if (role == CoreRole.viewer) assertNull(draftRequest)
+            else assertEquals(CoreStaticShortcut.NewTaskDraft, assertNotNull(draftRequest).destination)
+            val request = assertNotNull(CoreStaticShortcutRequest.receive(approvals, 4, 7, 1, role))
+            assertEquals(CoreStaticShortcut.PendingApprovals, request.destination)
+            assertTrue(request.observeForeground(true, true, 7))
+            assertTrue(request.verify({ 4 }, { 7 }, { 1 }) { readinessReads++; true })
+            assertFalse(request.verify({ 4 }, { 7 }, { 1 }) { error("A shortcut replayed its readiness read") })
+        }
+        assertEquals(CoreRole.entries.size, readinessReads)
+    }
 
     @Test
     fun admitsOnlyExactDestinationAlreadyReadyAndConsumesOnce() = runTest {
