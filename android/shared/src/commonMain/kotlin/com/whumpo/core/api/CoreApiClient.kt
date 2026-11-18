@@ -309,6 +309,48 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
             requireJson = true), item)
     }
 
+    internal suspend fun taskReminder(token: String, target: CoreReminderTarget): CoreTaskReminder? =
+        decodeReminderStatus(call(token, reminderPath(target), requireJson = true, maxResponseBytes = 4096), target)
+
+    internal suspend fun armTaskReminder(token: String, target: CoreReminderTarget, key: String, body: String): CoreTaskReminder =
+        decodeTaskReminder(call(token, reminderPath(target), HttpMethod.Post, body, key = key,
+            requireJson = true, maxResponseBytes = 4096)).also {
+            if (it.target != target) throw CoreProtocolException()
+        }
+
+    internal suspend fun cancelTaskReminder(token: String, reminder: CoreTaskReminder): CoreTaskReminder {
+        require(coreIdentifier.matches(reminder.id))
+        return decodeTaskReminder(call(token, "/v1/task-reminders/${reminder.id}/cancel", HttpMethod.Post, "{}",
+            requireJson = true, maxResponseBytes = 4096)).also {
+            if (it.id != reminder.id || it.target != reminder.target || it.state != CoreReminderState.Canceled) {
+                throw CoreProtocolException()
+            }
+        }
+    }
+
+    internal suspend fun reminderNotices(token: String, before: String?): CoreReminderWirePage {
+        require(before == null || coreIdentifier.matches(before))
+        return decodeReminderPage(call(token, "/v1/notifications/task-reminders", before = before,
+            requireJson = true, maxResponseBytes = 16_384))
+    }
+
+    internal suspend fun resolveReminderNotice(token: String, notice: CoreReminderNotice): CoreReminderTarget {
+        require(coreIdentifier.matches(notice.id))
+        return decodeReminderResolution(call(token, "/v1/notifications/task-reminders/${notice.id}/resolve",
+            requireJson = true, maxResponseBytes = 4096), notice)
+    }
+
+    internal suspend fun acknowledgeReminderNotice(token: String, notice: CoreReminderNotice): String {
+        require(coreIdentifier.matches(notice.id))
+        return decodeReminderAcknowledgement(call(token, "/v1/notifications/task-reminders/${notice.id}/acknowledge",
+            HttpMethod.Post, "{}", requireJson = true, maxResponseBytes = 4096), notice)
+    }
+
+    private fun reminderPath(target: CoreReminderTarget): String {
+        require(coreIdentifier.matches(target.taskId))
+        return "/v1/tasks/${target.taskId}/reminder"
+    }
+
     internal suspend fun workLinkHistory(token: String, taskId: String, cursor: String?): CoreWorkLinkEvent? {
         require(coreIdentifier.matches(taskId) && (cursor == null || workLinkEventId.matches(cursor)))
         return decodeWorkLinkHistory(call(token, "/v1/tasks/$taskId/history", cursor = cursor, limit = 1,

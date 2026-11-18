@@ -130,6 +130,17 @@ inbox state. Returning after the app was backgrounded starts a fresh read.
 
 This preview pulls task notifications on demand.
 
+In a connected `localDebug` Work item with a current deadline, choose
+**Remind me at the due time** to set a personal reminder. **Cancel reminder**
+cancels the current schedule. If the result is uncertain, **Check reminder status**
+reads the current schedule. **Retry scheduling reminder** repeats the original
+deadline, revision, and request key in that Work session.
+
+Open **Task notifications → Task reminders** from Today or Work to see
+delivered reminders. **Open reminded task** checks the current task against the
+reminder before showing details. **Mark reminder as read** is a separate action.
+These reminders appear in the app and leave the task and its deadline unchanged.
+
 ### Core Partner workspace
 
 From a connected `localDebug` Core organization, choose **Open Partner**.

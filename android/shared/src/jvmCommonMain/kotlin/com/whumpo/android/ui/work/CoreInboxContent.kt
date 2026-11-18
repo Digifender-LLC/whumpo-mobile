@@ -43,6 +43,7 @@ fun CoreInboxContent(
     onMore: () -> Unit,
     onOpen: (CoreInboxItem) -> Unit,
     onAcknowledge: (CoreInboxItem) -> Unit,
+    onTaskReminders: (() -> Unit)? = null,
 ) {
     key(detail) {
         Column(
@@ -74,6 +75,11 @@ fun CoreInboxContent(
                     Text(if (detail.taskCount == 1L) "1 task verified" else "${detail.taskCount} tasks verified")
                 }
                 null -> {
+                    if (onTaskReminders != null) {
+                        WhumpoQuietButton(onClick = onTaskReminders, modifier = Modifier.heightIn(min = 48.dp), enabled = !busy) {
+                            Text("Task reminders")
+                        }
+                    }
                     WhumpoQuietButton(onClick = onRefresh, modifier = Modifier.heightIn(min = 48.dp), enabled = !busy) {
                         Text("Refresh notifications")
                     }

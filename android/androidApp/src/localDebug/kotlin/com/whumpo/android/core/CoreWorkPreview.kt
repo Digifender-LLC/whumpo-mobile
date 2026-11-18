@@ -22,6 +22,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -40,7 +41,7 @@ import com.whumpo.core.api.CoreWebsiteOperation
 import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.CoreWorkWebOrigin
 import com.whumpo.core.auth.CoreOrganizationSessionController
-import com.whumpo.core.auth.CoreTaskCalendarReview
+import com.whumpo.core.auth.CoreReminderAttempt
 import kotlinx.coroutines.CancellationException
 
 @Composable
@@ -67,6 +68,7 @@ internal fun CoreWorkPreview(
     var recovering by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(startTaskDraft && canCreateTask && initialTask == null) }
     var receivingLink by remember { mutableStateOf(false) }
+    val reminderAttempts = remember(active) { mutableStateMapOf<String, CoreReminderAttempt>() }
     var inbox by remember { mutableStateOf(false) }
     var selected by remember(initialTask) { mutableStateOf(initialTask) }
     var attachmentTask by remember { mutableStateOf<CoreWorkTask?>(null) }
@@ -213,14 +215,9 @@ internal fun CoreWorkPreview(
                     detail.dueAt?.let { Text("Due $it") }
                     if (detail.archivedAt != null) Text("Archived")
                     Text("Project ${detail.projectId}", style = MaterialTheme.typography.bodyMedium)
-                    if (calendarForeground) {
-                        val calendarDraft = CoreTaskCalendarReview.from(detail)
-                        if (calendarDraft != null) key(calendarGeneration, calendarDraft) {
-                            CoreWorkTaskCalendar(controller, epoch, calendarDraft) {
-                                isCalendarForeground() && selected == task && !receipts && attachmentTask == null &&
-                                    !inbox && !creating && !recovering && !receivingLink
-                            }
-                        }
+                    CoreWorkDeadlineActions(controller, active, detail, calendarForeground, calendarGeneration, reminderAttempts) {
+                        isCalendarForeground() && selected == task && !receipts && attachmentTask == null &&
+                            !inbox && !creating && !recovering && !receivingLink
                     }
                     if (active.session.role != CoreRole.viewer && detail.archivedAt == null) {
                         WhumpoQuietButton(onClick = {
