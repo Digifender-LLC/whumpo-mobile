@@ -63,7 +63,7 @@ class CoreWorkAttachmentFile(name: String, mediaType: String, bytes: ByteArray) 
         size >= prefix.size && prefix.indices.all { this[it] == prefix[it].toByte() }
 }
 
-enum class CoreAttachmentNotice { InvalidFile, CouldNotConfirm, DestinationChanged, ReservationExpired }
+enum class CoreAttachmentNotice { InvalidFile, CouldNotCheckTask, CouldNotConfirm, DestinationChanged, ReservationExpired }
 
 data class CoreWorkAttachmentState(
     val fileName: String? = null,
@@ -112,6 +112,29 @@ class CoreWorkAttachmentController(
         if (attempt == null) {
             selected = null
             mutableState.value = CoreWorkAttachmentState(notice = CoreAttachmentNotice.InvalidFile)
+        }
+    }
+
+    /** A camera can outlive the task displayed when it opened. Read the destination before showing its result. */
+    suspend fun selectedDocumentPhoto(file: CoreWorkAttachmentFile) {
+        if (!eligible || retired || !running.tryLock()) return
+        try {
+            recheckDestination()
+            selected(file)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            currentCoroutineContext().ensureActive()
+            update {
+                if (attempt == null) {
+                    selected = null
+                    val notice = if (error is DestinationChanged) CoreAttachmentNotice.DestinationChanged
+                        else CoreAttachmentNotice.CouldNotCheckTask
+                    mutableState.value = CoreWorkAttachmentState(notice = notice)
+                }
+            }
+        } finally {
+            running.unlock()
         }
     }
 

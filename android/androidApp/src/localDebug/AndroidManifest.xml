@@ -28,5 +28,13 @@
             android:name=".core.CorePreviewActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
+        <provider
+            android:name=".core.CoreDocumentPhotoFileProvider"
+            android:authorities="${applicationId}.work-document-photos"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/core_work_document_photo_paths" />
+        </provider>
     </application>
 </manifest>

@@ -27,6 +27,16 @@ The workflow validates the Gradle wrapper first. If an app unit task reports
 targets `https://whumpo.com` and requires separately authorized service access.
 Neither variant includes privileged provider credentials.
 
+### Work document photo
+
+In connected `localDebug` Work, open a task and select **Attach private file**. **Capture document photo** opens the device camera for one photo. **Choose file** remains available if the camera is unavailable or the capture is canceled.
+
+A captured JPEG up to 4 MiB appears as **Document photo.jpg** with the task and file size. Check those details before choosing **Save and attach**. A changed task or session discards the result. Capture itself does not save or attach a Work file.
+
+The client gives the camera app a temporary grant to one app-private output file. It removes this output after return or when leaving the attachment screen, and discards any interrupted output when the provider starts in a new app process. The existing file picker, review, and upload controls apply. The camera action does not scan text or crop the photo.
+
+### Host and instrumentation tests
+
 The shared module contains JVM and Android host tests. Roborazzi compares committed reference screenshots with synthetic data. Public
 CI compares the images and does not record or update them. If you intend to
 record the reference screenshots again, enter this command from `android/`.
