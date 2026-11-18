@@ -36,6 +36,7 @@ fun CoreOwnershipSection(
     role: CoreRole,
     onSignInReview: (Boolean) -> Unit = {},
     onReviewOpened: () -> Unit = {},
+    onInteraction: () -> Unit = {},
     signIn: () -> Unit,
 ) {
     val state by controller.state.collectAsState()
@@ -50,7 +51,7 @@ fun CoreOwnershipSection(
     val designation = state.snapshot?.designation
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("Primary owner", style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
-        OwnershipButton(if (expanded) "Hide primary owner details" else "Show primary owner details") {
+        OwnershipButton(onInteraction, if (expanded) "Hide primary owner details" else "Show primary owner details") {
             expanded = !expanded
             if (!expanded) setSignInReview(false)
             if (expanded && designation == null) scope.launch { controller.refresh() }
@@ -72,19 +73,19 @@ fun CoreOwnershipSection(
                 OwnershipUser("Recipient", offer.targetUserId, userId)
                 Text("Expires: ${offer.expiresAt}")
             }
-            OwnershipButton("Refresh primary owner", enabled = !state.busy) { scope.launch { controller.refresh() } }
+            OwnershipButton(onInteraction, "Refresh primary owner", enabled = !state.busy) { scope.launch { controller.refresh() } }
             if (state.retry) {
-                OwnershipButton("Retry exact request", enabled = !state.busy) { scope.launch { controller.retry() } }
+                OwnershipButton(onInteraction, "Retry exact request", enabled = !state.busy) { scope.launch { controller.retry() } }
             }
             if (state.notice == CoreOwnershipNotice.SignInAgain) {
-                OwnershipButton("Sign in again", enabled = !state.busy) { setSignInReview(true) }
+                OwnershipButton(onInteraction, "Sign in again", enabled = !state.busy) { setSignInReview(true) }
             }
             for ((action, label) in listOf(
                 CoreOwnershipAction.Claim to "Review primary owner claim",
                 CoreOwnershipAction.Accept to "Review acceptance",
                 CoreOwnershipAction.Cancel to "Review cancellation",
             )) {
-                if (controller.canReview(action)) OwnershipButton(label) {
+                if (controller.canReview(action)) OwnershipButton(onInteraction, label) {
                     onReviewOpened()
                     controller.review(action)
                 }
@@ -92,22 +93,22 @@ fun CoreOwnershipSection(
             if (!state.retry && role == CoreRole.owner && designation?.primaryOwnerUserId == userId &&
                 designation.pendingTransfer == null
             ) {
-                OwnershipButton("Load eligible owners", enabled = !state.busy) {
+                OwnershipButton(onInteraction, "Load eligible owners", enabled = !state.busy) {
                     scope.launch { controller.loadCandidates() }
                 }
                 state.candidates?.let { candidates ->
                     if (candidates.isEmpty()) Text("No other active owners are eligible.")
                     var offset by remember(candidates) { mutableIntStateOf(0) }
                     candidates.drop(offset).take(20).forEach { candidate ->
-                        OwnershipButton("Review offer to ${candidate.userId}",
+                        OwnershipButton(onInteraction, "Review offer to ${candidate.userId}",
                             enabled = controller.canReview(CoreOwnershipAction.Offer, candidate),
                         ) {
                             onReviewOpened()
                             controller.review(CoreOwnershipAction.Offer, candidate)
                         }
                     }
-                    if (offset > 0) OwnershipButton("Previous owners") { offset -= 20 }
-                    if (offset + 20 < candidates.size) OwnershipButton("More owners") { offset += 20 }
+                    if (offset > 0) OwnershipButton(onInteraction, "Previous owners") { offset -= 20 }
+                    if (offset + 20 < candidates.size) OwnershipButton(onInteraction, "More owners") { offset += 20 }
                 }
             }
         }
@@ -130,8 +131,8 @@ fun CoreOwnershipSection(
                 Text("Expires: ${offer.expiresAt}")
             }
             Text("This action leaves roles, sessions, billing and seats unchanged.")
-            OwnershipButton(confirmLabel(review.action), enabled = !state.busy) { scope.launch { controller.submit() } }
-            OwnershipButton("Dismiss review", enabled = !state.busy) { controller.dismissReview() }
+            OwnershipButton(onInteraction, confirmLabel(review.action), enabled = !state.busy) { scope.launch { controller.submit() } }
+            OwnershipButton(onInteraction, "Dismiss review", enabled = !state.busy) { controller.dismissReview() }
         }
     }
     if (signInReview && expanded) {
@@ -139,18 +140,18 @@ fun CoreOwnershipSection(
             onDismissRequest = { setSignInReview(false) },
             title = { Text("Sign in again?") },
             text = { Text("This leaves the workspace on this device. Use your account’s sign-in method, then select the workspace and review the change again.") },
-            confirmButton = { OwnershipButton("Continue to sign-in") {
+            confirmButton = { OwnershipButton(onInteraction, "Continue to sign-in") {
                 setSignInReview(false)
                 signIn()
             } },
-            dismissButton = { OwnershipButton("Stay signed in") { setSignInReview(false) } },
+            dismissButton = { OwnershipButton(onInteraction, "Stay signed in") { setSignInReview(false) } },
         )
     }
 }
 
 @Composable
-private fun OwnershipButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
-    TextButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+private fun OwnershipButton(onInteraction: () -> Unit, label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    TextButton(onClick = { onInteraction(); onClick() }, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
         Text(label)
     }
 }

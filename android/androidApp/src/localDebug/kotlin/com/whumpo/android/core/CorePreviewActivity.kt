@@ -2,9 +2,13 @@ package com.whumpo.android.core
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.WindowManager
+import android.widget.Toast
 import com.whumpo.android.BuildConfig
+import com.whumpo.android.R
 import com.whumpo.core.auth.CoreAccountSecurityController
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -81,6 +85,7 @@ import com.whumpo.android.ui.ownership.CoreOwnershipSection
 import com.whumpo.android.ui.work.OfflineWorkActions
 import com.whumpo.android.ui.work.OfflineWorkContent
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.delay
 import com.whumpo.core.api.CoreAdaptiveCategory
 import com.whumpo.core.auth.CoreAdaptiveHomeController
@@ -88,6 +93,9 @@ import com.whumpo.core.auth.CoreAdaptiveProfileCache
 import com.whumpo.core.auth.CorePendingApprovalsFocus
 import com.whumpo.core.auth.CoreStaticShortcut
 import com.whumpo.core.auth.CoreStaticShortcutRequest
+import com.whumpo.core.auth.CoreSharedDraftRoute
+import com.whumpo.core.auth.CoreSharedDraftReview
+import com.whumpo.core.auth.CoreSharedDraftItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -106,11 +114,23 @@ class CorePreviewActivity : ComponentActivity() {
     private var shortcutLifetime = 0L
     private var shortcutWasForeground = false
     private var shortcutWindowFocused by mutableStateOf(false)
+    private class ShareDispatch(val id: String, val review: CoreSharedDraftReview, val sentAt: Long) {
+        fun withinDispatchWindow(now: Long) = now - sentAt in 0 until SHARE_DISPATCH_MILLIS
+    }
+
+    private companion object {
+        const val SHARE_DISPATCH_MILLIS = 5_000L
+    }
+    private val shareRoute = CoreSharedDraftRoute()
+    private var shareDispatch: ShareDispatch? = null
+    private var shareReadyEpoch: () -> Long? = { null }
+    private var shareReview by mutableStateOf<CoreSharedDraftReview?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        if (savedInstanceState == null && intent.action == CoreShareDelivery.ACTION) shareUnavailable()
         val origin = BuildConfig.WHUMPO_LOCAL_CORE_ORIGIN
         val rpId = BuildConfig.WHUMPO_LOCAL_CORE_RP.takeIf(String::isNotBlank)
         api = coreApiClient(CoreOrigin.allowlisted(origin, setOfNotNull(rpId?.let { "https://$it" }), debugLoopback = true))
@@ -124,6 +144,7 @@ class CorePreviewActivity : ComponentActivity() {
         }
         val passkeys = NativeAccountPasskeys(applicationContext, activities)
         val workWebOrigin = CoreWorkWebOrigin.parse(BuildConfig.WHUMPO_LOCAL_WORK_WEB_ORIGIN)
+        CoreShareDelivery.attach(this)
         setContent {
             WhumpoEntryTheme {
                 Surface {
@@ -138,7 +159,13 @@ class CorePreviewActivity : ComponentActivity() {
                             isShortcutForeground = { adaptiveForeground && hasWindowFocus() },
                             publishShortcutReady = { shortcutReadyEpoch = it },
                             shortcutLifetime = { shortcutLifetime }, interruptShortcut = ::interruptShortcut,
-                            finishShortcut = { if (shortcut === it) shortcut = null })
+                            finishShortcut = { if (shortcut === it) shortcut = null },
+                            shareReview = shareReview, publishShareReady = { shareReadyEpoch = it },
+                            finishShareReview = {
+                                it.cancel()
+                                if (shareReview === it) shareReview = null
+                            },
+                            shareUnavailable = ::shareUnavailable, interruptShare = ::interruptShare)
                     }
                 }
             }
@@ -148,14 +175,60 @@ class CorePreviewActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val current = (controller.state.value as? CoreOrganizationSessionController.State.Active)
+        if (intent.action == CoreShareDelivery.ACTION) {
+            val id = intent.getStringExtra(CoreShareDelivery.ID)
+            val dispatch = shareDispatch?.takeIf { it.id == id }
+            if (dispatch != null) shareDispatch = null
+            if (dispatch == null || shareReview != null || !dispatch.review.matches(readyShareEpoch()) ||
+                !dispatch.withinDispatchWindow(SystemClock.elapsedRealtime())) {
+                shareUnavailable()
+                return
+            }
+            interruptShortcut()
+            shareReview = dispatch.review
+            updateShortcutForeground()
+            return
+        }
+        interruptShare()
         val ready = shortcutReadyEpoch()?.takeIf { it == current?.epoch && controller.commitIfCurrent(it) {} }
         interruptShortcut()
         shortcut = CoreStaticShortcutRequest.receive(intent.action, ready, SystemClock.elapsedRealtime(), shortcutLifetime, current?.session?.role)
         updateShortcutForeground()
     }
 
+    private fun readyShareEpoch(): Long? = shareReadyEpoch()?.takeIf { controller.commitIfCurrent(it) {} }
+
+    internal fun prepareShare(item: CoreSharedDraftItem): String? {
+        if (isFinishing || isDestroyed || shareReview != null || shareDispatch != null) return null
+        val active = controller.state.value as? CoreOrganizationSessionController.State.Active ?: return null
+        val ready = readyShareEpoch()?.takeIf { it == active.epoch }
+        val sentAt = SystemClock.elapsedRealtime()
+        val review = shareRoute.receive(item, ready, active.session.role, sentAt) ?: return null
+        val id = UUID.randomUUID().toString()
+        shareDispatch = ShareDispatch(id, review, sentAt)
+        Handler(Looper.getMainLooper()).postDelayed({ cancelShareDelivery(id) }, SHARE_DISPATCH_MILLIS)
+        return id
+    }
+
+    internal fun cancelShareDelivery(id: String) {
+        if (shareDispatch?.id == id) shareDispatch = null
+    }
+
+    private fun interruptShare() {
+        shareRoute.interrupt()
+        shareDispatch = null
+        shareReview = null
+    }
+
+    private fun shareUnavailable() {
+        Toast.makeText(this, R.string.core_share_unavailable, Toast.LENGTH_LONG).show()
+    }
+
     private fun updateShortcutForeground(hasFocus: Boolean = hasWindowFocus()) {
         shortcutWindowFocused = hasFocus
+        if (shareReview?.observeForeground(adaptiveForeground, hasFocus, SystemClock.elapsedRealtime()) == false) {
+            shareReview = null
+        }
         val foreground = adaptiveForeground && hasFocus
         val lostForeground = shortcutWasForeground && !foreground
         shortcutWasForeground = foreground
@@ -201,6 +274,8 @@ class CorePreviewActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        CoreShareDelivery.detach(this)
+        interruptShare()
         account.clear()
         api.close()
         super.onDestroy()
@@ -234,6 +309,11 @@ internal fun CorePreview(
     shortcutLifetime: () -> Long,
     interruptShortcut: () -> Unit,
     finishShortcut: (CoreStaticShortcutRequest) -> Unit,
+    shareReview: CoreSharedDraftReview?,
+    publishShareReady: (() -> Long?) -> Unit,
+    finishShareReview: (CoreSharedDraftReview) -> Unit,
+    shareUnavailable: () -> Unit,
+    interruptShare: () -> Unit,
 ) {
     val state by controller.state.collectAsState()
     val active = state as? CoreOrganizationSessionController.State.Active
@@ -258,6 +338,10 @@ internal fun CorePreview(
     val ownership = remember(controller, active) { active?.let { CoreOwnershipController(controller, it) } }
     var ownershipSignInReview by remember(active?.epoch) { mutableStateOf(false) }
     val actions = rememberCoroutineScope()
+    val interruptWorkspaceEntry = {
+        interruptShortcut()
+        interruptShare()
+    }
     var message by remember(active?.epoch) { mutableStateOf<String?>(null) }
     var memberships by remember(active?.epoch) { mutableStateOf<CoreMembershipPage?>(null) }
     var page by remember(active?.epoch) { mutableStateOf<OrganizationPreview?>(null) }
@@ -272,6 +356,7 @@ internal fun CorePreview(
     var showWork by remember(active?.epoch) { mutableStateOf(false) }
     var showInvitations by remember(active?.epoch) { mutableStateOf(false) }
     var showOfflineWork by remember(active?.epoch) { mutableStateOf(false) }
+    var workListVisible by remember(active?.epoch) { mutableStateOf<() -> Boolean>({ false }) }
     var discoveryWorkTask by remember(active?.epoch) { mutableStateOf<CoreWorkTask?>(null) }
     var showToday by remember(active?.epoch) { mutableStateOf(false) }
     var startTaskDraft by remember(active?.epoch) { mutableStateOf(false) }
@@ -290,25 +375,39 @@ internal fun CorePreview(
             CoreAdaptiveHomeController(controller, it, cache = adaptiveCache, onCacheFailure = cacheFailure)
         }
     }
-    fun shortcutHubEpoch(): Long? {
+    fun workspaceHubEpoch(allowWorkList: Boolean = false): Long? {
         val session = active ?: return null
         val liveSetup = setup?.state?.value ?: return null
         val ownershipState = ownership?.state?.value
+        if (showWork && !(allowWorkList && workListVisible())) return null
         if (!liveSetup.canOpenWorkspace || liveSetup.readiness?.orgId != session.session.orgId ||
             page == null || liveSetup.busy || (!nextStepChosen && liveSetup.nextStepProject(session.session.orgId) != null) ||
             ownershipSignInReview || ownershipState?.review != null || ownershipState?.busy == true ||
-            showWork || showToday || showOfflineWork || showPartner || showInvitations || showDiscovery ||
+            showToday || showOfflineWork || showPartner || showInvitations || showDiscovery ||
             showHandoff || showDomains || showHostname || showSourceHistory) return null
         return session.epoch
     }
-    SideEffect { publishShortcutReady(::shortcutHubEpoch) }
+    SideEffect {
+        publishShortcutReady { workspaceHubEpoch() }
+        publishShareReady { workspaceHubEpoch(allowWorkList = true) }
+    }
+    val presentedShare = presentSharedDraft(
+        review = shareReview, epoch = active?.epoch, ready = ready, focused = shortcutForeground,
+        currentFocus = isShortcutForeground, sessions = controller,
+        hubEpoch = { workspaceHubEpoch(allowWorkList = true) },
+        finish = finishShareReview, unavailable = shareUnavailable,
+        open = {
+            showWork = true
+            showOfflineWork = true
+        },
+    )
     LaunchedEffect(shortcut, shortcutForeground, adaptiveGeneration, active?.epoch) {
         val request = shortcut ?: return@LaunchedEffect
         if (!shortcutForeground) return@LaunchedEffect
         try {
             val session = active ?: return@LaunchedEffect
             fun currentEpoch(): Long? = session.epoch.takeIf {
-                shortcutHubEpoch() == it && isShortcutForeground() &&
+                workspaceHubEpoch() == it && isShortcutForeground() &&
                     isForegroundGeneration(adaptiveGeneration) && controller.commitIfCurrent(it) {}
             }
             if (!request.destination.allows(session.session.role)) return@LaunchedEffect
@@ -318,6 +417,7 @@ internal fun CorePreview(
                 }) return@LaunchedEffect
             controller.commitIfCurrent(session.epoch) {
                 if (currentEpoch() == null || shortcutLifetime() != admissionLifetime) return@commitIfCurrent
+                interruptShare()
                 when (request.destination) {
                     CoreStaticShortcut.Today -> { shortcutToday = true; showToday = true }
                     CoreStaticShortcut.Work -> { showWork = true }
@@ -391,6 +491,14 @@ internal fun CorePreview(
     if (active != null && ready && active.session.role != CoreRole.viewer && showOfflineWork) {
         key(active.epoch) {
             CoreOfflineWorkPreview(controller, active, offlineWork,
+                share = presentedShare,
+                shareOrganization = page?.profile?.displayName,
+                shareFocused = isShortcutForeground,
+                shareReady = {
+                    val current = setup?.state?.value
+                    current?.canOpenWorkspace == true && current.readiness?.orgId == active.session.orgId
+                },
+                finishShare = finishShareReview,
                 openTask = { task ->
                     controller.commitIfCurrent(active.epoch) {
                         discoveryWorkTask = task
@@ -433,7 +541,7 @@ internal fun CorePreview(
         }
     }
     val choose: (String) -> Unit = { org ->
-        interruptShortcut()
+        interruptWorkspaceEntry()
         message = null
         actions.launch {
             try {
@@ -446,7 +554,7 @@ internal fun CorePreview(
         }
     }
     val signOut: () -> Unit = {
-        interruptShortcut()
+        interruptWorkspaceEntry()
         message = null
         actions.launch {
             try {
@@ -465,11 +573,11 @@ internal fun CorePreview(
         }
     }
     val freshSignIn: () -> Unit = {
-        interruptShortcut()
+        interruptWorkspaceEntry()
         account.clear()
         showSecurity = true
     }
-    val openDiscovery: (() -> Unit)? = if (discovery == null) null else { { interruptShortcut(); showDiscovery = true } }
+    val openDiscovery: (() -> Unit)? = if (discovery == null) null else { { interruptWorkspaceEntry(); showDiscovery = true } }
     if (active != null && ready && handoff != null && showDiscovery && showHandoff) {
         key(active.epoch) {
             val handoffState by handoff.state.collectAsState()
@@ -644,14 +752,17 @@ internal fun CorePreview(
                 canRecoverApplication = active.session.role == CoreRole.owner,
                 initialTask = discoveryWorkTask,
                 startTaskDraft = startTaskDraft,
-                openOfflineWork = { showOfflineWork = true },
+                openOfflineWork = { interruptShare(); showOfflineWork = true },
                 workWebOrigin = workWebOrigin,
                 signOut = signOut,
                 onReadable = { destinationRead(CoreAdaptiveCategory.Work, it) },
                 calendarForeground = adaptiveForeground,
                 calendarGeneration = adaptiveGeneration,
+                publishWorkListVisible = { workListVisible = it },
+                onWorkListInteraction = interruptShare,
                 isCalendarForeground = { isForegroundGeneration(adaptiveGeneration) },
             ) {
+                interruptShare()
                 requestedFocus = null
                 showWork = false
                 startTaskDraft = false
@@ -739,34 +850,34 @@ internal fun CorePreview(
                 key(active.epoch) {
                     CoreOwnershipSection(ownership, active.session.userId, active.session.role,
                         onSignInReview = { ownershipSignInReview = it },
-                        onReviewOpened = interruptShortcut) {
+                        onReviewOpened = interruptShortcut, onInteraction = interruptShare) {
                         account.clear()
                         showSecurity = true
                     }
                 }
             }
         },
-        openToday = { interruptShortcut(); shortcutToday = false; showToday = true },
-        openSourceHistory = { interruptShortcut(); showSourceHistory = true },
-        openWork = { interruptShortcut(); requestedFocus = CoreAdaptiveCategory.Work; showWork = true },
+        openToday = { interruptWorkspaceEntry(); shortcutToday = false; showToday = true },
+        openSourceHistory = { interruptWorkspaceEntry(); showSourceHistory = true },
+        openWork = { interruptWorkspaceEntry(); requestedFocus = CoreAdaptiveCategory.Work; showWork = true },
         openInvitations = if (active?.session?.role == CoreRole.owner && ready) ({
-            interruptShortcut()
+            interruptWorkspaceEntry()
             showInvitations = true
         }) else null,
-        openPartner = { interruptShortcut(); requestedFocus = CoreAdaptiveCategory.Partner; showPartner = true },
+        openPartner = { interruptWorkspaceEntry(); requestedFocus = CoreAdaptiveCategory.Partner; showPartner = true },
         openDiscovery = openDiscovery,
-        openDomains = if (active != null && ready && domains != null) ({ interruptShortcut(); showDomains = true }) else null,
+        openDomains = if (active != null && ready && domains != null) ({ interruptWorkspaceEntry(); showDomains = true }) else null,
         openHostname = if (active?.session?.role == CoreRole.owner && ready) ({
             restoreHostnameFocus = false
-            interruptShortcut()
+            interruptWorkspaceEntry()
             showHostname = true
         }) else null,
         restoreHostnameFocus = restoreHostnameFocus,
         tryPartner = { showPartnerSample = true },
         tryOnboarding = { showOnboarding = true },
-        signIn = { interruptShortcut(); showSecurity = true },
+        signIn = { interruptWorkspaceEntry(); showSecurity = true },
         choose = choose,
-        next = { cursor = it },
+        next = { interruptShare(); cursor = it },
         signOut = signOut,
     )
 }
@@ -776,6 +887,11 @@ private fun CoreOfflineWorkPreview(
     sessions: CoreOrganizationSessionController,
     active: CoreOrganizationSessionController.State.Active,
     store: CoreOfflineWorkStore,
+    share: CoreSharedDraftReview?,
+    shareOrganization: String?,
+    shareFocused: () -> Boolean,
+    shareReady: () -> Boolean,
+    finishShare: (CoreSharedDraftReview) -> Unit,
     openTask: (CoreWorkTask) -> Unit,
     signOut: () -> Unit,
     close: () -> Unit,
@@ -784,7 +900,9 @@ private fun CoreOfflineWorkPreview(
     DisposableEffect(controller) { onDispose { controller.retire() } }
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
+    val dismissShare = { share?.let(finishShare); Unit }
     val back: () -> Unit = {
+        dismissShare()
         if (state.connected) {
             controller.offline()
             scope.launch { controller.load() }
@@ -809,10 +927,67 @@ private fun CoreOfflineWorkPreview(
         openTask = openTask,
         back = back,
         signOut = {
+            dismissShare()
             controller.retire()
             signOut()
         },
-    ))
+    ), sharedItem = share?.item, shareOrganization = shareOrganization, useSharedItem = {
+        val current = controller.state.value
+        var description: String? = null
+        if (share != null && shareFocused() && shareReady() && current.loaded && !current.connected &&
+            !current.busy && !current.saved && !current.frozen && !current.accessLost && current.notice == null) {
+            sessions.commitIfCurrent(active.epoch) {
+                description = share.accept(active.epoch, SystemClock.elapsedRealtime())
+            }
+        }
+        dismissShare()
+        description
+    }, dismissShare = dismissShare)
+}
+
+@Composable
+private fun presentSharedDraft(
+    review: CoreSharedDraftReview?,
+    epoch: Long?,
+    ready: Boolean,
+    focused: Boolean,
+    currentFocus: () -> Boolean,
+    sessions: CoreOrganizationSessionController,
+    hubEpoch: () -> Long?,
+    finish: (CoreSharedDraftReview) -> Unit,
+    unavailable: () -> Unit,
+    open: () -> Unit,
+): CoreSharedDraftReview? {
+    var presented by remember(epoch) { mutableStateOf<CoreSharedDraftReview?>(null) }
+    LaunchedEffect(review, epoch, ready, focused) {
+        val offer = review ?: return@LaunchedEffect
+        val currentEpoch = epoch?.takeIf { ready && offer.matches(it) }
+        if (currentEpoch == null) {
+            finish(offer)
+        } else if (focused && presented !== offer) {
+            if (hubEpoch() != currentEpoch || !currentFocus() ||
+                !offer.canReview(currentEpoch, SystemClock.elapsedRealtime()) ||
+                !sessions.commitIfCurrent(currentEpoch) {
+                    presented = offer
+                    open()
+                }
+            ) {
+                finish(offer)
+                unavailable()
+            }
+        }
+    }
+    LaunchedEffect(review) {
+        val offer = review ?: return@LaunchedEffect
+        delay(offer.remainingMillis(SystemClock.elapsedRealtime()))
+        finish(offer)
+    }
+    LaunchedEffect(review) {
+        if (presented !== review) presented = null
+    }
+    return presented?.takeIf {
+        it === review && focused && ready && it.canReview(epoch, SystemClock.elapsedRealtime())
+    }
 }
 
 @Composable

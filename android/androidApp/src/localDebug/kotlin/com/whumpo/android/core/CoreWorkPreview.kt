@@ -17,6 +17,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -57,6 +59,8 @@ internal fun CoreWorkPreview(
     calendarForeground: Boolean,
     calendarGeneration: Long,
     isCalendarForeground: () -> Boolean,
+    publishWorkListVisible: ((() -> Boolean) -> Unit)? = null,
+    onWorkListInteraction: () -> Unit = {},
     close: () -> Unit,
 ) {
     val epoch = active.epoch
@@ -70,6 +74,14 @@ internal fun CoreWorkPreview(
     var receipts by remember { mutableStateOf(false) }
     var workCursor by remember { mutableStateOf<String?>(null) }
     var historyCursor by remember { mutableStateOf<String?>(null) }
+    if (publishWorkListVisible != null) {
+        SideEffect {
+            publishWorkListVisible {
+                !recovering && !creating && !receivingLink && !inbox && selected == null && attachmentTask == null && !receipts
+            }
+        }
+        DisposableEffect(Unit) { onDispose { publishWorkListVisible { false } } }
+    }
     attachmentTask?.let { target ->
         key(epoch, target.id, target.projectId, target.version) {
             CoreWorkAttachmentPreview(controller, active, target) { attachmentTask = null }
@@ -131,16 +143,16 @@ internal fun CoreWorkPreview(
             when {
                 task == null -> {
                     Text("Work", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
-                    WhumpoQuietButton(onClick = { inbox = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    WhumpoQuietButton(onClick = { onWorkListInteraction(); inbox = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Task notifications")
                     }
                     if (workWebOrigin != null) {
-                        WhumpoQuietButton(onClick = { receivingLink = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                        WhumpoQuietButton(onClick = { onWorkListInteraction(); receivingLink = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                             Text("Open Work link")
                         }
                     }
                     if (canCreateTask) {
-                        WhumpoPrimaryButton(onClick = { creating = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                        WhumpoPrimaryButton(onClick = { onWorkListInteraction(); creating = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                             Text("New task")
                         }
                         WhumpoQuietButton(onClick = openOfflineWork, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -158,7 +170,7 @@ internal fun CoreWorkPreview(
                             }
                         }
                         page.items.forEach { item ->
-                            Card(onClick = { selected = item; openedFromCreation = false }, modifier = Modifier.fillMaxWidth()) {
+                            Card(onClick = { onWorkListInteraction(); selected = item; openedFromCreation = false }, modifier = Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(item.title, style = MaterialTheme.typography.titleMedium)
                                     Text(item.status.label, style = MaterialTheme.typography.bodyMedium)
@@ -166,11 +178,11 @@ internal fun CoreWorkPreview(
                             }
                         }
                         page.nextCursor?.let { next ->
-                            Button(onClick = { workCursor = next }) { Text("More tasks") }
+                            Button(onClick = { onWorkListInteraction(); workCursor = next }) { Text("More tasks") }
                         }
-                        if (workCursor != null) OutlinedButton(onClick = { workCursor = null }) { Text("First page") }
+                        if (workCursor != null) OutlinedButton(onClick = { onWorkListInteraction(); workCursor = null }) { Text("First page") }
                     }
-                    if (canRecoverApplication) WhumpoQuietButton(onClick = { recovering = true }) { Text("Application recovery") }
+                    if (canRecoverApplication) WhumpoQuietButton(onClick = { onWorkListInteraction(); recovering = true }) { Text("Application recovery") }
                 }
                 receipts -> {
                     Text("Website receipts", style = MaterialTheme.typography.headlineMedium)

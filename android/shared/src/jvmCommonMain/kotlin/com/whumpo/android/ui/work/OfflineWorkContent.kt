@@ -30,6 +30,7 @@ import com.whumpo.core.api.CoreTaskOutcome
 import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.CoreWorkspaceChoice
 import com.whumpo.core.auth.CoreOfflineWorkState
+import com.whumpo.core.auth.CoreSharedDraftItem
 import com.whumpo.core.auth.OfflineWorkNotice
 import com.whumpo.core.auth.OfflineWorkReview
 
@@ -51,7 +52,14 @@ data class OfflineWorkActions(
 )
 
 @Composable
-fun OfflineWorkContent(state: CoreOfflineWorkState, actions: OfflineWorkActions) {
+fun OfflineWorkContent(
+    state: CoreOfflineWorkState,
+    actions: OfflineWorkActions,
+    sharedItem: CoreSharedDraftItem? = null,
+    shareOrganization: String? = null,
+    useSharedItem: () -> String? = { null },
+    dismissShare: () -> Unit = {},
+) {
     var title by remember(state.title) { mutableStateOf(state.title) }
     var description by remember(state.description) { mutableStateOf(state.description) }
     val matchesSaved = state.saved && title == state.title && description == state.description
@@ -67,6 +75,23 @@ fun OfflineWorkContent(state: CoreOfflineWorkState, actions: OfflineWorkActions)
                 Text("Sign in again to reopen a draft for this organization.")
             }
             state.busy && !state.loaded -> WorkDraftStatus("Opening saved draft…")
+            sharedItem != null && state.loaded -> {
+                val available = !state.connected && !state.saved && !state.frozen && !state.busy &&
+                    state.notice == null && title.isEmpty() && description.isEmpty()
+                if (available) {
+                    Text(if (sharedItem.isLink) "Review shared link" else "Review shared text",
+                        style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+                    shareOrganization?.let { Text(it, style = MaterialTheme.typography.labelLarge) }
+                    Text(sharedItem.text)
+                    Text("Use it as the draft description. You can edit it before saving on this device.")
+                    WorkDraftButton("Use in draft", {
+                        if (title.isEmpty() && description.isEmpty()) useSharedItem()?.let { description = it }
+                    }, primary = true)
+                } else {
+                    WorkDraftStatus("The current draft can't receive this item.")
+                }
+                WorkDraftButton("Dismiss shared item", dismissShare)
+            }
             !state.connected -> {
                 if (state.frozen) {
                     Text(state.title, style = MaterialTheme.typography.titleMedium)
