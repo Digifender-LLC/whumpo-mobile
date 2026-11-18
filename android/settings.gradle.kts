@@ -30,3 +30,5 @@ rootProject.name = "whumpo-android"
 
 include(":shared")
 include(":androidApp")
+
+include(":wearApp")
