@@ -40,7 +40,7 @@ suspend fun CoreOrganizationSessionController.inboxPage(
     whileCurrent: () -> Boolean,
 ): CoreInboxPage {
     val cursor = after?.nextFor(active)
-    val wire = requestInbox(active, whileCurrent) { client, token -> client.inbox(token, cursor) }
+    val wire = requestVisibleSession(active, whileCurrent) { client, token -> client.inbox(token, cursor) }
     if ((cursor != null && wire.nextCursor == cursor) ||
         (active.session.role != CoreRole.owner && wire.items.any { it.category == CoreInboxCategory.Approval })
     ) throw CoreProtocolException()
@@ -54,20 +54,20 @@ suspend fun CoreOrganizationSessionController.openInboxItem(
     whileCurrent: () -> Boolean,
 ): CoreInboxDetail {
     page.requireItem(active, item)
-    val source = requestInbox(active, whileCurrent) { client, token -> client.resolveInboxItem(token, item) }
+    val source = requestVisibleSession(active, whileCurrent) { client, token -> client.resolveInboxItem(token, item) }
     return when (source) {
         is CoreInboxResolution.Approval -> {
             when (source.status) {
                 CoreInboxApprovalStatus.Actionable, CoreInboxApprovalStatus.ReauthenticationRequired -> Unit
                 else -> throw CoreProtocolException()
             }
-            val detail = requestInbox(active, whileCurrent) { client, token -> client.inboxApproval(token, source) }
+            val detail = requestVisibleSession(active, whileCurrent) { client, token -> client.inboxApproval(token, source) }
             // Approval detail is organization-scoped. Recheck the notification's narrower owner audience and status.
-            val current = requestInbox(active, whileCurrent) { client, token -> client.resolveInboxItem(token, item) }
+            val current = requestVisibleSession(active, whileCurrent) { client, token -> client.resolveInboxItem(token, item) }
             if (current != source) throw CoreProtocolException()
             detail
         }
-        is CoreInboxResolution.Confirmed -> requestInbox(active, whileCurrent) { client, token ->
+        is CoreInboxResolution.Confirmed -> requestVisibleSession(active, whileCurrent) { client, token ->
             client.inboxReceipt(token, source, active.session.orgId)
         }
     }
@@ -80,27 +80,27 @@ suspend fun CoreOrganizationSessionController.acknowledgeInboxItem(
     whileCurrent: () -> Boolean,
 ): CoreInboxPage {
     page.requireItem(active, item)
-    val acknowledgedAt = requestInbox(active, whileCurrent) { client, token -> client.acknowledgeInboxItem(token, item) }
+    val acknowledgedAt = requestVisibleSession(active, whileCurrent) { client, token -> client.acknowledgeInboxItem(token, item) }
     return page.withAcknowledgment(item, acknowledgedAt)
 }
 
-private suspend fun <T> CoreOrganizationSessionController.requestInbox(
+internal suspend fun <T> CoreOrganizationSessionController.requestVisibleSession(
     active: CoreOrganizationSessionController.State.Active,
     whileCurrent: () -> Boolean,
     request: suspend (CoreApiClient, String) -> T,
 ): T = requestForActiveSession(active) { client, token ->
-    requireInboxCurrent(whileCurrent)
+    requireVisibleSession(whileCurrent)
     try {
-        request(client, token).also { requireInboxCurrent(whileCurrent) }
+        request(client, token).also { requireVisibleSession(whileCurrent) }
     } catch (error: CancellationException) {
         throw error
     } catch (error: Exception) {
-        requireInboxCurrent(whileCurrent)
+        requireVisibleSession(whileCurrent)
         throw error
     }
 }
 
-private suspend fun requireInboxCurrent(whileCurrent: () -> Boolean) {
+private suspend fun requireVisibleSession(whileCurrent: () -> Boolean) {
     currentCoroutineContext().ensureActive()
-    if (!whileCurrent()) throw CancellationException("Inbox closed")
+    if (!whileCurrent()) throw CancellationException("Scoped view closed")
 }

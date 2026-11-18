@@ -32,6 +32,12 @@ internal fun CoreInboxPreview(
     organizationName: String,
     close: () -> Unit,
 ) {
+    var remindersOpen by remember(active) { mutableStateOf(false) }
+    if (remindersOpen) {
+        CoreReminderInboxPreview(sessions, active, organizationName) { remindersOpen = false }
+        return
+    }
+
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val scope = rememberCoroutineScope()
     var generation by remember { mutableLongStateOf(0L) }
@@ -115,6 +121,7 @@ internal fun CoreInboxPreview(
         organizationName, page?.items, page?.hasMore == true, detail, busy, notice,
         onBack = ::back,
         onRefresh = { load() },
+        onTaskReminders = { if (isForeground() && !busy) remindersOpen = true },
         onMore = { page?.let(::load) },
         onOpen = { item ->
             page?.let { current ->
