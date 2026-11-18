@@ -212,10 +212,26 @@ console.log('Mobile policy negative fixtures passed.');
 const connectedPreview = readFileSync(new URL(
   '../android/androidApp/src/localDebug/kotlin/com/whumpo/android/core/CorePreviewActivity.kt', import.meta.url
 ), 'utf8');
-const shortcutHub = connectedPreview.match(/fun shortcutHubEpoch\(\): Long\? \{([\s\S]*?)return session\.epoch/)?.[1];
+const shortcutHub = connectedPreview.match(/fun workspaceHubEpoch\(allowWorkList: Boolean = false\): Long\? \{([\s\S]*?)return session\.epoch/)?.[1];
 assert.match(shortcutHub ?? '', /\bshowSourceHistory\b[\s\S]*return null/,
   'An open Source History screen must reject a new static shortcut.');
-assert.match(connectedPreview, /openSourceHistory = \{ interruptShortcut\(\); showSourceHistory = true \}/,
+assert.match(connectedPreview, /publishShortcutReady \{ workspaceHubEpoch\(\) \}/,
+  'Static shortcuts must use the hub without the Work-list share allowance.');
+const localManifest = readFileSync(new URL('../android/androidApp/src/localDebug/AndroidManifest.xml', import.meta.url), 'utf8');
+const mainManifest = readFileSync(new URL('../android/androidApp/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+const shareTarget = localManifest.match(/<activity\s+android:name="\.core\.CoreShareDraftActivity"[^>]*>([\s\S]*?)<\/activity>/)?.[1];
+assert.match(shareTarget ?? '', /android.intent.action.SEND"[\s\S]*?mimeType="text\/plain"/,
+  'The connected receiver must get the standard single text Sharesheet route.');
+assert.doesNotMatch(shareTarget ?? '', /SEND_MULTIPLE|image\/|mimeType="\*\//,
+  'The connected receiver must not register for files or multiple items.');
+assert.doesNotMatch(mainManifest, /CoreShareDraftActivity/, 'The connected share target must only appear in localDebug.');
+assert.match(connectedPreview, /val interruptWorkspaceEntry = \{\s*interruptShortcut\(\)\s*interruptShare\(\)/,
+  'Explicit hub route changes must invalidate both entry types.');
+assert.match(connectedPreview, /onReviewOpened = interruptShortcut, onInteraction = interruptShare/,
+  'An ownership interaction must invalidate a pending share before the review is published.');
+assert.match(connectedPreview, /onWorkListInteraction = interruptShare/,
+  'An explicit Work list interaction must invalidate a pending share.');
+assert.match(connectedPreview, /openSourceHistory = \{ interruptWorkspaceEntry\(\); showSourceHistory = true \}/,
   'Entering Source History must also invalidate a shortcut already awaiting workspace readiness.');
 assert.match(connectedPreview, /controller\.commitIfCurrent\(session\.epoch\) \{\s*if \(currentEpoch\(\) == null/,
   'Shortcut navigation must recheck the current hub immediately before showing a destination.');

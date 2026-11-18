@@ -108,6 +108,28 @@ request** to send the saved request and key. The app clears the draft only
 after checking the creation receipt and reading the current task in the
 reviewed project.
 
+### Share into a Work draft
+
+With a ready organization or its Work list still open in the connected
+`localDebug` preview, share one plain-text item or HTTPS link from another app
+and choose **Whumpo Work draft** in the Android Sharesheet. Review it in the
+current organization and choose **Use in draft** to add it to an unsaved
+description. Choose a title and **Save on this device** to keep it. The normal
+Work flow still requires you to reconnect, choose a project and confirm task
+creation. Incoming links are displayed as text.
+
+The preview offers the item only to the same eligible, unexpired session that
+was open at delivery. A competing navigation or ownership action clears the
+offer even if the same screen returns. Dismissal, leaving the review foreground,
+a scope change or expiry also clears it. Saved, pending, unreadable and open
+drafts keep their place. A fresh process in this preview starts signed out.
+Open a ready organization in that case, then share again. The share target
+does not queue content through sign-in or organization selection.
+
+The target is packaged only in `localDebug`. Check Android Sharesheet delivery
+from another app on a disposable API 28 and API 36 emulator separately from
+the JVM, Compose host and package checks.
+
 ### Open a Work link
 
 Set the local build property `-Pwhumpo.localWorkWebOrigin=https://work.example.test`

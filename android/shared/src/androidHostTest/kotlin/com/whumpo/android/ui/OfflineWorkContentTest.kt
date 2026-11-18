@@ -15,6 +15,7 @@ import com.whumpo.android.ui.theme.WhumpoEntryTheme
 import com.whumpo.android.ui.work.OfflineWorkActions
 import com.whumpo.android.ui.work.OfflineWorkContent
 import com.whumpo.core.auth.CoreOfflineWorkState
+import com.whumpo.core.auth.CoreSharedDraftItem
 import com.whumpo.core.auth.OfflineWorkNotice
 import com.whumpo.core.auth.OfflineWorkReview
 import org.junit.Assert.assertEquals
@@ -90,6 +91,82 @@ class OfflineWorkContentTest : RobolectricUiTest() {
             compose.onNodeWithText("The saved draft could not be opened.").performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("Discard saved draft").assertDoesNotExist()
             compose.onNodeWithText("Save on this device").assertDoesNotExist()
+        }
+    }
+
+    @Test
+    fun sharedTextNeedsReviewThenOrdinaryExplicitSaveWithAnEnteredTitle() {
+        val text = "Follow up on the synthetic proposal"
+        val item = checkNotNull(CoreSharedDraftItem.parse(text))
+        var offered by mutableStateOf<CoreSharedDraftItem?>(item)
+        var accepted = 0
+        var reconnects = 0
+        val saved = mutableListOf<Pair<String, String>>()
+        launch(Screen.Compact, dark = true, fontScale = 2f) {
+            WhumpoEntryTheme(darkTheme = true) {
+                OfflineWorkContent(
+                    CoreOfflineWorkState(loaded = true),
+                    actions(save = { title, description -> saved += title to description }, reconnect = { reconnects++ }),
+                    sharedItem = offered,
+                    useSharedItem = {
+                        accepted++
+                        offered = null
+                        item.text
+                    },
+                    dismissShare = { offered = null },
+                )
+            }
+        }.use {
+            compose.onNodeWithText("Review shared text").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText(text).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Task title").assertDoesNotExist()
+            compose.onNodeWithText("Use in draft").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+            assertEquals(1, accepted)
+            assertEquals(emptyList<Pair<String, String>>(), saved)
+            assertEquals(0, reconnects)
+            compose.onNodeWithText("Review shared text").assertDoesNotExist()
+            compose.onNodeWithText("Reconnect to review").assertDoesNotExist()
+            compose.onNodeWithText("Save on this device").performScrollTo().assertIsNotEnabled()
+            compose.onNodeWithText("Task title").performScrollTo().performTextInput("Review proposal")
+            compose.onNodeWithText("Save on this device").performScrollTo().performClick()
+            assertEquals(listOf("Review proposal" to text), saved)
+            assertEquals(0, reconnects)
+        }
+    }
+
+    @Test
+    fun sharedLinkCanBeDismissedAndCannotReplaceProtectedDraftState() {
+        val link = "https://example.test/item"
+        var offered by mutableStateOf(CoreSharedDraftItem.parse(link))
+        var state by mutableStateOf(CoreOfflineWorkState(loaded = true, saved = true, frozen = true, title = "Existing task"))
+        var writes = 0
+        launch(Screen.Compact, fontScale = 2f) {
+            WhumpoEntryTheme(darkTheme = false) {
+                OfflineWorkContent(
+                    state,
+                    actions(save = { _, _ -> writes++ }),
+                    sharedItem = offered,
+                    useSharedItem = { error("An unavailable or dismissed share entered the editor") },
+                    dismissShare = { offered = null },
+                )
+            }
+        }.use {
+            compose.onNodeWithText("The current draft can't receive this item.").assertIsDisplayed()
+            compose.onNodeWithText(link).assertDoesNotExist()
+            compose.onNodeWithText("Use in draft").assertDoesNotExist()
+            compose.onNodeWithText("Dismiss shared item").performScrollTo().performClick()
+            compose.onNodeWithText("Existing task").performScrollTo().assertIsDisplayed()
+
+            compose.runOnIdle {
+                state = CoreOfflineWorkState(loaded = true)
+                offered = CoreSharedDraftItem.parse(link)
+            }
+            compose.onNodeWithText("Review shared link").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText(link).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Dismiss shared item").performScrollTo().performClick()
+            compose.onNodeWithText(link).assertDoesNotExist()
+            compose.onNodeWithText("Save on this device").performScrollTo().assertIsNotEnabled()
+            assertEquals(0, writes)
         }
     }
 

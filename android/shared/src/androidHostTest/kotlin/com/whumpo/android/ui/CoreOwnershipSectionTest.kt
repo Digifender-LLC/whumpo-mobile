@@ -22,6 +22,9 @@ import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreRole
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import com.whumpo.core.auth.CoreOwnershipController
+import com.whumpo.core.auth.CoreSharedDraftItem
+import com.whumpo.core.auth.CoreSharedDraftReview
+import com.whumpo.core.auth.CoreSharedDraftRoute
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
@@ -65,12 +68,16 @@ class CoreOwnershipSectionTest : RobolectricUiTest() {
             val active = runBlocking { sessions.establish("A".repeat(43)) }
             val ownership = CoreOwnershipController(sessions, active) { 1L }
             val reviewOpens = AtomicInteger()
+            val shareRoute = CoreSharedDraftRoute()
+            val item = checkNotNull(CoreSharedDraftItem.parse("Synthetic task details"))
+            var heldShare: CoreSharedDraftReview? = null
             launch(Screen.Compact, dark = true, fontScale = 2f) {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                     CoreOwnershipSection(ownership, "fixture-owner", CoreRole.owner, onReviewOpened = {
                         check(ownership.state.value.review == null)
+                        check(heldShare?.matches(active.epoch) == false)
                         reviewOpens.incrementAndGet()
-                    }, signIn = { error("Unexpected sign-in") })
+                    }, onInteraction = shareRoute::interrupt, signIn = { error("Unexpected sign-in") })
                 }
             }.use {
                 compose.onNodeWithText("Primary owner").assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
@@ -78,8 +85,14 @@ class CoreOwnershipSectionTest : RobolectricUiTest() {
                 waitForText("Review primary owner claim")
                 assertEquals(1, reads.get())
                 assertEquals(0, writes.get())
+                compose.runOnIdle {
+                    val share = checkNotNull(shareRoute.receive(item, active.epoch, CoreRole.owner, 1L))
+                    check(share.observeForeground(true, true, 2L))
+                    heldShare = share
+                }
                 compose.onNodeWithText("Review primary owner claim").performScrollTo().performClick()
                 assertEquals(1, reviewOpens.get())
+                check(heldShare?.accept(active.epoch, 3L) == null)
                 compose.onNodeWithText("New primary owner: fixture-owner (You)").performScrollTo().assertIsDisplayed()
                 assertEquals(0, writes.get())
                 compose.onNodeWithText("Confirm primary owner claim").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
