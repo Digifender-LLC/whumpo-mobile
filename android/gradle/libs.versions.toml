@@ -26,10 +26,10 @@ androidxTestRunner = "1.6.2"
 # Already used by the Compose test runtime; explicit for dialog root inspection in device tests.
 androidxTestEspresso = "3.5.1"
 junit4 = "4.13.2"
-robolectric = "4.17"
-roborazzi = "1.78.0"
+robolectric = "4.18"
+roborazzi = "1.79.0"
 kotlinxCoroutines = "1.11.0"
-kotlinxSerialization = "1.12.0"
+kotlinxSerialization = "1.13.0"
 ktor = "3.6.1"
 
 [libraries]
