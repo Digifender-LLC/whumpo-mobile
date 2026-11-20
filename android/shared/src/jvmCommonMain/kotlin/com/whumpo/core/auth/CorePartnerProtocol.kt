@@ -27,6 +27,7 @@ internal fun partnerTitle(value: String): String? {
 }
 
 internal fun partnerOperationKey(): String = UUID.randomUUID().toString()
+private class PartnerStreamFinished : Exception()
 
 internal data class PartnerWrite(val key: String, val body: String) {
     companion object {
@@ -141,6 +142,23 @@ internal class CorePartnerProtocol(
             it.check(conversationId, sourceMessageId)
             checkWire(it.id == id)
         }
+
+    suspend fun events(conversationId: String, runId: String, after: String?, receive: (PartnerAgentEvent) -> Unit) {
+        val decoder = PartnerAgentFrameDecoder(active.session.orgId, conversationId, runId)
+        sessions.requestForActiveSession(active) { api, token ->
+            try {
+                api.partnerAgentStream(token, conversationId, runId, after) { chunk ->
+                    decoder.feed(chunk).forEach { event ->
+                        receive(event)
+                        if (event.type == PartnerAgentEventType.MessageCompleted) throw PartnerStreamFinished()
+                    }
+                }
+            } catch (_: PartnerStreamFinished) {
+                // The transport's execute/finally closes this response; no run cancellation is sent.
+            }
+            decoder.finish()
+        }
+    }
 
     suspend fun approval(run: PartnerRun, step: PartnerRunStep): PartnerApproval {
         checkWire(step in run.steps)

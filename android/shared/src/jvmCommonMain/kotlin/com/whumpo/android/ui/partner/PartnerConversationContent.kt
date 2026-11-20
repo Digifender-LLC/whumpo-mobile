@@ -151,7 +151,7 @@ fun PartnerConversationContent(
             state.run?.let { run ->
                 item {
                     Text("Task run", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
-                    Text(when (run.status) {
+                    Text(when (state.displayedRunStatus() ?: run.status) {
                         PartnerRunStatus.queued -> "Queued"
                         PartnerRunStatus.planning -> "Planning"
                         PartnerRunStatus.tool -> "Processing task request"
@@ -160,6 +160,37 @@ fun PartnerConversationContent(
                         PartnerRunStatus.failed -> "Run failed"
                         PartnerRunStatus.canceled -> "Run canceled"
                     })
+                    state.eventConnection?.let { connection ->
+                        Text(when (connection) {
+                            com.whumpo.core.auth.PartnerEventConnection.Connecting -> "Connecting to live updates…"
+                            com.whumpo.core.auth.PartnerEventConnection.Connected -> "Live updates connected"
+                            com.whumpo.core.auth.PartnerEventConnection.Retrying -> "Reconnecting to live updates…"
+                            com.whumpo.core.auth.PartnerEventConnection.Interrupted -> "Live updates interrupted. Retrying…"
+                            com.whumpo.core.auth.PartnerEventConnection.Disconnected -> "Live updates disconnected"
+                            com.whumpo.core.auth.PartnerEventConnection.Completed -> "Response saved"
+                        })
+                    }
+                    state.agentEvents.parts.forEach { event ->
+                        val text = when (val part = event.part) {
+                            is com.whumpo.core.auth.PartnerAgentPart.Text -> part.text
+                            is com.whumpo.core.auth.PartnerAgentPart.Tool -> when (part.outcome) {
+                                null -> "Starting ${taskActionLabel(part.capability)}"
+                                "verified" -> "${taskActionLabel(part.capability)} verified"
+                                "failed" -> "${taskActionLabel(part.capability)} failed"
+                                else -> "${taskActionLabel(part.capability)} canceled"
+                            }
+                            is com.whumpo.core.auth.PartnerAgentPart.Approval -> "Approval needed for ${taskActionLabel(part.capability)}"
+                            is com.whumpo.core.auth.PartnerAgentPart.Effect -> when (part.state) {
+                                "queued" -> "${taskActionLabel(part.capability)} is queued"
+                                "waiting_approval" -> "Approval needed for ${taskActionLabel(part.capability)}"
+                                "confirmed" -> "${taskActionLabel(part.capability)} verified"
+                                "failed" -> "${taskActionLabel(part.capability)} failed"
+                                else -> "${taskActionLabel(part.capability)} canceled"
+                            }
+                            else -> ""
+                        }
+                        Text(text)
+                    }
                     PartnerButton("Refresh run", !state.busy && !state.decisionPending, onClick = onRefreshRun)
                     run.steps.forEach { step ->
                         if (step.approvalId != null) PartnerButton("Review task approval · step ${step.index}", !state.busy) { onReview(step) }
@@ -205,4 +236,12 @@ fun PartnerConversationContent(
 fun PartnerDecisionButtons(enabled: Boolean, onDecision: (PartnerDecision) -> Unit) {
     PartnerButton("Approve reviewed change", enabled, primary = true) { onDecision(PartnerDecision.approve) }
     PartnerButton("Reject reviewed change", enabled) { onDecision(PartnerDecision.reject) }
+}
+
+private fun taskActionLabel(capability: String): String = when (capability) {
+    "tasks.read@1" -> "task review"
+    "tasks.create@1" -> "task creation"
+    "tasks.update@1" -> "task update"
+    "tasks.transition@1" -> "task status change"
+    else -> "task action"
 }

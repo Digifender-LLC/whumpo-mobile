@@ -13,6 +13,9 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Headers
 import io.ktor.utils.io.readBuffer
+import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -137,6 +140,35 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
             Json.decodeFromString(result)
         } catch (_: IllegalArgumentException) {
             throw CoreProtocolException()
+        }
+    }
+
+    /** Caller owns this one stream and cancellation. No cookies, redirect following, or write retry. */
+    internal suspend fun partnerAgentStream(
+        token: String, conversationId: String, runId: String, after: String?, onChunk: suspend (ByteArray) -> Unit,
+    ) {
+        require(coreBearer.matches(token) && coreIdentifier.matches(conversationId) && coreIdentifier.matches(runId))
+        require(after == null || coreIdentifier.matches(after))
+        http.prepareRequest(origin.value + "/v1/conversations/$conversationId/stream") {
+            method = HttpMethod.Get
+            header(HttpHeaders.Authorization, "Bearer $token")
+            header(HttpHeaders.Accept, "text/event-stream")
+            parameter("protocol", "agent-event.v1")
+            parameter("runId", runId)
+            if (after != null) { parameter("after", after); header("Last-Event-ID", after) }
+        }.execute { response ->
+            if (response.status.value != 200) throw CoreHttpException(response.status.value)
+            if (response.contentType()?.withoutParameters() != ContentType("text", "event-stream")) throw CoreProtocolException()
+            val channel = response.bodyAsChannel()
+            try {
+                val buffer = ByteArray(8192)
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val count = channel.readAvailable(buffer, 0, buffer.size)
+                    if (count < 0) break
+                    if (count > 0) onChunk(buffer.copyOf(count))
+                }
+            } finally { channel.cancel(null) }
         }
     }
 
