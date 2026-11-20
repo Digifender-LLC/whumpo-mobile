@@ -5,6 +5,7 @@ import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreProtocolException
 import com.whumpo.core.api.PartnerDecision
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
@@ -14,10 +15,14 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -82,10 +87,13 @@ class CorePartnerControllerTest {
 
     private suspend fun fixture(
         role: String = "owner",
+        transportDispatcher: CoroutineDispatcher? = null,
         handler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData,
         use: suspend (CoreOrganizationSessionController, CoreOrganizationSessionController.State.Active, CorePartnerController) -> Unit,
     ) {
-        val engine = MockEngine { request ->
+        val engine = MockEngine(MockEngineConfig().apply {
+            transportDispatcher?.let { dispatcher = it }
+            addHandler { request ->
             val initial = request.headers[HttpHeaders.Authorization] == "Bearer $firstToken"
             when (request.url.encodedPath) {
                 "/v1/auth/session" -> json(
@@ -94,7 +102,8 @@ class CorePartnerControllerTest {
                 "/v1/auth/session/switch" -> json("""{"token":"$nextToken","expiresAt":60001}""")
                 else -> handler(request)
             }
-        }
+            }
+        })
         CoreApiClient(engine, CoreOrigin.allowlisted(origin, setOf(origin))).use { client ->
             val sessions = CoreOrganizationSessionController(client) { 1L }
             val active = sessions.establish(firstToken)
@@ -574,4 +583,165 @@ class CorePartnerControllerTest {
             assertEquals(13, reads)
         }
     }
+    private fun agentFrame(sequence: Int, type: String, payload: String) =
+        "id:event-$sequence\nevent:$type\ndata:{\"schemaVersion\":1,\"eventId\":\"event-$sequence\",\"orgId\":\"org-1\",\"conversationId\":\"a\",\"runId\":\"run-1\",\"sequence\":$sequence,\"eventType\":\"$type\",\"visibility\":\"user\",\"payload\":$payload,\"createdAt\":\"$instant\"}\n\n"
+
+    @Test
+    fun eventReconnectUsesExactDurableCursorWithoutResubmittingAndTerminalIsExplicit() = runTest {
+        val cursors = mutableListOf<String?>()
+        val firstReplyEntered = CompletableDeferred<Unit>()
+        val firstReplyGate = CompletableDeferred<Unit>()
+        val first = agentFrame(1, "message.delta", """{"messageId":"response-1","partId":"part-1","text":"First verified step"}""")
+        val second = agentFrame(2, "message.delta", """{"messageId":"response-1","partId":"part-2","text":"Second verified step"}""")
+        val terminal = agentFrame(3, "message.completed", """{"messageId":"response-1","runStatus":"failed"}""")
+        fixture(transportDispatcher = StandardTestDispatcher(testScheduler), handler = { request ->
+            assertEquals(HttpMethod.Get, request.method)
+            when (request.url.encodedPath) {
+                "/v1/conversations" -> json(directory("a"))
+                "/v1/conversations/a/metadata" -> json(topic("a"))
+                "/v1/conversations/a/messages" -> json(page(listOf(
+                    """{"id":"outcome","userId":"user-1","sequence":2,"role":"assistant","content":"Saved history","createdAt":"$instant","runId":"run-1","receiptIds":[]}""",
+                )))
+                "/v1/agent-runs/run-1" -> json(run("queued", steps = false))
+                "/v1/conversations/a/stream" -> {
+                    assertEquals("agent-event.v1", request.url.parameters["protocol"])
+                    assertEquals("run-1", request.url.parameters["runId"])
+                    assertEquals("Bearer $firstToken", request.headers[HttpHeaders.Authorization])
+                    val cursor = request.url.parameters["after"]
+                    assertEquals(cursor, request.headers["Last-Event-ID"])
+                    cursors += cursor
+                    if (cursors.size == 1) { firstReplyEntered.complete(Unit); firstReplyGate.await() }
+                    respond(ByteReadChannel(if (cursors.size == 1) first else first + second + terminal),
+                        headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+                }
+                else -> error("Unexpected route")
+            }
+        }) { _, _, controller ->
+            controller.openFirst()
+            controller.openRun(controller.state.value.messages.single())
+            val observer = launch { controller.observeRunEvents("a", "run-1") }
+            runCurrent()
+            assertTrue(firstReplyEntered.isCompleted)
+            assertEquals(PartnerEventConnection.Connecting, controller.state.value.eventConnection)
+            assertTrue(controller.state.value.agentEvents.parts.isEmpty())
+            firstReplyGate.complete(Unit)
+            runCurrent()
+            assertEquals(PartnerEventConnection.Retrying, controller.state.value.eventConnection)
+            assertFalse(controller.state.value.agentEvents.completed)
+            assertEquals(1, controller.state.value.agentEvents.parts.size)
+            advanceTimeBy(1000); runCurrent(); observer.join()
+            assertEquals(listOf(null, "event-1"), cursors)
+            assertEquals(listOf("event-1", "event-2"), controller.state.value.agentEvents.parts.map { it.eventId })
+            assertEquals(com.whumpo.core.api.PartnerRunStatus.failed, controller.state.value.agentEvents.runStatus)
+            assertTrue(controller.state.value.agentEvents.completed)
+            assertEquals(PartnerEventConnection.Completed, controller.state.value.eventConnection)
+            assertEquals("Saved history", controller.state.value.messages.single().content)
+        }
+    }
+
+    @Test
+    fun eventControlRevocationClearsTheWholePrivateConversationAndExpiresSession() = runTest {
+        var streams = 0
+        fixture(transportDispatcher = StandardTestDispatcher(testScheduler), handler = { request ->
+            when (request.url.encodedPath) {
+                "/v1/conversations" -> json(directory("a"))
+                "/v1/conversations/a/metadata" -> json(topic("a"))
+                "/v1/conversations/a/messages" -> json(page(listOf(
+                    """{"id":"outcome","userId":"user-1","sequence":2,"role":"assistant","content":"Private canary","createdAt":"$instant","runId":"run-1","receiptIds":[]}""",
+                )))
+                "/v1/agent-runs/run-1" -> json(run("queued", steps = false))
+                "/v1/conversations/a/stream" -> {
+                    streams++
+                    val content = if (streams == 1) agentFrame(1, "message.delta", """{"messageId":"response-1","partId":"part-1","text":"Private part canary"}""")
+                        else "event:session.revoked\ndata:{\"code\":\"SESSION_REVOKED\"}\n\n"
+                    respond(ByteReadChannel(content), headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+                }
+                else -> error("Unexpected route")
+            }
+        }) { sessions, _, controller ->
+            controller.openFirst(); controller.openRun(controller.state.value.messages.single())
+            val observer = launch { controller.observeRunEvents("a", "run-1") }
+            runCurrent(); assertEquals(1, controller.state.value.agentEvents.parts.size)
+            advanceTimeBy(1000); runCurrent(); observer.join()
+            assertIs<CoreOrganizationSessionController.State.SignedOut>(sessions.state.value)
+            assertNull(controller.state.value.conversation)
+            assertNull(controller.state.value.run)
+            assertNull(controller.state.value.agentEvents.cursor)
+            assertTrue(controller.state.value.messages.isEmpty())
+            assertTrue(controller.state.value.agentEvents.parts.isEmpty())
+        }
+    }
+
+    @Test
+    fun changingRunCancelsTheOwnedStreamWithoutAReplacementObserver() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val canceled = CompletableDeferred<Unit>()
+        fixture(transportDispatcher = StandardTestDispatcher(testScheduler), handler = { request ->
+            when (request.url.encodedPath) {
+                "/v1/conversations" -> json(directory("a"))
+                "/v1/conversations/a/metadata" -> json(topic("a"))
+                "/v1/conversations/a/messages" -> json(page(listOf(1, 2).map { number ->
+                    """{"id":"outcome-$number","userId":"user-1","sequence":$number,"role":"assistant","content":"Saved $number","createdAt":"$instant","runId":"run-$number","receiptIds":[]}"""
+                }))
+                "/v1/agent-runs/run-1" -> json(run("queued", steps = false))
+                "/v1/agent-runs/run-2" -> json(run("queued", steps = false).replace("\"id\":\"run-1\"", "\"id\":\"run-2\""))
+                "/v1/conversations/a/stream" -> {
+                    entered.complete(Unit)
+                    try { awaitCancellation() } finally { canceled.complete(Unit) }
+                }
+                else -> error("Unexpected route")
+            }
+        }) { _, _, controller ->
+            controller.openFirst()
+            controller.openRun(controller.state.value.messages.first { it.runId == "run-1" })
+            val observer = launch { controller.observeRunEvents("a", "run-1") }
+            runCurrent(); assertTrue(entered.isCompleted)
+            controller.openRun(controller.state.value.messages.first { it.runId == "run-2" })
+            runCurrent(); observer.join()
+            assertTrue(canceled.isCompleted)
+            assertTrue(observer.isCancelled)
+            assertEquals("run-2", controller.state.value.run?.id)
+            assertNull(controller.state.value.agentEvents.cursor)
+            assertTrue(controller.state.value.agentEvents.parts.isEmpty())
+        }
+    }
+
+    @Test
+    fun aLateOldEpochStreamCannotRepaintAfterOrganizationSwitchAndRetirement() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val lateReply = CompletableDeferred<Unit>()
+        fixture(transportDispatcher = StandardTestDispatcher(testScheduler), handler = { request ->
+            when (request.url.encodedPath) {
+                "/v1/conversations" -> json(directory("a"))
+                "/v1/conversations/a/metadata" -> json(topic("a"))
+                "/v1/conversations/a/messages" -> json(page(listOf(
+                    """{"id":"outcome","userId":"user-1","sequence":2,"role":"assistant","content":"Old private history","createdAt":"$instant","runId":"run-1","receiptIds":[]}""",
+                )))
+                "/v1/agent-runs/run-1" -> json(run("queued", steps = false))
+                "/v1/conversations/a/stream" -> {
+                    entered.complete(Unit)
+                    // A deliberately non-cooperative local transport proves the
+                    // epoch gate, independently of ordinary HTTP cancellation.
+                    withContext(NonCancellable) { lateReply.await() }
+                    respond(ByteReadChannel(agentFrame(1, "message.delta", """{"messageId":"response-1","partId":"part-1","text":"Old private part"}""")),
+                        headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+                }
+                else -> error("Unexpected route")
+            }
+        }) { sessions, _, controller ->
+            controller.openFirst(); controller.openRun(controller.state.value.messages.single())
+            val observer = launch { controller.observeRunEvents("a", "run-1") }
+            runCurrent(); assertTrue(entered.isCompleted)
+            controller.retire()
+            val switched = sessions.switchOrganization("org-2")
+            assertEquals("org-2", switched.session.orgId)
+            assertTrue(controller.state.value.messages.isEmpty())
+            assertNull(controller.state.value.agentEvents.cursor)
+            lateReply.complete(Unit); runCurrent(); observer.join()
+            assertTrue(controller.state.value.agentEvents.parts.isEmpty())
+            assertNull(controller.state.value.run)
+            assertEquals(switched, sessions.state.value)
+        }
+    }
+
 }

@@ -123,6 +123,11 @@ internal fun CorePartnerPreview(
         BackHandler(onBack = back)
         LaunchedEffect(Unit) { controller.refreshConversation() }
         val run = state.run
+        LaunchedEffect(lifecycle, conversation.id, run?.id) {
+            if (run != null) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                controller.observeRunEvents(conversation.id, run.id)
+            }
+        }
         LaunchedEffect(lifecycle, run?.id, run?.status?.shouldPoll, showReview, source) {
             if (run?.status?.shouldPoll == true && !showReview && source == null) {
                 lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {

@@ -5,13 +5,16 @@ import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 enum class PartnerDirectory { Active, History }
+enum class PartnerEventConnection { Connecting, Connected, Retrying, Interrupted, Disconnected, Completed }
 
 enum class PartnerNotice {
     Unavailable, ReadOnly, InvalidInput, DraftLimit, Saved, SaveUnconfirmed, SaveAwaitingHistory,
@@ -42,7 +45,19 @@ data class PartnerState(
     val proof: PartnerTaskProof? = null,
     val notice: PartnerNotice? = null,
     val busy: Boolean = false,
-)
+    val agentEvents: PartnerAgentEventState = PartnerAgentEventState(),
+    val eventConnection: PartnerEventConnection? = null,
+) {
+    /** Current scoped execution truth; transport state never supplies a successful outcome. */
+    fun displayedRunStatus(): PartnerRunStatus? {
+        val selected = run ?: return null
+        if (selected.status in setOf(PartnerRunStatus.completed, PartnerRunStatus.failed, PartnerRunStatus.canceled)) return selected.status
+        val cursor = agentEvents.cursor ?: return selected.status
+        return agentEvents.runStatus.takeIf {
+            conversation?.id == selected.conversationId && cursor.conversationId == selected.conversationId && cursor.runId == selected.id
+        } ?: selected.status
+    }
+}
 
 /** One instance for the exact authenticated workspace epoch. Calls and edits run on the UI dispatcher. */
 class CorePartnerController(
@@ -84,6 +99,7 @@ class CorePartnerController(
     private var bookmark: PartnerMessage? = null
     private var selection = 0L
     private var operationJob: Job? = null
+    private var eventJob: Job? = null
     private var retired = false
     private val draft get() = current.conversation?.id?.let(drafts::get)
 
@@ -159,6 +175,8 @@ class CorePartnerController(
         selection++
         operationJob?.cancel()
         operationJob = null
+        eventJob?.cancel()
+        eventJob = null
         bookmark = null
         create = null
         drafts.clear()
@@ -176,6 +194,8 @@ class CorePartnerController(
         selection++
         operationJob?.cancel()
         operationJob = null
+        eventJob?.cancel()
+        eventJob = null
         bookmark = null
         update {
             copy(conversation = null, topic = null, messages = emptyList(), moreMessages = false, messageDraft = "",
@@ -412,6 +432,50 @@ class CorePartnerController(
         }
     }
 
+    /** The composing UI owns this suspending observer; reconnect never resubmits a message or run. */
+    suspend fun observeRunEvents(conversationId: String, runId: String) {
+        if (!isCurrent() || current.conversation?.id != conversationId || current.run?.id != runId) return
+        val selected = selection
+        val ownerJob = currentCoroutineContext()[Job]
+        val previous = eventJob
+        eventJob = ownerJob
+        if (previous !== ownerJob) previous?.cancelAndJoin()
+        fun currentScope() = eventJob === ownerJob && ownerJob?.isActive == true && isCurrent() && selection == selected &&
+            current.conversation?.id == conversationId && current.run?.id == runId
+        var failures = 0
+        try {
+            while (currentScope() && !current.agentEvents.completed) {
+                update { copy(eventConnection = if (failures == 0) PartnerEventConnection.Connecting else PartnerEventConnection.Retrying) }
+                try {
+                    withTimeoutOrNull(35_000) {
+                        val connectionJob = currentCoroutineContext()[Job]
+                        protocol.events(conversationId, runId, current.agentEvents.cursor?.eventId) { event ->
+                            if (connectionJob?.isActive != true || !currentScope()) throw CancellationException("Partner event scope changed")
+                            update { copy(agentEvents = agentEvents.receive(event), eventConnection =
+                                if (event.type == PartnerAgentEventType.MessageCompleted) PartnerEventConnection.Completed else PartnerEventConnection.Connected) }
+                            failures = 0
+                        }
+                    }
+                    if (!currentScope() || current.agentEvents.completed) return
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    currentCoroutineContext().ensureActive()
+                    if (error is CoreHttpException && error.status == 401) { retire(); return }
+                    if (!currentScope()) return
+                    if (error is CoreHttpException && error.status in setOf(403, 404)) {
+                        drafts.remove(conversationId)
+                        closeConversation()
+                        return
+                    }
+                }
+                failures++
+                update { copy(eventConnection = if (failures >= 4) PartnerEventConnection.Interrupted else PartnerEventConnection.Retrying) }
+                delay(minOf(15_000L, 1_000L shl minOf(failures - 1, 4)))
+            }
+        } finally { if (eventJob === ownerJob) eventJob = null }
+    }
+
     suspend fun review(step: PartnerRunStep) = perform {
         val run = current.run ?: return@perform
         if (draft?.decision != null) return@perform
@@ -467,7 +531,14 @@ class CorePartnerController(
     private fun isCurrent() = !retired && sessions.commitIfCurrent(active.epoch) {}
 
     private fun update(change: PartnerState.() -> PartnerState) {
-        if (!retired) sessions.commitIfCurrent(active.epoch) { mutableState.value = current.change() }
+        if (!retired) sessions.commitIfCurrent(active.epoch) {
+            val previous = current
+            val next = previous.change()
+            val scopeChanged = next.conversation?.id != previous.conversation?.id || next.run?.id != previous.run?.id
+            if (scopeChanged) eventJob?.cancel() // Retain ownership until its finally or replacement observer joins it.
+            mutableState.value = if (scopeChanged)
+                next.copy(agentEvents = PartnerAgentEventState(), eventConnection = null) else next
+        }
     }
 
     private suspend fun perform(action: suspend () -> Unit) = coroutineScope {
