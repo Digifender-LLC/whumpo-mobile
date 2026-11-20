@@ -744,4 +744,36 @@ class CorePartnerControllerTest {
         }
     }
 
+    @Test
+    fun routingOnlyPrimaryConversationReadsAndSavesWithoutManagedTopicMetadata() = runTest {
+        var saved = false
+        fixture(handler = { request ->
+            when (request.url.encodedPath) {
+                "/v1/conversations" -> json(directory("primary"))
+                "/v1/conversations/primary/metadata" -> failure(404, "TENANT_NOT_FOUND")
+                "/v1/conversations/primary/messages" -> if (request.method == HttpMethod.Post) {
+                    val submitted = post(request)
+                    assertEquals("Hello from the primary conversation", Json.parseToJsonElement(submitted.body).jsonObject.getValue("content").toString().trim('"'))
+                    saved = true
+                    json("""{"message":${message(2, "Hello from the primary conversation")},"replayed":false}""", HttpStatusCode.Created)
+                } else {
+                    val after = request.url.parameters["cursor"]
+                    json(page(if (after == id(1)) {
+                        if (saved) listOf(message(2, "Hello from the primary conversation")) else emptyList()
+                    } else listOf(message(1))))
+                }
+                else -> error("Unexpected route ${request.url.encodedPath}")
+            }
+        }) { _, _, controller ->
+            controller.openFirst()
+            assertEquals(listOf(id(1)), controller.state.value.messages.map { it.id })
+            assertNull(controller.state.value.topic, "Routing-only primary conversations have no managed topic")
+            controller.editMessage("Hello from the primary conversation")
+            controller.saveMessage()
+            assertTrue(saved)
+            assertEquals(listOf(id(1), id(2)), controller.state.value.messages.map { it.id })
+            assertEquals(PartnerNotice.Saved, controller.state.value.notice)
+        }
+    }
+
 }
