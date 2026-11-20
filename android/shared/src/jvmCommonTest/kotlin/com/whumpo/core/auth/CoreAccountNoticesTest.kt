@@ -173,13 +173,14 @@ class CoreAccountNoticesTest {
         val engine = MockEngine { request -> if (request.url.encodedPath.endsWith("/notices")) {
             calls++
             if (calls == 2) { entered.complete(Unit); release.await() }
-            respond(page())
+            respond(page(cursor = if (calls == 1) "cursor:1" else null))
         } else login(request.url.encodedPath, account) }
         CoreApiClient(engine, origin).use { api ->
             val workspace = CoreOrganizationSessionController(api) { 1 }
             val controller = CoreAccountSecurityController(api, workspace, "core.example.test") { 1 }
             controller.loginPasskey(passkeys); controller.loadNotices(); assertNotNull(controller.notices.value)
-            val read = async { runCatching { controller.loadNotices() } }; entered.await()
+            val read = async { runCatching { controller.loadNotices(more = true) } }; entered.await()
+            assertNotNull(controller.notices.value)
             // The launcher uses this synchronous boundary on workspace authority loss.
             controller.clear()
             assertNull(controller.notices.value); assertNull(controller.state.value)
