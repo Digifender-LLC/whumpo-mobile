@@ -49,7 +49,10 @@ internal fun CoreWorkSurface(
     fun finish(task: CoreWorkTask) {
         if (active.session.role != CoreRole.owner || !sessions.commitIfCurrent(active.epoch) {}) return
         val old = completion
-        val terminal = old?.state?.value?.proof.let { it is PartnerTaskProof.Verified || it == PartnerTaskProof.Failed || it == PartnerTaskProof.Canceled }
+        val terminal = old?.state?.value?.let {
+            it.proof is PartnerTaskProof.Verified || it.proof == PartnerTaskProof.Failed || it.proof == PartnerTaskProof.Canceled ||
+                (!it.accepted && it.notice in setOf(CoreWorkCompletionNotice.Changed, CoreWorkCompletionNotice.Rejected))
+        } ?: false
         val same = old?.task?.let { it.id == task.id && it.version == task.version } == true
         val selected = if (old != null && (!terminal && old.state.value.started || same)) old else {
             old?.retire()
