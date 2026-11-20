@@ -9,7 +9,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 
 @Composable
-fun PartnerApprovalDetails(approval: PartnerApproval) {
+fun PartnerApprovalDetails(approval: PartnerApproval, requesterLabel: String? = null, taskLabel: String? = null) {
     Text(when (approval.proposal.operation) {
         PartnerTool.Create -> "Create task"
         PartnerTool.Update -> "Update task"
@@ -17,9 +17,9 @@ fun PartnerApprovalDetails(approval: PartnerApproval) {
         PartnerTool.Read -> "Read task"
     }, style = MaterialTheme.typography.titleLarge)
     Text("Status: ${approval.status.name}")
-    Text("Requested by: ${approval.requesterId}")
+    Text("Requested by: ${requesterLabel ?: approval.requesterId}")
     Text("Review expires: ${approval.expiresAt}")
-    approval.proposal.taskId?.let { Text("Task: $it") }
+    approval.proposal.taskId?.let { Text("Task: ${taskLabel ?: it}") }
     approval.proposal.expectedVersion?.let { Text("Expected task version: $it") }
     approval.proposal.payload.forEach { (field, value) ->
         val label = when (field) {

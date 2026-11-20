@@ -110,7 +110,7 @@ private fun JsonElement.workDate(): String = text(24).also {
     Instant.parse(it)
 }
 
-private fun JsonElement.workText(limit: Int, allowEmpty: Boolean): String {
+internal fun JsonElement.workText(limit: Int, allowEmpty: Boolean): String {
     val value = (this as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw CoreProtocolException()
     if (value.isEmpty() && allowEmpty) return value
     if (value.isEmpty() || value.length > limit * 2 || value.count { !it.isLowSurrogate() } > limit ||

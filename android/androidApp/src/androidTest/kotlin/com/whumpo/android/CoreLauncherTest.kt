@@ -141,16 +141,16 @@ class CoreLauncherTest {
 
                 fixture.denyWork = true
                 click("Open Work")
-                awaitText("Could not verify Work.")
+                awaitText("Work is unavailable. Refresh to try again.")
                 compose.onNodeWithText("Current synthetic task").assertDoesNotExist()
                 fixture.denyWork = false
-                click("Try again")
+                click("Refresh Work list")
                 awaitText("Current synthetic task")
                 compose.onNodeWithText("Create task").assertDoesNotExist()
                 click("Back to organization")
                 fixture.emptyWork = true
                 click("Open Work")
-                awaitText("No tasks here.")
+                awaitText("No matching tasks.")
                 pressBack()
                 awaitText("Fixture organization")
                 click("Sign out of Core")
@@ -180,8 +180,9 @@ class CoreLauncherTest {
                         "DELETE /v1/auth/session",
                         "POST /v1/account-security/sign-out",
                     ),
-                    fixture.requests,
+                    fixture.requests.filterNot { it in setOf("GET /v1/workspaces", "GET /v1/projects", "GET /v1/customers") },
                 )
+                for (path in listOf("workspaces", "projects", "customers")) assertEquals(2, fixture.requests.count { it == "GET /v1/$path" })
             }
         } finally {
             fixture.releaseRevocation.complete(Unit)
@@ -277,7 +278,7 @@ class CoreLauncherTest {
             click("Open Work")
             awaitText("Open Core sign-in")
             compose.onNodeWithText("Fixture organization").assertDoesNotExist()
-            compose.onNodeWithText("Could not verify Work.").assertDoesNotExist()
+            compose.onNodeWithText("Work is unavailable. Refresh to try again.").assertDoesNotExist()
             compose.onNodeWithText("Current synthetic task").assertDoesNotExist()
             assertEquals(1, fixture.requests.count { it == "GET /v1/work/tasks" })
         }
@@ -334,7 +335,11 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
         assertEquals(443, request.url.port)
         val route = "${request.method.value} ${request.url.encodedPath}"
         if (route == "GET /v1/auth/organizations") assertEquals("25", request.url.parameters["limit"])
-        else if (route == "GET /v1/work/tasks") assertEquals("10", request.url.parameters["limit"])
+        else if (route == "GET /v1/work/tasks") {
+            assertEquals("50", request.url.parameters["limit"])
+            assertEquals(mapOf("limit" to "50", "due" to "all", "customer" to "all", "assignee" to "all"), request.url.parameters.entries().associate { it.key to it.value.single() })
+        } else if (route in setOf("GET /v1/workspaces", "GET /v1/projects")) assertEquals("20", request.url.parameters["limit"])
+        else if (route == "GET /v1/customers") { assertEquals("20", request.url.parameters["limit"]); assertEquals("all", request.url.parameters["state"]) }
         else assertTrue(request.url.parameters.isEmpty())
         val authorization = request.headers[HttpHeaders.Authorization]
         val switched = authorization == "Bearer $switchedToken"
@@ -437,13 +442,17 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
                     "observedAt":"2026-11-14T10:00:00.000Z","source":{"kind":"task","taskId":"fixture-task",
                     "projectId":"fixture-project","version":1},"title":"$title","status":"blocked","dueAt":null}],"truncated":false}}}"""
             }
+            "GET /v1/workspaces", "GET /v1/projects", "GET /v1/customers" -> {
+                assertEquals("Bearer $token", authorization)
+                """{"items":[]}"""
+            }
             "GET /v1/work/tasks" -> {
                 assertEquals("Bearer $token", authorization)
                 if (revokeOnWork) return@MockEngine respond("{}", HttpStatusCode.Unauthorized)
                 if (denyWork) return@MockEngine respond("{}", HttpStatusCode.Forbidden)
-                if (emptyWork) """{"items":[]}"""
-                else """{"items":[{"id":"fixture-task","projectId":"fixture-project","title":"Current synthetic task",
-                    "description":null,"parentTaskId":null,"dueAt":null,"status":"ready","version":1}]}"""
+                val total = if (emptyWork) 0 else 1
+                val items = if (emptyWork) "" else """{"id":"fixture-task","projectId":"fixture-project","workspaceId":"fixture-workspace","title":"Current synthetic task","description":null,"parentTaskId":null,"dueAt":null,"status":"ready","version":1}"""
+                """{"items":[$items],"counts":{"total":$total,"overdue":0,"byStatus":{"backlog":0,"ready":$total,"in_progress":0,"blocked":0,"needs_approval":0,"done":0,"canceled":0}},"asOf":"2026-11-19T12:00:00Z"}"""
             }
             "DELETE /v1/auth/session" -> {
                 assertEquals("Bearer $token", authorization)

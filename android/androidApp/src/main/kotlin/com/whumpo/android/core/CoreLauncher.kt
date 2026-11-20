@@ -68,7 +68,8 @@ internal fun CoreLauncher(api: CoreApiClient, passkeys: AccountPasskeys) {
     val active = session as? CoreOrganizationSessionController.State.Active
     LaunchedEffect(active) {
         if (active != null) {
-            while (true) {
+            try {
+                while (true) {
                 val remaining = active.session.expiresAt - System.currentTimeMillis()
                 if (remaining <= 0) {
                     if (sessions.state.value === active) {
@@ -77,7 +78,15 @@ internal fun CoreLauncher(api: CoreApiClient, passkeys: AccountPasskeys) {
                     }
                     break
                 }
-                delay(minOf(remaining, 60_000))
+                    delay(minOf(remaining, 60_000))
+                }
+            } finally {
+                // A current-session 401 clears account grants as well as the organization UI.
+                // Replacement/transitioning sessions must retain their own account flow.
+                if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) {
+                    accounts.clear()
+                    showSignIn = false
+                }
             }
         }
     }
@@ -232,8 +241,10 @@ private fun CoreOrganizationEntry(
     val attempt = read
     if (attempt != null) {
         key(attempt) {
-            CoreOrganizationRead(
-                attempt.page, active, sessions, current = { read === attempt && sessions.state.value === active },
+            if (attempt.page == OrganizationReadPage.Work) {
+                CoreWorkSurface(sessions, active, onBack = { read = null })
+            } else CoreOrganizationRead(
+                active, sessions, current = { read === attempt && sessions.state.value === active },
                 onSessionEnded = onSessionEnded,
                 onBack = { read = null },
                 onRetry = { if (read === attempt) read = OrganizationReadAttempt(attempt.page) },
@@ -339,7 +350,6 @@ private sealed interface OrganizationReadState {
 
 @Composable
 private fun CoreOrganizationRead(
-    page: OrganizationReadPage,
     active: CoreOrganizationSessionController.State.Active,
     sessions: CoreOrganizationSessionController,
     current: () -> Boolean,
@@ -351,13 +361,7 @@ private fun CoreOrganizationRead(
     LaunchedEffect(Unit) {
         if (!current()) return@LaunchedEffect
         try {
-            val groups = when (page) {
-                OrganizationReadPage.Today -> todayGroups(sessions.today().briefing)
-                OrganizationReadPage.Work -> sessions.work().let { work ->
-                    if (work.items.isEmpty()) emptyList()
-                    else listOf(OrganizationReadGroup("Tasks", work.items.map { it.title }, work.nextCursor != null))
-                }
-            }
+            val groups = todayGroups(sessions.today().briefing)
             coroutineContext.ensureActive()
             sessions.commitIfCurrent(active.epoch) {
                 if (current()) state = OrganizationReadState.Loaded(groups)
@@ -373,7 +377,7 @@ private fun CoreOrganizationRead(
         }
     }
     BackHandler(onBack = onBack)
-    CoreOrganizationReadContent(page, state, onBack, onRetry)
+    CoreOrganizationReadContent(OrganizationReadPage.Today, state, onBack, onRetry)
 }
 
 @Composable
