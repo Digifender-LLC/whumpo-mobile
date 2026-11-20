@@ -577,7 +577,7 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         cursor: String? = null,
     ): T {
         require(key == null || coreIdentifier.matches(key))
-        require(cursor == null || coreIdentifier.matches(cursor))
+        require(cursor == null || (if (route == "notices") securityOpaqueId else coreIdentifier).matches(cursor))
         val payload = body?.toString()
         val requestLimit = when (route) {
             "passkey/login/verify", "passkeys/verify", "enrollment/complete/verify", "recovery/complete/verify" -> 65_536

@@ -26,6 +26,7 @@ import com.whumpo.core.api.SecurityGrant
 import com.whumpo.core.api.SecurityInvitationAcceptance
 import com.whumpo.core.api.SecurityInvitationPreview
 import com.whumpo.core.api.SecurityMembership
+import com.whumpo.core.api.SecurityNoticePage
 import com.whumpo.core.api.SecurityMembershipPage
 import com.whumpo.core.api.SecurityMethod
 import com.whumpo.core.api.SecurityMethodStatus
@@ -113,6 +114,73 @@ class CoreAccountSecurityController(
     private val lock = Any()
     private var epoch = 0L
     private var grant: SecurityAuthority? = null
+    private var noticeRevision = 0L
+    private val noticeCursors = mutableSetOf<String>()
+    private val mutableNotices = MutableStateFlow<SecurityNoticePage?>(null)
+    val notices = mutableNotices.asStateFlow()
+
+    fun hideNotices() = synchronized(lock) { clearNoticesLocked() }
+
+    private fun clearNoticesLocked() {
+        noticeRevision++
+        noticeCursors.clear()
+        mutableNotices.value = null
+    }
+
+    fun expireAccountIfNeeded() = synchronized(lock) {
+        if (grant?.expiresAt?.let { it <= now() } == true) {
+            clearAccountLocked()
+            workspace.clear()
+        }
+    }
+
+    /** This metadata uses the account grant even when no workspace membership remains. */
+    suspend fun loadNotices(more: Boolean = false) = exclusive { operation ->
+        val (ownedAuthority, revision, cursor) = synchronized(lock) {
+            if (grant?.expiresAt?.let { it <= now() } == true) {
+                clearAccountLocked()
+                workspace.clear()
+            }
+            val active = authority(operation, SecurityPurpose.Account)
+            if (!more) clearNoticesLocked()
+            val next = if (more) mutableNotices.value?.nextCursor ?: invalid() else null
+            if (more && noticeCursors.size >= 20) { clearNoticesLocked(); invalid() }
+            Triple(active, noticeRevision, next)
+        }
+        try {
+            val page = api.accountSecurity<SecurityNoticePage>("notices", ownedAuthority, cursor = cursor)
+            verify(operation)
+            synchronized(lock) {
+                checkEpoch(operation)
+                if (grant !== ownedAuthority || noticeRevision != revision) throw CancellationException("Notice view ended")
+                if (ownedAuthority.expiresAt <= now()) {
+                    clearAccountLocked()
+                    workspace.clear()
+                    throw CancellationException("Account access expired")
+                }
+                if (page.nextCursor != null && (page.nextCursor == cursor || page.nextCursor in noticeCursors)) invalid()
+                val existing = if (more) mutableNotices.value?.items ?: invalid() else emptyList()
+                val byId = existing.associateBy { it.id }
+                if (page.items.any { byId[it.id]?.let { prior -> prior != it } == true }) invalid()
+                val merged = existing + page.items.filter { it.id !in byId }
+                if (more && merged.size == existing.size && page.nextCursor != null) invalid()
+                if (merged.size > 420) invalid()
+                if (cursor != null) noticeCursors.add(cursor)
+                mutableNotices.value = SecurityNoticePage(merged, page.nextCursor)
+            }
+        } catch (error: Exception) {
+            synchronized(lock) {
+                if (epoch == operation && grant === ownedAuthority && noticeRevision == revision) {
+                    clearNoticesLocked()
+                    if (error is CoreHttpException && error.status == 401) {
+                        clearAccountLocked()
+                        workspace.clear()
+                    }
+                }
+            }
+            throw error
+        }
+    }
     private var login: SecurityPasswordChallenge? = null
     private var pendingEnrollment: EnrollmentStart? = null
     private var pendingPublicStart: PublicStart? = null
@@ -187,6 +255,7 @@ class CoreAccountSecurityController(
     }
 
     private fun clearAccountLocked() {
+        clearNoticesLocked()
         epoch++
         grant = null
         login = null
@@ -1192,6 +1261,7 @@ class CoreAccountSecurityController(
                 }
                 expectedSignIn = null
             }
+            if (grant !== authority || prior?.accountId != snapshot.accountId || prior?.generation != snapshot.generation) clearNoticesLocked()
             grant = authority
             login = null
             pendingEnrollment = null

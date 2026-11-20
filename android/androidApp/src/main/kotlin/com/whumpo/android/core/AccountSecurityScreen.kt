@@ -22,6 +22,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -42,6 +43,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.whumpo.android.ui.security.CoreAccountNoticesContent
 import com.whumpo.android.ui.theme.WhumpoEntryTheme
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
 import com.whumpo.android.ui.theme.WhumpoQuietButton
@@ -103,7 +108,7 @@ internal fun AccountSecurityScreen(
     var written by remember { mutableStateOf(false) }
     var exporting by remember { mutableStateOf(false) }
     var leavingFailed by remember { mutableStateOf(false) }
-    var organizations by remember { mutableStateOf<SecurityMembershipPage?>(null) }
+    var organizations by remember(state?.accountId, state?.generation, state?.expiresAt) { mutableStateOf<SecurityMembershipPage?>(null) }
     var editingReview by remember { mutableStateOf(false) }
     var checkingCompletion by remember { mutableStateOf(false) }
     var reservedStart by remember { mutableStateOf<ReservedSetupStart?>(null) }
@@ -332,6 +337,33 @@ internal fun AccountSecurityScreen(
         }
     }
 
+    val notices by controller.notices.collectAsState()
+    var accountExpired by remember(state?.accountId, state?.generation, state?.expiresAt) {
+        mutableStateOf(state?.purpose == SecurityPurpose.Account && state.expiresAt <= System.currentTimeMillis())
+    }
+    LaunchedEffect(controller, state?.accountId, state?.generation, state?.expiresAt) {
+        if (state?.purpose == SecurityPurpose.Account) {
+            delay((state.expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
+            accountExpired = true
+            organizations = null
+            controller.expireAccountIfNeeded()
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(controller, lifecycleOwner, state?.expiresAt, state?.purpose) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START && state?.purpose == SecurityPurpose.Account && state.expiresAt <= System.currentTimeMillis()) {
+                accountExpired = true
+                organizations = null
+                controller.expireAccountIfNeeded()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            controller.hideNotices()
+        }
+    }
     BackHandler { exit() }
     WhumpoEntryTheme(darkTheme = true) {
         androidx.compose.material3.Surface {
@@ -341,7 +373,10 @@ internal fun AccountSecurityScreen(
             ) {
                 Text("Whumpo", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                 val pending = retry
-                if (pending != null) {
+                if (state?.purpose == SecurityPurpose.Account && (accountExpired || state.expiresAt <= System.currentTimeMillis())) {
+                    Text("Your account access expired. Sign in again.")
+                    StepButton("Return to sign-in", !busy) { restart(Entry.Choose) }
+                } else if (pending != null) {
                     if (pending == CoreAccountSecurityController.Retry.ReservedStart) {
                         StepTitle("Continue reserved setup")
                         Text("Retry this request or use your saved continuation key and original invitation token to resume later.")
@@ -480,6 +515,10 @@ internal fun AccountSecurityScreen(
                                 reset = { invitation = null },
                             )
                         } else {
+                            CoreAccountNoticesContent(notices, busy,
+                                refresh = { run { controller.loadNotices() } },
+                                more = { run { controller.loadNotices(more = true) } },
+                                hide = controller::hideNotices)
                             StepTitle("Choose an organization")
                             if (state.workspaceAccess != SecurityAccess.Available) {
                                 Text("This account does not currently have workspace access.")
