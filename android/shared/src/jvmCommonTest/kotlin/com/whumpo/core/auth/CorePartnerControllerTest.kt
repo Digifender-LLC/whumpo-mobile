@@ -747,6 +747,7 @@ class CorePartnerControllerTest {
     @Test
     fun routingOnlyPrimaryConversationReadsAndSavesWithoutManagedTopicMetadata() = runTest {
         var saved = false
+        var starts = 0
         fixture(handler = { request ->
             when (request.url.encodedPath) {
                 "/v1/conversations" -> json(directory("primary"))
@@ -762,17 +763,132 @@ class CorePartnerControllerTest {
                         if (saved) listOf(message(2, "Hello from the primary conversation")) else emptyList()
                     } else listOf(message(1))))
                 }
+                "/v1/workspaces" -> json("""{"items":[{"id":"workspace-1","name":"Workspace"}]}""")
+                "/v1/projects" -> json("""{"items":[{"id":"project-1","name":"Project","workspaceId":"workspace-1"}]}""")
+                "/v1/conversations/primary/runs" -> {
+                    starts++
+                    json(run().replace("\"conversationId\":\"a\"", "\"conversationId\":\"primary\""), HttpStatusCode.Accepted)
+                }
                 else -> error("Unexpected route ${request.url.encodedPath}")
             }
         }) { _, _, controller ->
             controller.openFirst()
             assertEquals(listOf(id(1)), controller.state.value.messages.map { it.id })
             assertNull(controller.state.value.topic, "Routing-only primary conversations have no managed topic")
+            assertTrue(controller.state.value.routingOnlyReady)
             controller.editMessage("Hello from the primary conversation")
             controller.saveMessage()
             assertTrue(saved)
             assertEquals(listOf(id(1), id(2)), controller.state.value.messages.map { it.id })
             assertEquals(PartnerNotice.Saved, controller.state.value.notice)
+            val workspace = controller.workspaces().items.single()
+            val project = controller.projects(workspace.id).items.single()
+            controller.startRun(controller.state.value.messages.first(), project, "A primary task")
+            assertEquals(1, starts)
+            assertEquals("primary", controller.state.value.run?.conversationId)
+            assertEquals(id(1), controller.state.value.run?.sourceMessageId)
+        }
+    }
+
+    @Test
+    fun routingOnlyReadinessRequiresFreshDirectoryAndAuthorizedHistory() = runTest {
+        for (mode in listOf("metadata403", "routeMissing", "routeChanged", "history403")) {
+            var directoryReads = 0
+            var historyReads = 0
+            fixture(handler = { request ->
+                when (request.url.encodedPath) {
+                    "/v1/conversations" -> {
+                        directoryReads++
+                        json(when {
+                            directoryReads == 1 -> directory("primary")
+                            mode == "routeMissing" -> directory("other")
+                            mode == "routeChanged" -> directory("primary").replace("agent-1", "agent-foreign")
+                            else -> directory("primary")
+                        })
+                    }
+                    "/v1/conversations/primary/metadata" -> if (mode == "metadata403") failure(403, "FORBIDDEN") else failure(404, "TENANT_NOT_FOUND")
+                    "/v1/conversations/primary/messages" -> {
+                        historyReads++
+                        assertEquals(HttpMethod.Get, request.method)
+                        failure(403, "FORBIDDEN")
+                    }
+                    else -> error("Unexpected route")
+                }
+            }) { _, _, controller ->
+                controller.openFirst()
+                assertFalse(controller.state.value.routingOnlyReady, mode)
+                assertTrue(controller.state.value.messages.isEmpty(), mode)
+                controller.editMessage("Must not submit")
+                controller.saveMessage()
+                assertEquals("", controller.state.value.messageDraft, mode)
+                assertEquals(if (mode == "history403") 1 else 0, historyReads, mode)
+                if (mode == "metadata403") assertEquals(1, directoryReads)
+            }
+        }
+    }
+
+    @Test
+    fun routingOnlyHistoryDenialClearsPreviouslyProvenPrivateState() = runTest {
+        var denied = false
+        fixture(handler = { request ->
+            when (request.url.encodedPath) {
+                "/v1/conversations" -> json(directory("primary"))
+                "/v1/conversations/primary/metadata" -> failure(404, "TENANT_NOT_FOUND")
+                "/v1/conversations/primary/messages" -> if (denied) failure(403, "FORBIDDEN") else json(page(listOf(message(1))))
+                else -> error("Unexpected route")
+            }
+        }) { _, _, controller ->
+            controller.openFirst()
+            assertTrue(controller.state.value.routingOnlyReady)
+            controller.editMessage("Private unsaved draft")
+            denied = true
+            controller.refreshConversation()
+            assertNull(controller.state.value.conversation)
+            assertFalse(controller.state.value.routingOnlyReady)
+            assertTrue(controller.state.value.messages.isEmpty())
+            assertEquals("", controller.state.value.messageDraft)
+            assertNull(controller.state.value.run)
+        }
+    }
+
+    @Test
+    fun knownManagedTopicCannotFallBackToRoutingOnlyAfterMetadataLoss() = runTest {
+        var missing = false
+        var directoryReads = 0
+        fixture(handler = { request ->
+            when (request.url.encodedPath) {
+                "/v1/conversations" -> { directoryReads++; json(directory("a")) }
+                "/v1/conversations/a/metadata" -> if (missing) failure(404, "TENANT_NOT_FOUND") else json(topic("a"))
+                "/v1/conversations/a/messages" -> json(page(listOf(message(1))))
+                else -> error("Unexpected route")
+            }
+        }) { _, _, controller ->
+            controller.openFirst()
+            missing = true
+            controller.refreshConversation()
+            assertEquals(1, directoryReads)
+            assertNull(controller.state.value.conversation)
+            assertFalse(controller.state.value.routingOnlyReady)
+            assertTrue(controller.state.value.messages.isEmpty())
+        }
+    }
+
+    @Test
+    fun routingOnlyViewerReadsWithoutGainingWritePermission() = runTest {
+        fixture(role = "viewer", handler = { request ->
+            when (request.url.encodedPath) {
+                "/v1/conversations" -> json(directory("primary"))
+                "/v1/conversations/primary/metadata" -> failure(404, "TENANT_NOT_FOUND")
+                "/v1/conversations/primary/messages" -> { assertEquals(HttpMethod.Get, request.method); json(page(listOf(message(1)))) }
+                else -> error("Unexpected route")
+            }
+        }) { _, _, controller ->
+            controller.openFirst()
+            assertTrue(controller.state.value.routingOnlyReady)
+            controller.editMessage("Do not write")
+            controller.saveMessage()
+            assertEquals("", controller.state.value.messageDraft)
+            assertEquals(listOf(id(1)), controller.state.value.messages.map { it.id })
         }
     }
 

@@ -128,6 +128,23 @@ class PartnerConversationContentTest : RobolectricUiTest() {
         }
     }
 
+    @Test
+    fun routingOnlyComposerRequiresProvenReadiness() {
+        var state by mutableStateOf(PartnerState())
+        var saves = 0
+        launch(Screen.Compact, dark = false, fontScale = 1f) {
+            conversation(state, onDraft = { state = state.copy(messageDraft = it) }, onSave = { saves++ })
+        }.use { activity ->
+            compose.onNodeWithText("Message").assertDoesNotExist()
+            activity.onActivity { state = state.copy(routingOnlyReady = true) }
+            compose.onNodeWithText("Message").performTextInput("A primary conversation message")
+            compose.onNodeWithText("Save message").assertIsEnabled().performClick()
+            assertEquals(1, saves)
+            activity.onActivity { state = state.copy(routingOnlyReady = false, messageDraft = "") }
+            compose.onNodeWithText("Message").assertDoesNotExist()
+        }
+    }
+
     @androidx.compose.runtime.Composable
     private fun conversation(
         state: PartnerState,

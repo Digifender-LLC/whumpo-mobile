@@ -94,7 +94,7 @@ fun PartnerConversationContent(
     modifier: Modifier = Modifier,
 ) {
     val closed = state.topic?.closed == true
-    val editable = state.topic != null && !closed && canWrite
+    val editable = (state.topic != null || state.routingOnlyReady) && !closed && canWrite
     val canStart = editable && !state.runPending && !state.decisionPending &&
         state.run?.status?.shouldPoll != true && state.run?.status != PartnerRunStatus.waiting_approval
 
@@ -115,7 +115,7 @@ fun PartnerConversationContent(
                 if (state.busy) PartnerStatus("Working…")
                 PartnerButton("Refresh conversation", !state.busy, onClick = onRefresh)
             }
-            if (state.messages.isEmpty() && !state.busy && state.topic != null) {
+            if (state.messages.isEmpty() && !state.busy && (state.topic != null || state.routingOnlyReady)) {
                 item { Text("No messages yet.") }
             }
             items(state.messages.size, key = { "message-${state.messages[it].id}" }) { index ->

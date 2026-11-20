@@ -32,6 +32,7 @@ data class PartnerState(
     val creationPending: Boolean = false,
     val conversation: PartnerConversation? = null,
     val topic: PartnerTopic? = null,
+    val routingOnlyReady: Boolean = false,
     val messages: List<PartnerMessage> = emptyList(),
     val moreMessages: Boolean = false,
     val messageDraft: String = "",
@@ -190,15 +191,17 @@ class CorePartnerController(
         changeConversation(conversation, current.history.find { it.conversation == conversation })
     }
 
-    fun closeConversation() {
+    fun closeConversation() = closeConversation(cancelOperation = true)
+
+    private fun closeConversation(cancelOperation: Boolean) {
         selection++
-        operationJob?.cancel()
+        if (cancelOperation) operationJob?.cancel()
         operationJob = null
         eventJob?.cancel()
         eventJob = null
         bookmark = null
         update {
-            copy(conversation = null, topic = null, messages = emptyList(), moreMessages = false, messageDraft = "",
+            copy(conversation = null, topic = null, routingOnlyReady = false, messages = emptyList(), moreMessages = false, messageDraft = "",
                 savePending = false, saveAcknowledged = false, savedForRun = null, runPending = false, run = null,
                 approval = null, decisionPending = false, proof = null, notice = null, busy = false)
         }
@@ -208,7 +211,7 @@ class CorePartnerController(
         bookmark = null
         val saved = drafts[conversation.id]
         update {
-            copy(conversation = conversation, topic = topic, messages = emptyList(), moreMessages = true,
+            copy(conversation = conversation, topic = topic, routingOnlyReady = false, messages = emptyList(), moreMessages = true,
                 messageDraft = saved?.text.orEmpty(), savePending = saved?.save != null,
                 saveAcknowledged = saved?.save?.acknowledgment != null, savedForRun = saved?.latestSaved,
                 runPending = saved?.start != null, run = saved?.run, approval = saved?.decision?.review,
@@ -233,38 +236,92 @@ class CorePartnerController(
     }
 
     fun editMessage(text: String) {
-        val topic = current.topic ?: return
-        if (retired || !canWrite || topic.closed || current.savePending || text.length > 8192) return
+        val conversationId = current.conversation?.id ?: return
+        if (retired || !canWrite || (current.topic == null && !current.routingOnlyReady) || current.topic?.closed == true || current.savePending || text.length > 8192) return
         sessions.commitIfCurrent(active.epoch) {
-            retainDraft(topic.id)?.let {
+            retainDraft(conversationId)?.let {
                 it.text = text
                 update { copy(messageDraft = text) }
             }
         }
     }
 
+    private fun clearDeniedConversation(id: String, error: Exception) {
+        if (error is CoreHttpException && error.status in setOf(403, 404) && current.conversation?.id == id) {
+            drafts.remove(id)
+            closeConversation(cancelOperation = false)
+        }
+    }
+
+    /** A routing-only conversation has no lifecycle metadata. Prove it is still
+     * in the active directory before reading it; every message call also carries
+     * the current session and remains independently authorized by the server. */
+    private suspend fun readTopic(conversation: PartnerConversation): PartnerTopic? {
+        val selected = selection
+        fun selectedScope() {
+            if (selected != selection || current.conversation != conversation || !isCurrent())
+                throw CancellationException("Partner conversation changed")
+        }
+        try {
+            try {
+                return protocol.topic(conversation).also { selectedScope() }
+            } catch (error: PartnerHttpException) {
+                selectedScope()
+                if (error.status != 404 || error.code != "TENANT_NOT_FOUND" ||
+                    current.topic != null || current.history.any { it.id == conversation.id }) throw error
+                var cursor: String? = null
+                repeat(5) {
+                    val page = protocol.active(cursor)
+                    selectedScope()
+                    val route = page.items.find { it.id == conversation.id }
+                    if (route != null) {
+                        if (route != conversation) throw CoreProtocolException()
+                        return null
+                    }
+                    cursor = page.nextCursor ?: throw error
+                }
+                throw error
+            }
+        } catch (error: Exception) {
+            clearDeniedConversation(conversation.id, error)
+            throw error
+        }
+    }
+
+    private suspend fun messagePage(id: String, after: PartnerMessage?): PartnerPage<PartnerMessage> = try {
+        protocol.messages(id, after)
+    } catch (error: Exception) {
+        clearDeniedConversation(id, error)
+        throw error
+    }
+
     suspend fun refreshConversation() = perform {
         val conversation = current.conversation ?: return@perform
-        val topic = protocol.topic(conversation)
+        val selected = selection
+        update { copy(routingOnlyReady = false) }
+        val topic = readTopic(conversation)
         update { copy(topic = topic) }
         val draft = this.draft
         draft?.save?.let { pending ->
             when {
-                pending.acknowledgment != null -> confirmSave(topic.id, draft, pending)
-                topic.closed -> update { copy(notice = PartnerNotice.ClosedSaveUnresolved) }
+                pending.acknowledgment != null -> confirmSave(conversation.id, draft, pending)
+                topic?.closed == true -> update { copy(notice = PartnerNotice.ClosedSaveUnresolved) }
             }
         }
-        readMessages(topic.id, pageBudget = 20)
+        readMessages(conversation.id, pageBudget = 20)
+        if (selected != selection || current.conversation != conversation) throw CancellationException("Partner conversation changed")
+        update { copy(routingOnlyReady = topic == null) }
     }
 
     suspend fun moreMessages() = perform {
-        val topic = current.topic ?: return@perform
-        readMessages(topic.id, pageBudget = 20)
+        val conversation = current.conversation ?: return@perform
+        if (current.topic == null && !current.routingOnlyReady) return@perform
+        readMessages(conversation.id, pageBudget = 20)
     }
 
     private suspend fun readMessages(id: String, pageBudget: Int) {
         repeat(pageBudget) {
-            val page = protocol.messages(id, bookmark)
+            val page = messagePage(id, bookmark)
             ingestVisiblePage(page)
             if (page.nextCursor == null) return
         }
@@ -281,14 +338,14 @@ class CorePartnerController(
         val conversation = current.conversation ?: return@perform
         val draft = draft ?: return@perform
         val content = draft.text
-        val topic = protocol.topic(conversation)
+        val topic = readTopic(conversation)
         update { copy(topic = topic) }
         val existing = draft.save
         if (existing?.acknowledgment != null) {
-            confirmSave(topic.id, draft, existing)
+            confirmSave(conversation.id, draft, existing)
             return@perform
         }
-        if (topic.closed || !canWrite) {
+        if (topic?.closed == true || !canWrite) {
             update { copy(notice = if (existing != null) PartnerNotice.ClosedSaveUnresolved else PartnerNotice.ReadOnly) }
             return@perform
         }
@@ -304,7 +361,7 @@ class CorePartnerController(
         pending.attempted = true
         update { copy(savePending = true) }
         try {
-            pending.acknowledgment = protocol.append(topic.id, pending.content, pending.command)
+            pending.acknowledgment = protocol.append(conversation.id, pending.content, pending.command)
         } catch (error: PartnerHttpException) {
             if (!retry && error.rejectsWrite) {
                 draft.save = null
@@ -314,14 +371,14 @@ class CorePartnerController(
             throw error
         }
         update { copy(saveAcknowledged = true) }
-        confirmSave(topic.id, draft, pending)
+        confirmSave(conversation.id, draft, pending)
     }
 
     private suspend fun confirmSave(id: String, draft: Draft, pending: Save) {
         val expected = checkNotNull(pending.acknowledgment)
         // This cursor is independent of the visible page. It starts at the last canonical row before the POST.
         repeat(20) {
-            val page = protocol.messages(id, pending.cursor)
+            val page = messagePage(id, pending.cursor)
             val match = page.items.firstOrNull { it.id == expected.id || it.sequence == expected.sequence }
             if (match != null) {
                 if (match != expected || !match.content.encodeToByteArray().contentEquals(expected.content.encodeToByteArray())) {
@@ -367,9 +424,9 @@ class CorePartnerController(
     }
 
     suspend fun startRun(source: PartnerMessage?, project: CoreProjectChoice?, title: String) = perform {
-        val topic = current.topic ?: return@perform
-        if (topic.closed || !canWrite) return@perform
-        val draft = retainDraft(topic.id) ?: return@perform
+        val conversationId = current.conversation?.id ?: return@perform
+        if ((current.topic == null && !current.routingOnlyReady) || current.topic?.closed == true || !canWrite) return@perform
+        val draft = retainDraft(conversationId) ?: return@perform
         if (draft.decision != null || draft.run?.status?.shouldPoll == true || draft.run?.status == PartnerRunStatus.waiting_approval) return@perform
         val pending = draft.start ?: run {
             if (source == null || project == null || project !in availableProjects || source.userId != userId || source.role != PartnerMessageRole.user ||
@@ -386,7 +443,7 @@ class CorePartnerController(
         pending.attempted = true
         update { copy(runPending = true) }
         val run = try {
-            protocol.start(topic.id, pending.source, pending.command)
+            protocol.start(conversationId, pending.source, pending.command)
         } catch (error: PartnerHttpException) {
             if (!retry && error.rejectsWrite) {
                 draft.start = null
@@ -401,12 +458,13 @@ class CorePartnerController(
     }
 
     suspend fun openRun(message: PartnerMessage) = perform {
-        val topic = current.topic ?: return@perform
+        val conversationId = current.conversation?.id ?: return@perform
+        if (current.topic == null && !current.routingOnlyReady) return@perform
         val runId = message.runId ?: return@perform
         if (message !in current.messages || message.role != PartnerMessageRole.assistant) return@perform
-        val draft = retainDraft(topic.id) ?: return@perform
+        val draft = retainDraft(conversationId) ?: return@perform
         if (draft.start != null || draft.decision != null) return@perform
-        val run = protocol.run(topic.id, runId, null)
+        val run = protocol.run(conversationId, runId, null)
         if (run.steps.mapNotNull { it.result?.receiptId }.any { it !in message.receiptIds.orEmpty() }) throw CoreProtocolException()
         draft.run = run
         update { copy(run = run, approval = null, proof = null) }
