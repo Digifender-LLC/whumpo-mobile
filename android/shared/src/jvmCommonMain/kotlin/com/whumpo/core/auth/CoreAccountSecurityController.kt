@@ -1261,7 +1261,7 @@ class CoreAccountSecurityController(
                 }
                 expectedSignIn = null
             }
-            if (grant !== authority) clearNoticesLocked()
+            if (grant !== authority || prior?.accountId != snapshot.accountId || prior.generation != snapshot.generation) clearNoticesLocked()
             grant = authority
             login = null
             pendingEnrollment = null
