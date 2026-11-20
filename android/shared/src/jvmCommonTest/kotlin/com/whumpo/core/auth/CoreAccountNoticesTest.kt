@@ -167,4 +167,30 @@ class CoreAccountNoticesTest {
         }
     }
 
+    @Test fun workspaceLossClearHidesVisibleNoticesBeforeHeldResponseJoins() = runTest {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        var calls = 0; var account = "account-1"
+        val engine = MockEngine { request -> if (request.url.encodedPath.endsWith("/notices")) {
+            calls++
+            if (calls == 2) { entered.complete(Unit); release.await() }
+            respond(page())
+        } else login(request.url.encodedPath, account) }
+        CoreApiClient(engine, origin).use { api ->
+            val workspace = CoreOrganizationSessionController(api) { 1 }
+            val controller = CoreAccountSecurityController(api, workspace, "core.example.test") { 1 }
+            controller.loginPasskey(passkeys); controller.loadNotices(); assertNotNull(controller.notices.value)
+            val read = async { runCatching { controller.loadNotices() } }; entered.await()
+            // The launcher uses this synchronous boundary on workspace authority loss.
+            controller.clear()
+            assertNull(controller.notices.value); assertNull(controller.state.value)
+            assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
+            release.complete(Unit)
+            assertIs<CancellationException>(read.await().exceptionOrNull())
+            assertNull(controller.notices.value)
+            account = "account-2"; controller.loginPasskey(passkeys)
+            assertEquals("account-2", controller.state.value?.accountId)
+            controller.loadNotices(); assertNotNull(controller.notices.value)
+        }
+    }
+
 }
