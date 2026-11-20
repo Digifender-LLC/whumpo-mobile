@@ -77,7 +77,9 @@ class CoreOrganizationSessionController(
     sealed interface State {
         data object SignedOut : State
         data object Transitioning : State
-        data class Active(val epoch: Long, val session: CoreSession, val scope: CoreAccountScope) : State
+        data class Active(val epoch: Long, val session: CoreSession, val scope: CoreAccountScope) : State {
+            internal val workQueryLeases = CoreWorkQueryLeases()
+        }
     }
 
     internal val origin get() = api.origin
@@ -940,13 +942,15 @@ class CoreOrganizationSessionController(
             }
         }
 
-    internal suspend fun canonicalTaskForPartner(active: State.Active, taskId: String): CoreWorkTask =
+    suspend fun canonicalTask(active: State.Active, taskId: String): CoreWorkTask =
         requestForActiveSession(active) { client, token ->
             client.task(token, taskId).also {
                 verifyTask(it)
                 if (it.id != taskId) throw CoreProtocolException()
             }
         }
+
+    internal suspend fun canonicalTaskForPartner(active: State.Active, taskId: String): CoreWorkTask = canonicalTask(active, taskId)
 
     internal suspend fun <T> requestForActiveSession(active: State.Active, operation: suspend (CoreApiClient, String) -> T): T =
         request { current ->

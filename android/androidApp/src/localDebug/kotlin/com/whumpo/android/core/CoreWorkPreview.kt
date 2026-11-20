@@ -39,6 +39,7 @@ import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreWebsiteHistoryItem
 import com.whumpo.core.api.CoreWebsiteOperation
 import com.whumpo.core.api.CoreWorkTask
+import com.whumpo.core.api.CoreWorkFilters
 import com.whumpo.core.api.CoreWorkWebOrigin
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import com.whumpo.core.auth.CoreReminderAttempt
@@ -72,14 +73,15 @@ internal fun CoreWorkPreview(
     var inbox by remember { mutableStateOf(false) }
     var selected by remember(initialTask) { mutableStateOf(initialTask) }
     var attachmentTask by remember { mutableStateOf<CoreWorkTask?>(null) }
-    var openedFromCreation by remember { mutableStateOf(false) }
     var receipts by remember { mutableStateOf(false) }
-    var workCursor by remember { mutableStateOf<String?>(null) }
+    var workFilters by remember(active) { mutableStateOf(CoreWorkFilters()) }
+    var queryListVisible by remember(active) { mutableStateOf(true) }
+    var selectedProjectName by remember(active, initialTask) { mutableStateOf<String?>(null) }
     var historyCursor by remember { mutableStateOf<String?>(null) }
     if (publishWorkListVisible != null) {
         SideEffect {
             publishWorkListVisible {
-                !recovering && !creating && !receivingLink && !inbox && selected == null && attachmentTask == null && !receipts
+                !recovering && !creating && !receivingLink && !inbox && selected == null && attachmentTask == null && !receipts && queryListVisible
             }
         }
         DisposableEffect(Unit) { onDispose { publishWorkListVisible { false } } }
@@ -107,8 +109,8 @@ internal fun CoreWorkPreview(
         CoreTaskCreationPreview(controller, epoch, organizationName,
             openTask = { created ->
                 controller.commitIfCurrent(epoch) {
+                    selectedProjectName = null
                     selected = created
-                    openedFromCreation = true
                     receipts = false
                     historyCursor = null
                     creating = false
@@ -130,7 +132,26 @@ internal fun CoreWorkPreview(
         }
     }
     BackHandler(onBack = goBack)
-    key(task?.id, receipts, workCursor, historyCursor) {
+    if (task == null) {
+        CoreWorkSurface(controller, active, onBack = close,
+            openTask = { item, name -> controller.commitIfCurrent(epoch) {
+                selected = item; selectedProjectName = name
+            } },
+            onListVisible = { queryListVisible = it }, onReadable = onReadable,
+            initialFilters = workFilters, saveFilters = { workFilters = it }, interact = onWorkListInteraction,
+            beforeQueries = {
+                Text(organizationName, style = MaterialTheme.typography.labelLarge)
+                WhumpoQuietButton(onClick = { onWorkListInteraction(); inbox = true }) { Text("Task notifications") }
+                if (workWebOrigin != null) WhumpoQuietButton(onClick = { onWorkListInteraction(); receivingLink = true }) { Text("Open Work link") }
+                if (canCreateTask) {
+                    WhumpoPrimaryButton(onClick = { onWorkListInteraction(); creating = true }) { Text("New task") }
+                    WhumpoQuietButton(onClick = openOfflineWork) { Text("Capture offline task") }
+                }
+                if (canRecoverApplication) WhumpoQuietButton(onClick = { onWorkListInteraction(); recovering = true }) { Text("Application recovery") }
+            })
+        return
+    }
+    key(task.id, receipts, historyCursor) {
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -143,52 +164,9 @@ internal fun CoreWorkPreview(
             TextButton(onClick = goBack) { Text(backLabel) }
             Text(organizationName, style = MaterialTheme.typography.labelLarge)
             when {
-                task == null -> {
-                    Text("Work", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
-                    WhumpoQuietButton(onClick = { onWorkListInteraction(); inbox = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-                        Text("Task notifications")
-                    }
-                    if (workWebOrigin != null) {
-                        WhumpoQuietButton(onClick = { onWorkListInteraction(); receivingLink = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text("Open Work link")
-                        }
-                    }
-                    if (canCreateTask) {
-                        WhumpoPrimaryButton(onClick = { onWorkListInteraction(); creating = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text("New task")
-                        }
-                        WhumpoQuietButton(onClick = openOfflineWork, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text("Capture offline task")
-                        }
-                    }
-                    WorkRead(controller, epoch, { controller.work(workCursor) },
-                        onUnavailable = { onReadable(false) }, onRead = { onReadable(true) }) { page ->
-                        if (page.items.isEmpty()) {
-                            Card(Modifier.fillMaxWidth()) {
-                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text("No tasks here", style = MaterialTheme.typography.titleMedium)
-                                    Text(if (canCreateTask) "Create a task to plan your next step." else "Tasks for this organization will appear here.")
-                                }
-                            }
-                        }
-                        page.items.forEach { item ->
-                            Card(onClick = { onWorkListInteraction(); selected = item; openedFromCreation = false }, modifier = Modifier.fillMaxWidth()) {
-                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(item.title, style = MaterialTheme.typography.titleMedium)
-                                    Text(item.status.label, style = MaterialTheme.typography.bodyMedium)
-                                }
-                            }
-                        }
-                        page.nextCursor?.let { next ->
-                            Button(onClick = { onWorkListInteraction(); workCursor = next }) { Text("More tasks") }
-                        }
-                        if (workCursor != null) OutlinedButton(onClick = { onWorkListInteraction(); workCursor = null }) { Text("First page") }
-                    }
-                    if (canRecoverApplication) WhumpoQuietButton(onClick = { onWorkListInteraction(); recovering = true }) { Text("Application recovery") }
-                }
                 receipts -> {
                     Text("Website receipts", style = MaterialTheme.typography.headlineMedium)
-                    Text("Project ${task.projectId}", style = MaterialTheme.typography.bodyMedium)
+                    Text(selectedProjectName ?: "Project name unavailable", style = MaterialTheme.typography.bodyMedium)
                     if (active.session.role == CoreRole.owner) {
                         CurrentPublicationCheck(controller, active, task.projectId)
                     }
@@ -207,14 +185,14 @@ internal fun CoreWorkPreview(
                     }
                 }
                 else -> WorkRead(controller, epoch, {
-                    if (openedFromCreation) controller.canonicalTask(task.id) else controller.task(task.id, task.projectId)
+                    controller.canonicalTask(active, task.id)
                 }) { detail ->
                     Text(detail.title, style = MaterialTheme.typography.headlineMedium)
                     Text(detail.status.label, style = MaterialTheme.typography.titleMedium)
                     detail.description?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
                     detail.dueAt?.let { Text("Due $it") }
                     if (detail.archivedAt != null) Text("Archived")
-                    Text("Project ${detail.projectId}", style = MaterialTheme.typography.bodyMedium)
+                    Text(if (detail.projectId == task.projectId) selectedProjectName ?: "Project name unavailable" else "Project name unavailable", style = MaterialTheme.typography.bodyMedium)
                     CoreWorkDeadlineActions(controller, active, detail, calendarForeground, calendarGeneration, reminderAttempts) {
                         isCalendarForeground() && selected == task && !receipts && attachmentTask == null &&
                             !inbox && !creating && !recovering && !receivingLink
@@ -224,7 +202,7 @@ internal fun CoreWorkPreview(
                             controller.commitIfCurrent(epoch) { attachmentTask = detail }
                         }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Attach private file") }
                     }
-                    Button(onClick = { selected = detail; receipts = true }) { Text("View website receipts") }
+                    Button(onClick = { if (detail.projectId != task.projectId) selectedProjectName = null; selected = detail; receipts = true }) { Text("View website receipts") }
                 }
             }
         }

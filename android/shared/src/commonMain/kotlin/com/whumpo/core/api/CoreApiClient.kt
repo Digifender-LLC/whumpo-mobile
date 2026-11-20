@@ -124,14 +124,17 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
         cursor: String? = null,
         key: String? = null,
         body: String? = null,
+        version: Long? = null,
     ): T {
+        require((route == PartnerRoute.WorkTransition) == (version != null))
+        require(version == null || version in 1 until CORE_MAX_VERSION)
         require(route.withId == (id != null) && (id == null || coreIdentifier.matches(id)))
         require(route.write == (key != null) && route.write == (body != null))
         require(key == null || coreIdentifier.matches(key))
         require(cursor == null || (route.limit != null && coreIdentifier.matches(cursor)))
         val result = call(token, route.path.replace("{id}", id.orEmpty()),
             if (route.write) HttpMethod.Post else HttpMethod.Get, body,
-            cursor = cursor, limit = route.limit, key = key, requireJson = true,
+            cursor = cursor, limit = route.limit, key = key, version = version, requireJson = true,
             expectedStatus = route.status, alternateStatus = if (route == PartnerRoute.Append) 200 else null,
             maxResponseBytes = if (route == PartnerRoute.Messages) 262_144 else 65_536,
             partnerFailure = true)
@@ -305,6 +308,45 @@ class CoreApiClient internal constructor(private val engine: HttpClientEngine, v
 
     internal suspend fun entitlements(token: String): CoreOrganizationEntitlements =
         json.decodeFromString(call(token, "/v1/organization/entitlements"))
+
+    internal suspend fun workQuery(token: String, filters: CoreWorkFilters, cursor: String?): CoreWorkQueryPage =
+        decodeWorkQuery(call(token, workQueryPath(filters, cursor), maxResponseBytes = 50 * 65_536,
+            requireJson = true, partnerFailure = true)).also { verifyWorkQueryCriteria(it, filters) }
+
+    internal suspend fun workDirectory(token: String, kind: CoreWorkDirectory, cursor: String?, workspace: String?): CoreWorkChoices {
+        require(cursor == null || coreIdentifier.matches(cursor))
+        require(workspace == null || coreIdentifier.matches(workspace))
+        val path = when (kind) {
+            CoreWorkDirectory.Workspace -> "/v1/workspaces"
+            CoreWorkDirectory.Project -> "/v1/projects"
+            CoreWorkDirectory.Customer -> "/v1/customers?state=all"
+            CoreWorkDirectory.Assignee -> "/v1/agents/management"
+        }
+        return decodeWorkDirectory(call(token, path, cursor = cursor, limit = 20,
+            workspaceId = if (kind == CoreWorkDirectory.Project) workspace else null,
+            maxResponseBytes = 20 * 16_384, requireJson = true, partnerFailure = true), kind, cursor, workspace)
+    }
+
+    internal suspend fun workHistory(token: String, taskId: String, after: CoreWorkHistoryBookmark?): CoreWorkHistoryPage {
+        require(coreIdentifier.matches(taskId))
+        require(after == null || workLinkEventId.matches(after.id))
+        return decodeWorkHistory(call(token, "/v1/tasks/$taskId/history", cursor = after?.id, limit = 4,
+            maxResponseBytes = 327_680, requireJson = true, partnerFailure = true), taskId, after)
+    }
+
+    internal suspend fun workSource(token: String, origin: CoreRecordedTaskSource, after: CoreWorkSourceBookmark?): CoreWorkSourceResult {
+        require(coreIdentifier.matches(origin.conversationId) && coreIdentifier.matches(origin.messageId))
+        require(after == null || coreIdentifier.matches(after.id))
+        return decodeWorkSource(call(token, "/v1/conversations/${origin.conversationId}/messages", cursor = after?.id, limit = 5,
+            maxResponseBytes = 262_144, requireJson = true, partnerFailure = true), origin, after)
+    }
+
+    internal suspend fun releaseWorkQuery(token: String, cursor: String) {
+        require(coreDigest.matches(cursor))
+        val body = call(token, "/v1/work/tasks?cursor=$cursor", HttpMethod.Delete,
+            expectedStatus = 204, maxResponseBytes = 1024, partnerFailure = true)
+        if (body.isNotEmpty()) throw CoreProtocolException()
+    }
 
     internal suspend fun work(token: String, cursor: String?, limit: Int): CoreWorkPage {
         require(limit in 1..10 && (cursor == null || coreDigest.matches(cursor)))

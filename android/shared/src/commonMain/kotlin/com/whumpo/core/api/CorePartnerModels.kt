@@ -267,7 +267,8 @@ internal enum class PartnerRoute(
     Approval("/v1/approvals/{id}"),
     Decide("/v1/approvals/{id}/decision", write = true),
     Effect("/v1/effects/{id}"),
-    Receipts("/v1/effects/{id}/receipts");
+    Receipts("/v1/effects/{id}/receipts"),
+    WorkTransition("/v1/tasks/{id}/transitions", status = 202, write = true);
 
     val withId get() = "{id}" in path
 }
