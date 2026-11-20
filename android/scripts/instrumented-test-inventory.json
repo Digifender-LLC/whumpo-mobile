@@ -97,6 +97,11 @@
     "com.whumpo.android.SystemConfigurationTest": [
       "raisingTheSystemFontScaleWhileOpenKeepsTheShellUsable",
       "rotatingTheDisplayKeepsTheDestinationAndTheDraft"
+    ],
+    "com.whumpo.android.CoreWorkSurfaceTest": [
+      "definiteConflictAllowsANewAssertionOnlyAfterRefreshingTheVersion",
+      "ambiguousOutcomeKeepsItsOriginalAssertionAcrossARefreshedVersion",
+      "nonOwnerWithAVisibleInProgressTaskCannotOfferCompletion"
     ]
   },
   "allowedSkips": {
