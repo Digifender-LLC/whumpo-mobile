@@ -79,7 +79,11 @@ class CoreWearTodayPublicationWorker(
         if (active.epoch != epoch) return
         try {
             val publishedAt = nowMillis()
-            val snapshot = readSnapshot(active, nextGeneration(), publishedAt) ?: return
+            val snapshot = readSnapshot(active, nextGeneration(), publishedAt)
+            if (snapshot == null) {
+                if (organizations.state.value === active) scheduleRefresh(epoch, RETRY_MILLIS)
+                return
+            }
             currentCoroutineContext().ensureActive()
             if (organizations.state.value !== active) return
             if (!snapshot.validAt(nowMillis())) {

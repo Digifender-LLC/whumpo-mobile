@@ -10,7 +10,10 @@ cp "$script" "$fixture/android/scripts/ci-instrumented.sh"
 cp "$(dirname "$script")/anr-summary.py" "$fixture/android/scripts/anr-summary.py"
 cp "$(dirname "$script")/verify-instrumented-results.py" "$fixture/android/scripts/verify-instrumented-results.py"
 cp "$(dirname "$script")/instrumented-test-inventory.json" "$fixture/android/scripts/instrumented-test-inventory.json"
+cp "$(dirname "$script")/verify-wear-instrumented-results.py" "$fixture/android/scripts/verify-wear-instrumented-results.py"
+cp "$(dirname "$script")/wear-instrumented-test-inventory.json" "$fixture/android/scripts/wear-instrumented-test-inventory.json"
 PYTHONDONTWRITEBYTECODE=1 python3 "$(dirname "$script")/test-verify-instrumented-results.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$(dirname "$script")/test-verify-wear-instrumented-results.py"
 # Record actual validator arguments in the private fixture, not the public source.
 python3 - "$fixture/android/scripts/verify-instrumented-results.py" <<'PYMARK'
 import sys
@@ -18,12 +21,21 @@ from pathlib import Path
 p = Path(sys.argv[1])
 p.write_text("import os, sys\nwith open(os.environ['CALLS'], 'a') as f: f.write('validator|' + '|'.join(sys.argv[1:]) + '\\n')\n" + p.read_text())
 PYMARK
+python3 - "$fixture/android/scripts/verify-wear-instrumented-results.py" <<'PYMARK'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+p.write_text("import os, sys\nwith open(os.environ['CALLS'], 'a') as f: f.write('wear-validator|' + '|'.join(sys.argv[1:]) + '\\n')\n" + p.read_text())
+PYMARK
 cat >"$fixture/android/scripts/mock-results.py" <<'PYMOCK'
 import json, os
 from pathlib import Path
+import sys
 import xml.etree.ElementTree as E
 inventory = json.loads(Path('scripts/instrumented-test-inventory.json').read_text())
+wear_inventory = json.loads(Path('scripts/wear-instrumented-test-inventory.json').read_text())
 mode = os.environ.get('RESULT_MODE', 'pass')
+command = ' '.join(sys.argv[1:])
 for flavor in ('local', 'deployed'):
     folder = Path('androidApp/build/outputs/androidTest-results/connected/debug/flavors') / flavor
     folder.mkdir(parents=True, exist_ok=True)
@@ -51,12 +63,32 @@ for flavor in ('local', 'deployed'):
     suite.set('tests', str(len(cases) + (mode == 'inconsistent')))
     report = folder / 'TEST-device.xml'
     report.write_text('<testsuites' if mode == 'malformed' else E.tostring(suite, encoding='unicode'))
+if ':wearApp:connectedLocalDebugAndroidTest' in command:
+    for flavor in ('local', 'deployed'):
+        folder = Path('wearApp/build/outputs/androidTest-results/connected/debug/flavors') / flavor
+        folder.mkdir(parents=True, exist_ok=True)
+        if mode == 'missing-wear' or (mode == 'wear-local-only' and flavor != 'local'):
+            continue
+        suite = E.Element('testsuites', tests='0', failures='0', errors='0', skipped='0')
+        for cls, names in wear_inventory['classes'].items():
+            for name in names:
+                E.SubElement(suite, 'testcase', classname=cls, name=name)
+        if mode == 'wear-skip':
+            for case in suite:
+                E.SubElement(case, 'skipped').text = 'synthetic skip'
+            suite.set('skipped', str(len(suite)))
+        cases = list(suite.iter('testcase'))
+        props = E.SubElement(suite, 'properties')
+        E.SubElement(props, 'property', name='device', value=os.environ['ANDROID_SERIAL'])
+        suite.set('tests', str(len(cases)))
+        report = folder / 'TEST-wear-device.xml'
+        report.write_text(E.tostring(suite, encoding='unicode'))
 PYMOCK
 cat >"$fixture/android/gradlew" <<'SH'
 #!/usr/bin/env bash
 printf 'gradle %s\n' "$*" >>"$CALLS"
 printf 'selector|%s\n' "$ANDROID_SERIAL" >>"$CALLS"
-python3 scripts/mock-results.py
+python3 scripts/mock-results.py "$@"
 exit "$GRADLE_STATUS"
 SH
 cat >"$fixture/android/scripts/test-worker-journey.sh" <<'SH'
@@ -117,12 +149,23 @@ run() {
   [[ "$status" == "$expected" && "$(cat "$out/test-exit-code.txt")" == "$expected" ]]
   [[ "$(grep -c '^gradle ' "$CALLS")" == 1 ]]
   grep -Fxq 'selector|emulator-5554' "$CALLS"
+  local expectedGradle=':androidApp:connectedLocalDebugAndroidTest :androidApp:connectedDeployedDebugAndroidTest'
+  if [[ "$api" == 36 ]]; then
+    expectedGradle+=' :wearApp:connectedLocalDebugAndroidTest :wearApp:connectedDeployedDebugAndroidTest'
+  fi
+  expectedGradle+=' -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest'
+  grep -Fxq "gradle $expectedGradle" "$CALLS"
   if [[ "$GRADLE_STATUS" == 0 ]]; then
     grep -Fxq "validator|androidApp/build/outputs/androidTest-results/connected|$api|emulator-5554" "$CALLS"
+    if [[ "$api" == 36 && ( "$expected" == 0 || "${RESULT_MODE:-pass}" == missing-wear || "${RESULT_MODE:-pass}" == wear-skip ) ]]; then
+      grep -Fxq 'wear-validator|wearApp/build/outputs/androidTest-results/connected|emulator-5554' "$CALLS"
+    elif [[ "$api" == 28 || "$expected" != 0 ]]; then
+      [[ "$(grep -c '^wear-validator|' "$CALLS" || true)" == 0 ]]
+    fi
   else
     [[ "$(grep -c '^validator|' "$CALLS" || true)" == 0 ]]
+    [[ "$(grep -c '^wear-validator|' "$CALLS" || true)" == 0 ]]
   fi
-  grep -Fxq 'gradle connectedLocalDebugAndroidTest connectedDeployedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest' "$CALLS"
   local anrCall='adb|-s|emulator-5554|logcat|-b|events|-d|-v|raw|am_anr:I|*:S'
   local expectedAdb=$'adb|-s|emulator-5554|shell|getprop|ro.build.version.sdk\n'"$anrCall"$'\nadb|-s|emulator-5554|get-state\nadb|-s|emulator-5554|logcat|-d|-v|threadtime|WhumpoTreeDiagnostics:E|*:S\n'"$anrCall"
   [[ "$(grep -c '^adb|' "$CALLS")" == 5 ]]
@@ -130,7 +173,7 @@ run() {
   [[ "$(grep -c '^unexpected-' "$CALLS" || true)" == 0 ]]
   ! grep -Fq dumpsys "$CALLS"
   [[ "$(grep -c '^journey$' "$CALLS" || true)" == 0 ]]
-  [[ "$(find "$out" -maxdepth 1 -type f -printf '%f\n' | sort)" == $'anr-after.json\nanr-before.json\ndevice-state.txt\ntest-exit-code.txt\ntree-failures.txt' ]]
+  [[ "$(find "$out" -maxdepth 1 -type f -print | sed 's#^.*/##' | sort)" == $'anr-after.json\nanr-before.json\ndevice-state.txt\ntest-exit-code.txt\ntree-failures.txt' ]]
   [[ -s "$out/device-state.txt" && -s "$out/tree-failures.txt" ]]
   ! grep -r 'synthetic-private' "$out"
   for stage in before after; do
@@ -159,6 +202,8 @@ RESULT_MODE=duplicate-device run 36 3
 # The preceding reports must be removed; a false adapter success cannot reuse them.
 run 36 0
 RESULT_MODE=missing run 36 3
+RESULT_MODE=missing-wear run 36 3
+RESULT_MODE=wear-skip run 36 3
 
 reject() {
   local status=0

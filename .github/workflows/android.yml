@@ -115,6 +115,8 @@ jobs:
             android/androidApp/build/outputs/instrumented-diagnostics/device-state.txt
             android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt
             android/androidApp/build/outputs/instrumented-diagnostics/test-exit-code.txt
+            android/wearApp/build/reports/androidTests/**
+            android/wearApp/build/outputs/androidTest-results/**
             !android/**/logcat*
           if-no-files-found: ignore
           retention-days: 7

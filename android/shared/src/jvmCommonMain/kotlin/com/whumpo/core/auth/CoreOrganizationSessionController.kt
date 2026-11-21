@@ -322,6 +322,13 @@ class CoreOrganizationSessionController(
         Today(current.state.epoch, current.state.scope, briefing)
     }
 
+    /** Reads Today only under this exact active session, so a background publisher cannot cross an org switch. */
+    internal suspend fun today(active: State.Active): Today = requestForActiveSession(active) { client, token ->
+        val briefing = client.todayBriefing(token)
+        verifyToday(briefing)
+        Today(active.epoch, active.scope, briefing)
+    }
+
     /**
      * Reads the current task named by a blocked or deadline item of [today] by its exact canonical ID.
      * The task may have moved to another project since the briefing was generated.

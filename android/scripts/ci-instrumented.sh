@@ -39,5 +39,20 @@ capture_anr "$out/anr-before.json" || true
 # A previous run's reports cannot establish that this invocation executed tests.
 results=androidApp/build/outputs/androidTest-results/connected
 rm -rf "$results"
-./gradlew connectedLocalDebugAndroidTest connectedDeployedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
+tasks=(
+  :androidApp:connectedLocalDebugAndroidTest
+  :androidApp:connectedDeployedDebugAndroidTest
+)
+if [[ "$api" == 36 ]]; then
+  wear_results=wearApp/build/outputs/androidTest-results/connected
+  rm -rf "$wear_results"
+  tasks+=(
+    :wearApp:connectedLocalDebugAndroidTest
+    :wearApp:connectedDeployedDebugAndroidTest
+  )
+fi
+./gradlew "${tasks[@]}" -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
 python3 scripts/verify-instrumented-results.py "$results" "$api" "$ANDROID_SERIAL"
+if [[ "$api" == 36 ]]; then
+  python3 scripts/verify-wear-instrumented-results.py "$wear_results" "$ANDROID_SERIAL"
+fi

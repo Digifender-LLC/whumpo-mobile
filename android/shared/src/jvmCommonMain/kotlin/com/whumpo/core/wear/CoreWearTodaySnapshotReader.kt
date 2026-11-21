@@ -14,9 +14,13 @@ internal suspend fun CoreOrganizationSessionController.readCurrentWearTodaySnaps
 ): CoreWearTodaySnapshot? {
     if (state.value !== expected) return null
     return try {
-        val today = today()
+        val readiness = readiness(expected)
         currentCoroutineContext().ensureActive()
-        if (state.value !== expected || today.epoch != expected.epoch) return null
+        if (state.value !== expected || !readiness.ready) return null
+
+        val today = today(expected)
+        currentCoroutineContext().ensureActive()
+        if (state.value !== expected || today.epoch != expected.epoch || today.scope != expected.scope) return null
 
         CoreWearTodaySnapshot.fromBriefing(
             briefing = today.briefing,
