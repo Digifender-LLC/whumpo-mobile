@@ -132,13 +132,23 @@ class CoreLauncherTest {
                 compose.onNodeWithText("Role: viewer").assertIsDisplayed()
                 awaitText("Organization access is active.")
                 val backgroundTodayReads = fixture.requests.count { it == "GET /v1/briefing/today" }
-                assertTrue(backgroundTodayReads <= 1, "only the session-scoped background Today read is allowed: ${fixture.requests}")
-                assertTrue(fixture.requests.none { it.endsWith("/work/tasks") }, "Work waits for explicit user navigation")
+                assertTrue("only the session-scoped background Today read is allowed: ${fixture.requests}", backgroundTodayReads <= 1)
+                assertTrue("Work waits for explicit user navigation", fixture.requests.none { it.endsWith("/work/tasks") })
+                val todayBaseline = fixture.requests.count { it == "GET /v1/briefing/today" }
+                fixture.todayResponsePhase = CoreLauncherFixture.TodayResponsePhase.HoldStale
                 click("Open Today")
                 awaitText("Loading Today…")
-                compose.waitUntil(10_000) { fixture.staleTodayRequested.isCompleted }
+                compose.waitUntil(10_000) {
+                    fixture.staleTodayRequested.isCompleted &&
+                        fixture.requests.count { it == "GET /v1/briefing/today" } > todayBaseline
+                }
+                assertTrue(
+                    "the manual Today action must start a request beyond the ready-background baseline",
+                    fixture.requests.count { it == "GET /v1/briefing/today" } > todayBaseline,
+                )
                 pressBack()
                 awaitText("Fixture organization")
+                fixture.todayResponsePhase = CoreLauncherFixture.TodayResponsePhase.Fresh
                 click("Open Today")
                 awaitText("Needs attention")
                 awaitText("Review synthetic checklist")
@@ -184,12 +194,12 @@ class CoreLauncherTest {
                         "POST /v1/account-security/sign-out",
                 )
                 assertTrue(
-                    fixture.requests.count { it == "GET /v1/briefing/today" } in 2..3,
                     "two explicit Today openings plus at most one scoped background read",
+                    fixture.requests.count { it == "GET /v1/briefing/today" } in 2..3,
                 )
                 assertTrue(
-                    fixture.requests.count { it == "GET /v1/organization/readiness" } in 3..4,
                     "three UI readiness checks plus at most one process-owned check",
+                    fixture.requests.count { it == "GET /v1/organization/readiness" } in 3..4,
                 )
                 assertEquals(
                     expectedManualRequests,
@@ -363,6 +373,7 @@ class CoreLauncherTest {
 
 private class CoreLauncherFixture(private val multipleOrganizations: Boolean = false) {
     enum class Readiness { Unready, Foreign, Ready }
+    enum class TodayResponsePhase { Fresh, HoldStale }
 
     val requests = CopyOnWriteArrayList<String>()
     val releaseRevocation = CompletableDeferred<Unit>()
@@ -378,6 +389,7 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
     @Volatile var emptyWork = false
     @Volatile var denySwitch = false
     @Volatile var readiness = Readiness.Unready
+    @Volatile var todayResponsePhase = TodayResponsePhase.Fresh
     private val deadline = System.currentTimeMillis() + 300_000
     private val grant = "ag1." + "g".repeat(42) + "A"
     private val token = "t".repeat(42) + "A"
@@ -481,8 +493,8 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
             }
             "GET /v1/briefing/today" -> {
                 assertEquals("Bearer $token", authorization)
-                assertEquals(Readiness.Ready, readiness, "Today cannot be read before this organization is ready")
-                val title = if (requests.count { it == route } == 1) {
+                assertEquals("Today cannot be read before this organization is ready", Readiness.Ready, readiness)
+                val title = if (todayResponsePhase == TodayResponsePhase.HoldStale) {
                     staleTodayRequested.complete(Unit)
                     withContext(NonCancellable) {
                         releaseStaleToday.await()

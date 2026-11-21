@@ -100,6 +100,9 @@ printf 'gradle-start|%s\n' "$*" >>"$CALLS"
 printf 'selector|%s\n' "$ANDROID_SERIAL" >>"$CALLS"
 python3 scripts/mock-results.py "$@"
 status=$?
+if [[ "$status" == 0 ]]; then
+  status="$GRADLE_STATUS"
+fi
 printf 'gradle-finish|%s|%s\n' "$*" "$status" >>"$CALLS"
 exit "$status"
 SH
