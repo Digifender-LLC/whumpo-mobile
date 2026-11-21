@@ -5,6 +5,7 @@ import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runCurrent
@@ -44,7 +45,7 @@ class CoreWearTodayPublicationWorkerTest {
                 publish = { snapshot, _ ->
                     if (!snapshot.available && firstUnavailable) {
                         firstUnavailable = false
-                        error("simulated transient Data Layer failure")
+                        throw CancellationException("simulated canceled Data Layer task")
                     }
                     published += snapshot
                 },

@@ -115,7 +115,8 @@ class CoreWearTodayPublicationWorker(
                 null,
             )
         } catch (error: CancellationException) {
-            throw error
+            // Tasks.await may surface a canceled task even though this process-owned worker is still active.
+            currentCoroutineContext().ensureActive()
         } catch (_: Exception) {
             // Receiver TTL is the offline revocation bound when Data Layer delivery is unavailable.
         }
