@@ -6,8 +6,10 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.wear.protolayout.DeviceParametersBuilders
 import androidx.wear.protolayout.LayoutElementBuilders.Layout
+import androidx.wear.protolayout.TimelineBuilders.Timeline
 import androidx.wear.protolayout.material3.materialScope
 import java.time.Instant
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -57,11 +59,43 @@ class TodayTileLayoutTest {
         assertTrue(expiredLayout, expiredLayout.contains(TodayActivity::class.java.name))
     }
 
+    @Test
+    fun freshTimelineIncludesUnboundedUnavailableFallbackAfterExpiry() {
+        val generatedAt = now - 1_000
+        val state = todayTileState(
+            TodayTileSnapshot(
+                Instant.ofEpochMilli(generatedAt),
+                TodayCounts(TodayCount(2), TodayCount(1), TodayCount(3)),
+            ),
+            now,
+        ) as TodayTileState.Available
+        val timeline = captureTimeline(state)
+        val entries = timeline.timelineEntries
+
+        assertEquals(2, entries.size)
+        val fallback = entries.single { it.validity == null }
+        val fresh = entries.single { it.validity != null }
+        assertTrue(fallback.layout.toString(), fallback.layout.toString().contains("Today is unavailable"))
+        assertFalse(fallback.layout.toString(), fallback.layout.toString().contains("Approvals: 2"))
+        val validity = requireNotNull(fresh.validity)
+        assertEquals(generatedAt, validity.startMillis)
+        assertEquals(state.expiresAtMillis, validity.endMillis)
+    }
+
     private fun serialize(state: TodayTileState): String {
         val root = materialScope(context, deviceParameters) {
             todayTileRoot(context, state)
         }
         val layout = Layout.Builder().setRoot(root).build()
         return layout.toString()
+    }
+
+    private fun captureTimeline(state: TodayTileState): Timeline {
+        var timeline: Timeline? = null
+        materialScope(context, deviceParameters) {
+            timeline = todayTileTimeline(context, state)
+            todayTileRoot(context, state)
+        }
+        return requireNotNull(timeline)
     }
 }

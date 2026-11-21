@@ -30,21 +30,29 @@ class TodayTileService : Material3TileService() {
     override suspend fun MaterialScope.tileResponse(requestParams: TileRequest): Tile {
         val snapshot = TodayTileSource.snapshot()
         val state = todayTileState(snapshot, System.currentTimeMillis())
-        val timeline = Timeline.Builder().addTimelineEntry(entry(this@TodayTileService, state))
-        return tile(timeline = timeline.build())
+        return tile(timeline = todayTileTimeline(this@TodayTileService, state))
     }
+}
 
-    private fun MaterialScope.entry(context: Context, state: TodayTileState): TimelineEntry {
-        val root = todayTileRoot(context, state)
-        val builder = TimelineEntry.Builder().setLayout(Layout.Builder().setRoot(root).build())
-        if (state is TodayTileState.Available) {
-            builder.setValidity(TimeInterval.Builder()
-                .setStartMillis(state.generatedAt.toEpochMilli())
-                .setEndMillis(state.expiresAtMillis)
-                .build())
-        }
-        return builder.build()
+internal fun MaterialScope.todayTileTimeline(context: Context, state: TodayTileState): Timeline {
+    val timeline = Timeline.Builder()
+        .addTimelineEntry(todayTileEntry(context, TodayTileState.Unavailable))
+    if (state is TodayTileState.Available) {
+        timeline.addTimelineEntry(todayTileEntry(context, state))
     }
+    return timeline.build()
+}
+
+private fun MaterialScope.todayTileEntry(context: Context, state: TodayTileState): TimelineEntry {
+    val root = todayTileRoot(context, state)
+    val builder = TimelineEntry.Builder().setLayout(Layout.Builder().setRoot(root).build())
+    if (state is TodayTileState.Available) {
+        builder.setValidity(TimeInterval.Builder()
+            .setStartMillis(state.generatedAt.toEpochMilli())
+            .setEndMillis(state.expiresAtMillis)
+            .build())
+    }
+    return builder.build()
 }
 
 internal fun MaterialScope.todayTileRoot(context: Context, state: TodayTileState): LayoutElement {
