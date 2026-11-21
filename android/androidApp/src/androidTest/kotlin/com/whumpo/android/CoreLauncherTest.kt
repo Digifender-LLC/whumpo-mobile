@@ -198,8 +198,8 @@ class CoreLauncherTest {
                     fixture.requests.count { it == "GET /v1/briefing/today" } in 2..3,
                 )
                 assertTrue(
-                    "three UI readiness checks plus at most one process-owned check",
-                    fixture.requests.count { it == "GET /v1/organization/readiness" } in 3..4,
+                    "three UI readiness checks plus at most two process-owned checks (initial and one retry)",
+                    fixture.requests.count { it == "GET /v1/organization/readiness" } in 3..5,
                 )
                 assertEquals(
                     expectedManualRequests,
