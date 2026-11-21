@@ -79,7 +79,13 @@ rejects({dependabot: inputs.dependabot.replace('directory: /android', 'directory
   'Gradle dependency updates', 'Gradle updates must use the Android project directory');
 rejects({instrumentation: inputs.instrumentation.replace(
   '-Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest', '')},
-  'client instrumentation command and exclusion', 'missing WorkerJourneyTest exclusion must fail');
+  'API-specific phone and Wear instrumentation tasks and exclusion', 'missing WorkerJourneyTest exclusion must fail');
+rejects({instrumentation: inputs.instrumentation.replace(
+  ':wearApp:connectedLocalDebugAndroidTest', '')},
+  'API-specific phone and Wear instrumentation tasks and exclusion', 'missing API 36 Wear task must fail');
+rejects({instrumentation: inputs.instrumentation.replace(
+  'if [[ "$api" == 36 ]]; then', 'if [[ "$api" == 28 ]]; then')},
+  'API-specific phone and Wear instrumentation tasks and exclusion', 'Wear instrumentation must remain API 36-only');
 rejects({ci: inputs.ci.replace('          bash android/scripts/test-ci-install-sdk.sh\n', '')},
   'policy command bash android/scripts/test-ci-install-sdk.sh',
   'SDK installer regression must remain in the policy job');
@@ -122,6 +128,8 @@ rejects({android: misplacedExclusion}, 'Android artifact upload paths', 'two exc
 for (const [before, after, label] of [
   [logcatExclusion, '            !android/**/unrelated*\n', 'an unrelated exclusion must not protect logcat'],
   ['            android/androidApp/build/outputs/androidTest-results/**\n', '', 'JUnit outputs must remain uploaded'],
+  ['            android/wearApp/build/outputs/androidTest-results/**\n', '', 'Wear JUnit outputs must remain uploaded'],
+  ['            android/wearApp/build/reports/androidTests/**\n', '', 'Wear test reports must remain uploaded'],
   ['            android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt\n', '', 'allowlisted tree diagnostics must remain uploaded'],
   ['            android/androidApp/build/outputs/androidTest-results/**\n', '            android/androidApp/build/outputs/**\n', 'a broader output path must fail'],
   [logcatExclusion, `${logcatExclusion}            !android/**/*.xml\n`, 'a report-removing exclusion must fail'],

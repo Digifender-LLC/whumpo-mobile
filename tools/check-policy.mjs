@@ -97,6 +97,8 @@ function androidArtifactPathsMatch(android) {
         'android/androidApp/build/outputs/instrumented-diagnostics/device-state.txt',
         'android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt',
         'android/androidApp/build/outputs/instrumented-diagnostics/test-exit-code.txt',
+        'android/wearApp/build/reports/androidTests/**',
+        'android/wearApp/build/outputs/androidTest-results/**',
         '!android/**/logcat*'
       ],
       retention: '7', missing: 'ignore', condition: 'always()', compression: undefined
@@ -232,8 +234,20 @@ export function checkPolicy({android, ci, instrumentation, sdkInstaller, dependa
     && !/gitleaks-report|gitleaks-log|raw_log/i.test(scanArtifact), 'sanitized secret-scan output');
   require(!/\b(?:pull_request_target|workflow_run):|actions\/cache@|pull-requests:\s*write|contents:\s*write/.test(`${android}\n${ci}`), 'no privileged trigger or write permission');
   require(!/test-worker-journey\.sh/.test(instrumentation), 'private Worker journey excluded');
-  require(instrumentation.includes('connectedLocalDebugAndroidTest connectedDeployedDebugAndroidTest')
-    && instrumentation.includes('notClass=com.whumpo.android.WorkerJourneyTest'), 'client instrumentation command and exclusion');
+  const api36Gates = [...instrumentation.matchAll(/if \[\[ "\$api" == 36 \]\]; then\n([\s\S]*?)\nfi/g)]
+    .map(match => match[1]);
+  const taskBlock = instrumentation.slice(instrumentation.indexOf('tasks=('), instrumentation.indexOf('if [[ "$api" == 36 ]]'));
+  const phoneTasks = taskBlock.includes(':androidApp:connectedLocalDebugAndroidTest')
+    && taskBlock.includes(':androidApp:connectedDeployedDebugAndroidTest')
+    && !taskBlock.includes(':wearApp:');
+  const wearTasks = api36Gates[0]?.includes(':wearApp:connectedLocalDebugAndroidTest')
+    && api36Gates[0]?.includes(':wearApp:connectedDeployedDebugAndroidTest')
+    && api36Gates[0]?.includes('wear_results=wearApp/build/outputs/androidTest-results/connected');
+  const wearVerification = api36Gates[1]?.includes('verify-wear-instrumented-results.py')
+    && api36Gates[1]?.includes('wear_results');
+  require(phoneTasks && wearTasks && wearVerification
+    && instrumentation.includes('notClass=com.whumpo.android.WorkerJourneyTest'),
+  'API-specific phone and Wear instrumentation tasks and exclusion');
   require(dependabot.includes('version: 2')
     && dependabot.includes('package-ecosystem: gradle')
     && dependabot.includes('directory: /android'), 'Gradle dependency updates');

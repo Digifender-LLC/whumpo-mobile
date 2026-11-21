@@ -36,7 +36,12 @@ inventory = json.loads(Path('scripts/instrumented-test-inventory.json').read_tex
 wear_inventory = json.loads(Path('scripts/wear-instrumented-test-inventory.json').read_text())
 mode = os.environ.get('RESULT_MODE', 'pass')
 command = ' '.join(sys.argv[1:])
-for flavor in ('local', 'deployed'):
+phone_flavors = []
+if ':androidApp:connectedLocalDebugAndroidTest' in command:
+    phone_flavors.append('local')
+if ':androidApp:connectedDeployedDebugAndroidTest' in command:
+    phone_flavors.append('deployed')
+for flavor in phone_flavors:
     folder = Path('androidApp/build/outputs/androidTest-results/connected/debug/flavors') / flavor
     folder.mkdir(parents=True, exist_ok=True)
     if mode == 'missing' or (mode == 'local-only' and flavor != 'local'):
@@ -63,33 +68,40 @@ for flavor in ('local', 'deployed'):
     suite.set('tests', str(len(cases) + (mode == 'inconsistent')))
     report = folder / 'TEST-device.xml'
     report.write_text('<testsuites' if mode == 'malformed' else E.tostring(suite, encoding='unicode'))
+wear_flavors = []
 if ':wearApp:connectedLocalDebugAndroidTest' in command:
-    for flavor in ('local', 'deployed'):
-        folder = Path('wearApp/build/outputs/androidTest-results/connected/debug/flavors') / flavor
-        folder.mkdir(parents=True, exist_ok=True)
-        if mode == 'missing-wear' or (mode == 'wear-local-only' and flavor != 'local'):
-            continue
-        suite = E.Element('testsuites', tests='0', failures='0', errors='0', skipped='0')
-        for cls, names in wear_inventory['classes'].items():
-            for name in names:
-                E.SubElement(suite, 'testcase', classname=cls, name=name)
-        if mode == 'wear-skip':
-            for case in suite:
-                E.SubElement(case, 'skipped').text = 'synthetic skip'
-            suite.set('skipped', str(len(suite)))
-        cases = list(suite.iter('testcase'))
-        props = E.SubElement(suite, 'properties')
-        E.SubElement(props, 'property', name='device', value=os.environ['ANDROID_SERIAL'])
-        suite.set('tests', str(len(cases)))
-        report = folder / 'TEST-wear-device.xml'
-        report.write_text(E.tostring(suite, encoding='unicode'))
+    wear_flavors.append('local')
+if ':wearApp:connectedDeployedDebugAndroidTest' in command:
+    wear_flavors.append('deployed')
+for flavor in wear_flavors:
+    folder = Path('wearApp/build/outputs/androidTest-results/connected/debug/flavors') / flavor
+    folder.mkdir(parents=True, exist_ok=True)
+    if mode == 'missing-wear' or (mode == 'wear-local-only' and flavor != 'local'):
+        continue
+    suite = E.Element('testsuites', tests='0', failures='0', errors='0', skipped='0')
+    for cls, names in wear_inventory['classes'].items():
+        for name in names:
+            E.SubElement(suite, 'testcase', classname=cls, name=name)
+    if mode == 'wear-skip':
+        for case in suite:
+            E.SubElement(case, 'skipped').text = 'synthetic skip'
+        suite.set('skipped', str(len(suite)))
+    cases = list(suite.iter('testcase'))
+    props = E.SubElement(suite, 'properties')
+    E.SubElement(props, 'property', name='device', value=os.environ['ANDROID_SERIAL'])
+    suite.set('tests', str(len(cases)))
+    report = folder / 'TEST-wear-device.xml'
+    report.write_text(E.tostring(suite, encoding='unicode'))
 PYMOCK
 cat >"$fixture/android/gradlew" <<'SH'
 #!/usr/bin/env bash
 printf 'gradle %s\n' "$*" >>"$CALLS"
+printf 'gradle-start|%s\n' "$*" >>"$CALLS"
 printf 'selector|%s\n' "$ANDROID_SERIAL" >>"$CALLS"
 python3 scripts/mock-results.py "$@"
-exit "$GRADLE_STATUS"
+status=$?
+printf 'gradle-finish|%s|%s\n' "$*" "$status" >>"$CALLS"
+exit "$status"
 SH
 cat >"$fixture/android/scripts/test-worker-journey.sh" <<'SH'
 #!/usr/bin/env bash
@@ -147,14 +159,33 @@ run() {
   export DEVICE_API="$api"
   bash "$fixture/android/scripts/ci-instrumented.sh" "$api" || status=$?
   [[ "$status" == "$expected" && "$(cat "$out/test-exit-code.txt")" == "$expected" ]]
-  [[ "$(grep -c '^gradle ' "$CALLS")" == 1 ]]
   grep -Fxq 'selector|emulator-5554' "$CALLS"
-  local expectedGradle=':androidApp:connectedLocalDebugAndroidTest :androidApp:connectedDeployedDebugAndroidTest'
+  local tasks=(
+    :androidApp:connectedLocalDebugAndroidTest
+    :androidApp:connectedDeployedDebugAndroidTest
+  )
   if [[ "$api" == 36 ]]; then
-    expectedGradle+=' :wearApp:connectedLocalDebugAndroidTest :wearApp:connectedDeployedDebugAndroidTest'
+    tasks+=(
+      :wearApp:connectedLocalDebugAndroidTest
+      :wearApp:connectedDeployedDebugAndroidTest
+    )
   fi
-  expectedGradle+=' -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest'
-  grep -Fxq "gradle $expectedGradle" "$CALLS"
+  local expectedGradleLines=() expectedEvents=() taskArgs statusForTask
+  for task in "${tasks[@]}"; do
+    taskArgs="$task -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest"
+    expectedGradleLines+=("gradle $taskArgs")
+    statusForTask=0
+    if [[ "${GRADLE_STATUS:-0}" != 0 && "${#expectedGradleLines[@]}" == 1 ]]; then
+      statusForTask="$GRADLE_STATUS"
+    fi
+    expectedEvents+=("gradle-start|$taskArgs" "gradle-finish|$taskArgs|$statusForTask")
+  done
+  if [[ "${GRADLE_STATUS:-0}" != 0 ]]; then
+    expectedGradleLines=("${expectedGradleLines[0]}")
+    expectedEvents=("${expectedEvents[0]}" "${expectedEvents[1]}")
+  fi
+  [[ "$(grep '^gradle ' "$CALLS" || true)" == "$(printf '%s\n' "${expectedGradleLines[@]}")" ]]
+  [[ "$(grep -E '^gradle-(start|finish)[|]' "$CALLS" || true)" == "$(printf '%s\n' "${expectedEvents[@]}")" ]]
   if [[ "$GRADLE_STATUS" == 0 ]]; then
     grep -Fxq "validator|androidApp/build/outputs/androidTest-results/connected|$api|emulator-5554" "$CALLS"
     if [[ "$api" == 36 && ( "$expected" == 0 || "${RESULT_MODE:-pass}" == missing-wear || "${RESULT_MODE:-pass}" == wear-skip ) ]]; then

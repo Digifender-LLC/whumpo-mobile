@@ -51,7 +51,9 @@ if [[ "$api" == 36 ]]; then
     :wearApp:connectedDeployedDebugAndroidTest
   )
 fi
-./gradlew "${tasks[@]}" -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
+for task in "${tasks[@]}"; do
+  ./gradlew "$task" -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
+done
 python3 scripts/verify-instrumented-results.py "$results" "$api" "$ANDROID_SERIAL"
 if [[ "$api" == 36 ]]; then
   python3 scripts/verify-wear-instrumented-results.py "$wear_results" "$ANDROID_SERIAL"

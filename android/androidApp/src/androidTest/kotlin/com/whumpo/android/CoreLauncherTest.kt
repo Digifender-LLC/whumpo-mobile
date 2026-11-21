@@ -116,6 +116,7 @@ class CoreLauncherTest {
                 assertTrue("GET /v1/organization" !in fixture.requests)
                 compose.onNodeWithText("Open Today").assertDoesNotExist()
                 compose.onNodeWithText("Open Work").assertDoesNotExist()
+                assertTrue(fixture.requests.none { it.endsWith("/briefing/today") || it.endsWith("/work/tasks") })
 
                 fixture.readiness = CoreLauncherFixture.Readiness.Foreign
                 click("Check again")
@@ -123,13 +124,16 @@ class CoreLauncherTest {
                 assertTrue("GET /v1/organization" !in fixture.requests)
                 compose.onNodeWithText("Open Today").assertDoesNotExist()
                 compose.onNodeWithText("Open Work").assertDoesNotExist()
+                assertTrue(fixture.requests.none { it.endsWith("/briefing/today") || it.endsWith("/work/tasks") })
 
                 fixture.readiness = CoreLauncherFixture.Readiness.Ready
                 click("Check again")
                 awaitText("Fixture organization")
                 compose.onNodeWithText("Role: viewer").assertIsDisplayed()
                 awaitText("Organization access is active.")
-                assertTrue(fixture.requests.none { it.endsWith("/briefing/today") || it.endsWith("/work/tasks") })
+                val backgroundTodayReads = fixture.requests.count { it == "GET /v1/briefing/today" }
+                assertTrue(backgroundTodayReads <= 1, "only the session-scoped background Today read is allowed: ${fixture.requests}")
+                assertTrue(fixture.requests.none { it.endsWith("/work/tasks") }, "Work waits for explicit user navigation")
                 click("Open Today")
                 awaitText("Loading Today…")
                 compose.waitUntil(10_000) { fixture.staleTodayRequested.isCompleted }
@@ -165,27 +169,34 @@ class CoreLauncherTest {
                 assertTrue("POST /v1/account-security/sign-out" !in fixture.requests)
                 fixture.releaseRevocation.complete(Unit)
                 compose.waitUntil(10_000) { "POST /v1/account-security/sign-out" in fixture.requests }
-                assertEquals(
-                    listOf(
+                val expectedManualRequests = listOf(
                         "POST /v1/account-security/password/login/start",
                         "POST /v1/account-security/password/login/verify",
                         "GET /v1/account-security/organizations",
                         "POST /v1/account-security/session",
                         "GET /v1/auth/session",
-                        "GET /v1/organization/readiness",
-                        "GET /v1/organization/readiness",
-                        "GET /v1/organization/readiness",
                         "GET /v1/organization",
                         "GET /v1/organization/entitlements",
-                        "GET /v1/briefing/today",
-                        "GET /v1/briefing/today",
                         "GET /v1/work/tasks",
                         "GET /v1/work/tasks",
                         "GET /v1/work/tasks",
                         "DELETE /v1/auth/session",
                         "POST /v1/account-security/sign-out",
-                    ),
-                    fixture.requests.filterNot { it in setOf("GET /v1/workspaces", "GET /v1/projects", "GET /v1/customers") },
+                )
+                assertTrue(
+                    fixture.requests.count { it == "GET /v1/briefing/today" } in 2..3,
+                    "two explicit Today openings plus at most one scoped background read",
+                )
+                assertTrue(
+                    fixture.requests.count { it == "GET /v1/organization/readiness" } in 3..4,
+                    "three UI readiness checks plus at most one process-owned check",
+                )
+                assertEquals(
+                    expectedManualRequests,
+                    fixture.requests.filterNot {
+                        it == "GET /v1/briefing/today" || it == "GET /v1/organization/readiness" ||
+                            it in setOf("GET /v1/workspaces", "GET /v1/projects", "GET /v1/customers")
+                    },
                 )
                 for (path in listOf("workspaces", "projects", "customers")) assertEquals(2, fixture.requests.count { it == "GET /v1/$path" })
             }
@@ -470,6 +481,7 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
             }
             "GET /v1/briefing/today" -> {
                 assertEquals("Bearer $token", authorization)
+                assertEquals(Readiness.Ready, readiness, "Today cannot be read before this organization is ready")
                 val title = if (requests.count { it == route } == 1) {
                     staleTodayRequested.complete(Unit)
                     withContext(NonCancellable) {
