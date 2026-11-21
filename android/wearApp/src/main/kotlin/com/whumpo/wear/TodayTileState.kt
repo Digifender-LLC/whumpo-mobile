@@ -1,10 +1,11 @@
 package com.whumpo.wear
 
 import java.time.Instant
+import com.whumpo.core.wear.CoreWearTodaySnapshot
 
 // Core Today returns up to ten rows per section and a separate truncation bit.
 internal const val TODAY_SECTION_LIMIT = 10
-internal const val MAX_AGE_MILLIS = 5 * 60_000L
+internal const val MAX_AGE_MILLIS = CoreWearTodaySnapshot.MAX_AGE_MILLIS
 
 internal data class TodayCount(val count: Int, val truncated: Boolean = false) {
     val valid: Boolean
@@ -19,7 +20,11 @@ internal data class TodayCounts(val approvals: TodayCount, val blocked: TodayCou
 }
 
 /** Contains only aggregate section counts and the canonical Today generation time. */
-internal data class TodayTileSnapshot(val generatedAt: Instant, val counts: TodayCounts)
+internal data class TodayTileSnapshot(
+    val generatedAt: Instant,
+    val counts: TodayCounts,
+    val expiresAtMillis: Long = generatedAt.toEpochMilli() + MAX_AGE_MILLIS,
+)
 
 internal sealed interface TodayTileState {
     data object Unavailable : TodayTileState
@@ -37,6 +42,9 @@ internal fun todayTileState(snapshot: TodayTileSnapshot?, nowMillis: Long): Toda
         return TodayTileState.Unavailable
     }
     val generatedAtMillis = snapshot.generatedAt.toEpochMilli()
-    if (generatedAtMillis > Long.MAX_VALUE - MAX_AGE_MILLIS) return TodayTileState.Unavailable
-    return TodayTileState.Available(snapshot.generatedAt, generatedAtMillis + MAX_AGE_MILLIS, snapshot.counts)
+    if (generatedAtMillis > Long.MAX_VALUE - MAX_AGE_MILLIS ||
+        snapshot.expiresAtMillis <= nowMillis || snapshot.expiresAtMillis <= generatedAtMillis ||
+        snapshot.expiresAtMillis - generatedAtMillis > MAX_AGE_MILLIS
+    ) return TodayTileState.Unavailable
+    return TodayTileState.Available(snapshot.generatedAt, snapshot.expiresAtMillis, snapshot.counts)
 }

@@ -59,7 +59,7 @@ open class WhumpoApplication : Application() {
         val settings = configuredCoreSettings() ?: return null
         val engine = syntheticCoreEngine()
         val api = if (engine == null) coreApiClient(settings.origin) else coreApiClient(settings.origin, engine)
-        return CorePhoneComposition(settings, api, appScope).also { coreComposition = it }
+        return CorePhoneComposition(settings, api, this, appScope).also { coreComposition = it }
     }
 
     @Synchronized

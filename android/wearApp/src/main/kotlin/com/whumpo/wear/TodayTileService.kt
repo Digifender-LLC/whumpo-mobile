@@ -28,7 +28,8 @@ import java.util.Date
 
 class TodayTileService : Material3TileService() {
     override suspend fun MaterialScope.tileResponse(requestParams: TileRequest): Tile {
-        val snapshot = TodayTileSource.snapshot()
+        TodayTileSource.refresh(this@TodayTileService)
+        val snapshot = TodayTileSource.snapshot(this@TodayTileService)
         val state = todayTileState(snapshot, System.currentTimeMillis())
         return tile(timeline = todayTileTimeline(this@TodayTileService, state))
     }

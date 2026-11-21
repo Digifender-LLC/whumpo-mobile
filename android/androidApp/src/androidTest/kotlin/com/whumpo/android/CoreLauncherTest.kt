@@ -233,6 +233,7 @@ class CoreLauncherTest {
                     setOf("https://core.example.test"),
                 ),
                 it,
+                app,
             )
         }
         app.coreLauncherEngine = fixture::engine
