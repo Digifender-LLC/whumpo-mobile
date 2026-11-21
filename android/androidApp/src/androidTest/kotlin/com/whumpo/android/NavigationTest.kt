@@ -54,7 +54,7 @@ class NavigationTest {
     fun signedOutShowsWelcomeInsteadOfTheShell() {
         Fixtures.reset()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("auth-sign-in").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNode(isHeading() and hasText("Welcome back to Whumpo.")).assertIsDisplayed()
+        compose.onNode(isHeading() and hasText("Welcome to Whumpo.")).assertIsDisplayed()
         compose.onNodeWithTag("nav-chat").assertDoesNotExist()
     }
 

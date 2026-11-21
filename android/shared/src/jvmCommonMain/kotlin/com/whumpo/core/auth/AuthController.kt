@@ -210,8 +210,7 @@ class AuthController(
             throw e
         } catch (e: MobileApiException) {
             if (genericProblem == null || e.isDistinctHandoffProblem()) throw e
-            currentCoroutineContext().ensureActive()
-            step.value = Step.Problem(genericProblem)
+            publishInviteStartFailure(genericProblem)
             return
         } catch (e: Exception) {
             if (genericProblem == null) throw e
@@ -417,6 +416,12 @@ class AuthController(
         is MobileApiException.Unavailable,
         -> true
         else -> false
+    }
+
+    /** A generic invite error is only current while its launch step still owns this controller. */
+    internal suspend fun publishInviteStartFailure(problem: AuthProblem) {
+        currentCoroutineContext().ensureActive()
+        step.value = Step.Problem(problem)
     }
 
     private fun tooLarge(json: String) = json.toByteArray(Charsets.UTF_8).size > MAX_CREDENTIAL_BYTES

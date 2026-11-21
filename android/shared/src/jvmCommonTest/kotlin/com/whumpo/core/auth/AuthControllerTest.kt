@@ -16,12 +16,17 @@ import java.io.IOException
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.startCoroutine
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -730,6 +735,25 @@ class AuthControllerTest {
         settle()
         assertEquals(AuthState.SignedOut(), auth.state.value)
         assertTrue(browser.opened.isEmpty())
+    }
+
+    @Test
+    fun aCancelledInviteErrorCannotPublishIntoTheCurrentControllerState() = test {
+        started()
+        val cancelledJob = Job().apply { cancel() }
+        var completion: Result<Unit>? = null
+        val publishFailure: suspend () -> Unit = { auth.publishInviteStartFailure(AuthProblem.InviteStartFailed) }
+        publishFailure.startCoroutine(
+            object : Continuation<Unit> {
+                override val context: CoroutineContext = cancelledJob
+                override fun resumeWith(result: Result<Unit>) {
+                    completion = result
+                }
+            },
+        )
+
+        assertTrue(completion?.exceptionOrNull() is CancellationException)
+        assertEquals(AuthState.SignedOut(), auth.state.value)
     }
 
     @Test

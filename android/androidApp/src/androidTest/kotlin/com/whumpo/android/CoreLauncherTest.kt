@@ -330,7 +330,7 @@ class CoreLauncherTest {
         .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER))
 
     private fun awaitLegacyEntry() {
-        awaitText("Welcome back to Whumpo.")
+        awaitText("Welcome to Whumpo.")
         compose.onNodeWithTag("auth-sign-in").assertIsDisplayed()
         compose.onNodeWithText("Open Core sign-in").assertDoesNotExist()
     }
