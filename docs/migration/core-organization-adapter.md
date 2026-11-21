@@ -16,6 +16,10 @@ The follow-up offline build compiled JVM and Android main and passed all eight f
 
 ## Android passkey preview
 
+The main launcher can also compose the same account-security and organization-session controllers when both non-secret Gradle properties `whumpo.coreApiOrigin` and `whumpo.coreRpId` are provided. The API origin must be one canonical HTTPS origin and is used as an exact allowlist entry; the RP ID is configured separately and checked against every server-issued WebAuthn challenge. Leave both unset to keep the existing launcher and disable Core API access. Partial configuration fails the Android build. The Core session and account controllers are owned by the app process, while Credential Manager remains bound to the foreground Activity. Core account/workspace credentials stay inside those existing controllers and are never copied from the legacy mobile client.
+
+The two values must match the deployment's exact native account-security endpoint and shared `AUTH_SETTINGS.rpId`. The tracked app configuration deliberately has no production Core tuple. The observed `https://whumpo.com` Core front door establishes routing only; it does not establish native `ACCOUNT_ANDROID_WEBAUTHN` endpoint/RP configuration or authenticated API compatibility. Local Worker/D1 evidence and real Credential Manager/release evidence remain separate.
+
 The `localDebug` APK includes a non-exported `CorePreviewActivity`. It leaves the default launcher and legacy mobile transport in place. The preview uses the core passkey options and verification routes and calls Android Credential Manager with the returned WebAuthn options. It resolves the resulting server-issued bearer against the session endpoint and holds it in memory while the Activity lives. The screen shows the selected organization and its membership coverage. Changing organizations invalidates the prior screen data and cancels its pending load.
 
 A developer can launch the preview from the app's debug UID after installing the local debug APK and forwarding the local Worker:

@@ -27,11 +27,17 @@ class FixtureTestRunner : AndroidJUnitRunner() {
 
 class FixtureApplication : WhumpoApplication() {
     var coreLauncherEngine: (() -> HttpClientEngine)? = null
+    var coreApiOriginOverride: String? = null
+    var coreRpIdOverride: String? = null
 
     override fun syntheticCoreEndpoint(): String =
         if (coreLauncherEngine == null) "" else super.syntheticCoreEndpoint().ifEmpty { "https://core.example.test" }
 
     override fun syntheticCoreEngine(): HttpClientEngine? = coreLauncherEngine?.invoke()
+
+    override fun configuredCoreApiOrigin(): String = coreApiOriginOverride ?: super.configuredCoreApiOrigin()
+
+    override fun configuredCoreRpId(): String = coreRpIdOverride ?: super.configuredCoreRpId()
 
     override fun createContainer(): AppContainer {
         return AppContainer(

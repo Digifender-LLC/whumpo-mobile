@@ -13,7 +13,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -31,7 +30,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.whumpo.android.ui.theme.WhumpoEntryTheme
 import com.whumpo.android.ui.theme.WhumpoPrimaryButton
 import com.whumpo.android.ui.theme.WhumpoQuietButton
-import com.whumpo.core.api.CoreApiClient
 import com.whumpo.core.api.CoreEntitlementStatus
 import com.whumpo.core.api.CoreMembership
 import com.whumpo.core.api.CoreMembershipPage
@@ -40,8 +38,8 @@ import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreTodayBriefing
 import com.whumpo.core.api.CoreTodayTaskOperation
 import com.whumpo.core.auth.AccountPasskeys
-import com.whumpo.core.auth.CoreAccountSecurityController
 import com.whumpo.core.auth.CoreOrganizationSessionController
+import com.whumpo.android.CorePhoneComposition
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
@@ -50,21 +48,16 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun CoreLauncher(api: CoreApiClient, passkeys: AccountPasskeys) {
-    val sessions = remember(api) { CoreOrganizationSessionController(api) }
-    val accounts = remember(api, sessions) {
-        CoreAccountSecurityController(api, sessions, api.origin.value.removePrefix("https://"))
-    }
+internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPasskeys) {
+    val sessions = composition.organizations
+    val accounts = composition.accounts
     val session by sessions.state.collectAsStateWithLifecycle()
     val account by accounts.state.collectAsStateWithLifecycle()
-    var showSignIn by remember(api) { mutableStateOf(false) }
-    var switching by remember(api) { mutableStateOf(false) }
-    var switchUnconfirmed by remember(api) { mutableStateOf(false) }
-    var signOutUnconfirmed by remember(api) { mutableStateOf(false) }
+    var showSignIn by remember(composition) { mutableStateOf(false) }
+    var switching by remember(composition) { mutableStateOf(false) }
+    var switchUnconfirmed by remember(composition) { mutableStateOf(false) }
+    var signOutUnconfirmed by remember(composition) { mutableStateOf(false) }
     val actions = rememberCoroutineScope()
-    DisposableEffect(accounts) {
-        onDispose { accounts.clear() }
-    }
     val active = session as? CoreOrganizationSessionController.State.Active
     LaunchedEffect(active) {
         if (active != null) {

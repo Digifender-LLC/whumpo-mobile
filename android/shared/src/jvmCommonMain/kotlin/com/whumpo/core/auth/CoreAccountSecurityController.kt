@@ -3,6 +3,7 @@ package com.whumpo.core.auth
 import com.whumpo.core.api.AccountSecurityState
 import com.whumpo.core.api.CORE_MAX_VERSION
 import com.whumpo.core.api.CoreApiClient
+import com.whumpo.core.api.CoreClientSettings
 import com.whumpo.core.api.CoreHttpException
 import com.whumpo.core.api.CoreProtocolException
 import com.whumpo.core.api.CoreRole
@@ -243,8 +244,7 @@ class CoreAccountSecurityController(
     val state = mutableState.asStateFlow()
 
     init {
-        require(rpId == null || Regex("[a-z0-9]+(?:[-.][a-z0-9]+)+").matches(rpId))
-        require(!api.origin.value.startsWith("https://") || api.origin.value == "https://$rpId")
+        require(rpId == null || CoreClientSettings.isCanonicalRpId(rpId))
     }
 
     fun clear() {

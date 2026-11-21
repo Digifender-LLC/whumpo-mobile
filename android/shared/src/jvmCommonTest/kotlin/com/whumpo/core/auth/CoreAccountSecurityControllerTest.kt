@@ -492,6 +492,27 @@ class CoreAccountSecurityControllerTest {
     }
 
     @Test
+    fun nativeApiOriginMayDifferFromTheExplicitSharedRpId() = runTest {
+        val apiOrigin = CoreOrigin.allowlisted("https://api.example.test", setOf("https://api.example.test"))
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/v1/account-security/passkey/login/options" ->
+                    respond("""{"challengeId":"login:1","options":${requestOptions(rp)}}""")
+                "/v1/account-security/passkey/login/verify" ->
+                    respond(grant(false, state(false, phase = "legacy")))
+                else -> error("Unexpected route ${request.url.encodedPath}")
+            }
+        }
+        CoreApiClient(engine, apiOrigin).use { api ->
+            val workspace = CoreOrganizationSessionController(api) { 1 }
+            val controller = CoreAccountSecurityController(api, workspace, rp) { 1 }
+
+            assertTrue(controller.loginPasskey(passkeys))
+            assertEquals(SecurityPurpose.Account, controller.state.value?.purpose)
+        }
+    }
+
+    @Test
     fun credentialManagerNeverSeesMismatchedRpOptions() = runTest {
         val engine = MockEngine { request ->
             assertEquals("/v1/account-security/passkey/login/options", request.url.encodedPath)

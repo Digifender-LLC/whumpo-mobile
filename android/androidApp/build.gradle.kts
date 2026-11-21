@@ -26,7 +26,20 @@ val localCoreOrigin = providers.gradleProperty("whumpo.localCoreOrigin").getOrEl
 val localCoreRp = providers.gradleProperty("whumpo.localCoreRp").getOrElse("")
 val localWorkWebOrigin = providers.gradleProperty("whumpo.localWorkWebOrigin").getOrElse("")
 val syntheticCoreOrigin = providers.gradleProperty("whumpo.syntheticCoreEntryOrigin").getOrElse("")
+val coreApiOrigin = providers.gradleProperty("whumpo.coreApiOrigin").getOrElse("")
+val coreRpId = providers.gradleProperty("whumpo.coreRpId").getOrElse("")
+val coreDnsLabel = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+val coreHostPattern = Regex("(?:$coreDnsLabel\\.)+$coreDnsLabel")
 require(syntheticCoreOrigin.isEmpty() || syntheticCoreOrigin == "https://core.example.test")
+require((coreApiOrigin.isEmpty()) == (coreRpId.isEmpty())) {
+    "Configure both whumpo.coreApiOrigin and whumpo.coreRpId, or leave both empty"
+}
+require(coreApiOrigin.isEmpty() || Regex("https://(?:$coreDnsLabel\\.)+$coreDnsLabel").matches(coreApiOrigin)) {
+    "whumpo.coreApiOrigin must be one canonical HTTPS origin"
+}
+require(coreRpId.isEmpty() || (coreRpId.length <= 253 && coreHostPattern.matches(coreRpId) && !Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}").matches(coreRpId))) {
+    "whumpo.coreRpId must be one canonical WebAuthn RP ID"
+}
 require(Regex("https://[a-z0-9]+(?:[-.][a-z0-9]+)+|http://127\\.0\\.0\\.1:[1-9][0-9]{0,4}").matches(localCoreOrigin))
 require(localCoreRp.isEmpty() || Regex("[a-z0-9]+(?:[-.][a-z0-9]+)+").matches(localCoreRp))
 require(!localCoreOrigin.startsWith("https://") || localCoreOrigin == "https://$localCoreRp")
@@ -46,6 +59,8 @@ android {
         // once uploaded. This is not release authority: signing and Play actions stay with the owner.
         applicationId = "com.whumpo.android"
         buildConfigField("String", "WHUMPO_SYNTHETIC_CORE_ORIGIN", "\"\"")
+        buildConfigField("String", "WHUMPO_CORE_API_ORIGIN", "\"$coreApiOrigin\"")
+        buildConfigField("String", "WHUMPO_CORE_RP_ID", "\"$coreRpId\"")
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = versionProps.getProperty("versionCodeBase").toInt() + runNumber
