@@ -16,6 +16,7 @@ android {
         versionCode = 1
         versionName = "0.1"
         buildConfigField("String", "TILE_FIXTURE", "\"\"")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures { buildConfig = true }
@@ -33,4 +34,7 @@ dependencies {
     implementation("androidx.wear.protolayout:protolayout:1.4.2")
     implementation("androidx.wear.protolayout:protolayout-material3:1.4.2")
     testImplementation(kotlin("test-junit", libs.versions.kotlin.get()))
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
