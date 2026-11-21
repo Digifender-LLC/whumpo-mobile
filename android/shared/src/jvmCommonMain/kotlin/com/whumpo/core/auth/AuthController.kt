@@ -210,6 +210,7 @@ class AuthController(
             throw e
         } catch (e: MobileApiException) {
             if (genericProblem == null || e.isDistinctHandoffProblem()) throw e
+            currentCoroutineContext().ensureActive()
             step.value = Step.Problem(genericProblem)
             return
         } catch (e: Exception) {

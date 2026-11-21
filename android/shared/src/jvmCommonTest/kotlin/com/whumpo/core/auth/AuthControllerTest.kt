@@ -103,6 +103,8 @@ class AuthControllerTest {
 
         /** path -> replacement status and body; `null` makes the request fail like a dropped connection. */
         val overrides = mutableMapOf<String, Pair<Int, String>?>()
+        var handoffStartGate: CompletableDeferred<Unit>? = null
+        var handoffStartEntered: CompletableDeferred<Unit>? = null
         var bootstrapGate: CompletableDeferred<Unit>? = null
         var bootstrapEntered: CompletableDeferred<Unit>? = null
         val store = AccountStateStore(dir, box)
@@ -115,6 +117,10 @@ class AuthControllerTest {
                 calls += Call(path, request.headers[HttpHeaders.Authorization], request.body.toByteArray().decodeToString())
                 val override = if (overrides.containsKey(path)) overrides[path] ?: throw IOException("connection dropped") else null
                 val (status, body) = override ?: (200 to checkNotNull(ok[path]) { "unexpected $path" })
+                if (path == "/session/handoff/start") {
+                    handoffStartEntered?.complete(Unit)
+                    withContext(NonCancellable) { handoffStartGate?.await() }
+                }
                 if (path == "/bootstrap") {
                     val gate = bootstrapGate
                     bootstrapEntered?.complete(Unit)
@@ -706,6 +712,23 @@ class AuthControllerTest {
         overrides["/session/handoff/start"] = 409 to err("identity_changed")
         auth.startInvite()
         await(AuthState.SignedOut(AuthProblem.Generic))
+        assertTrue(browser.opened.isEmpty())
+    }
+
+    @Test
+    fun aLateGenericInviteFailureCannotReplaceASignedOutState() = test {
+        overrides["/session/handoff/start"] = 500 to err("gateway_failure")
+        handoffStartGate = CompletableDeferred()
+        handoffStartEntered = CompletableDeferred()
+
+        auth.startInvite()
+        handoffStartEntered!!.await()
+        withContext(Dispatchers.Default) { auth.signOutNow() }
+        assertEquals(AuthState.SignedOut(), auth.state.value)
+
+        handoffStartGate!!.complete(Unit)
+        settle()
+        assertEquals(AuthState.SignedOut(), auth.state.value)
         assertTrue(browser.opened.isEmpty())
     }
 
