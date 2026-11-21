@@ -25,6 +25,7 @@ class AuthScreenshotTest : RobolectricUiTest() {
         "auth-welcome-no-passkey" to { AuthFlow(AuthState.SignedOut(AuthProblem.NoPasskey), RecordingActions()) },
         "auth-welcome-network" to { AuthFlow(AuthState.SignedOut(AuthProblem.Network), RecordingActions()) },
         "auth-welcome-session-ended" to { AuthFlow(AuthState.SignedOut(AuthProblem.SessionEnded), RecordingActions()) },
+        "auth-welcome-invite-start-failed" to { AuthFlow(AuthState.SignedOut(AuthProblem.InviteStartFailed), RecordingActions()) },
         "auth-waiting" to { AuthFlow(AuthState.WaitingForBrowser(), RecordingActions()) },
         "auth-exchanging" to { AuthFlow(AuthState.WaitingForBrowser(exchanging = true), RecordingActions()) },
         "auth-finish-setup" to { AuthFlow(AuthState.FinishSetup(canCheck = true, canOpen = true), RecordingActions()) },
@@ -39,7 +40,7 @@ class AuthScreenshotTest : RobolectricUiTest() {
 
     @Test
     fun signInScreensAtLargeText() {
-        for ((name, scene) in scenes.filter { it.first in setOf("auth-welcome-no-passkey", "auth-finish-setup") }) {
+        for ((name, scene) in scenes.filter { it.first in setOf("auth-welcome-no-passkey", "auth-welcome-invite-start-failed", "auth-finish-setup") }) {
             capture(name, Screen.Compact, dark = false, fontScale = 2f, content = scene)
         }
     }

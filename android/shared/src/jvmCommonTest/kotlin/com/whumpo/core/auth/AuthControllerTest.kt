@@ -16,12 +16,17 @@ import java.io.IOException
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.startCoroutine
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -103,6 +108,8 @@ class AuthControllerTest {
 
         /** path -> replacement status and body; `null` makes the request fail like a dropped connection. */
         val overrides = mutableMapOf<String, Pair<Int, String>?>()
+        var handoffStartGate: CompletableDeferred<Unit>? = null
+        var handoffStartEntered: CompletableDeferred<Unit>? = null
         var bootstrapGate: CompletableDeferred<Unit>? = null
         var bootstrapEntered: CompletableDeferred<Unit>? = null
         val store = AccountStateStore(dir, box)
@@ -115,6 +122,10 @@ class AuthControllerTest {
                 calls += Call(path, request.headers[HttpHeaders.Authorization], request.body.toByteArray().decodeToString())
                 val override = if (overrides.containsKey(path)) overrides[path] ?: throw IOException("connection dropped") else null
                 val (status, body) = override ?: (200 to checkNotNull(ok[path]) { "unexpected $path" })
+                if (path == "/session/handoff/start") {
+                    handoffStartEntered?.complete(Unit)
+                    withContext(NonCancellable) { handoffStartGate?.await() }
+                }
                 if (path == "/bootstrap") {
                     val gate = bootstrapGate
                     bootstrapEntered?.complete(Unit)
@@ -646,6 +657,103 @@ class AuthControllerTest {
         auth.startInvite()
         await(AuthState.WaitingForBrowser())
         assertEquals("signup", body("/session/handoff/start")["purpose"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun aGenericInviteStartFailureOffersAnExplicitFreshRetry() = test {
+        overrides["/session/handoff/start"] = 500 to err("gateway_failure")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.InviteStartFailed))
+        assertTrue(browser.opened.isEmpty())
+
+        val firstStart = body("/session/handoff/start")
+        overrides.remove("/session/handoff/start")
+        auth.startInvite()
+        await(AuthState.WaitingForBrowser())
+
+        val starts = calls.filter { it.path == "/session/handoff/start" }
+        assertEquals(2, starts.size)
+        val retry = Json.parseToJsonElement(starts.last().body).jsonObject
+        assertEquals("signup", retry["purpose"]!!.jsonPrimitive.content)
+        assertFalse(firstStart["state"] == retry["state"])
+        assertFalse(firstStart["codeChallenge"] == retry["codeChallenge"])
+        assertEquals(listOf("https://whumpo.com$browserPath"), browser.opened.toList())
+    }
+
+    @Test
+    fun aGenericSigninHandoffFailureKeepsTheExistingCopy() = test {
+        overrides["/session/handoff/start"] = 500 to err("gateway_failure")
+        auth.signInWithBrowser()
+        await(AuthState.SignedOut(AuthProblem.Generic))
+        assertTrue(browser.opened.isEmpty())
+    }
+
+    @Test
+    fun inviteStartKeepsKnownNetworkAndAuthorityFailuresDistinct() = test {
+        overrides["/session/handoff/start"] = null
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.Network))
+
+        overrides["/session/handoff/start"] = 429 to err("rate_limited", "\"retryAfterSeconds\":60")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.RateLimited))
+
+        overrides["/session/handoff/start"] = 503 to err("unavailable")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.ServiceUnavailable))
+
+        overrides["/session/handoff/start"] = 401 to err("proof_required", "\"proof\":\"signin\"")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.Rejected))
+
+        overrides["/session/handoff/start"] = 403 to err("identity_incomplete", "\"next\":\"browser\"")
+        auth.startInvite()
+        await(AuthState.FinishSetup(canOpen = true))
+
+        overrides["/session/handoff/start"] = 426 to err("client_update_required")
+        auth.startInvite()
+        await(AuthState.UpdateRequired)
+
+        overrides["/session/handoff/start"] = 409 to err("identity_changed")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.Generic))
+        assertTrue(browser.opened.isEmpty())
+    }
+
+    @Test
+    fun aLateGenericInviteFailureCannotReplaceASignedOutState() = test {
+        overrides["/session/handoff/start"] = 500 to err("gateway_failure")
+        handoffStartGate = CompletableDeferred()
+        handoffStartEntered = CompletableDeferred()
+
+        auth.startInvite()
+        handoffStartEntered!!.await()
+        withContext(Dispatchers.Default) { auth.signOutNow() }
+        assertEquals(AuthState.SignedOut(), auth.state.value)
+
+        handoffStartGate!!.complete(Unit)
+        settle()
+        assertEquals(AuthState.SignedOut(), auth.state.value)
+        assertTrue(browser.opened.isEmpty())
+    }
+
+    @Test
+    fun aCancelledInviteErrorCannotPublishIntoTheCurrentControllerState() = test {
+        started()
+        val cancelledJob = Job().apply { cancel() }
+        var completion: Result<Unit>? = null
+        val publishFailure: suspend () -> Unit = { auth.publishInviteStartFailure(AuthProblem.InviteStartFailed) }
+        publishFailure.startCoroutine(
+            object : Continuation<Unit> {
+                override val context: CoroutineContext = cancelledJob
+                override fun resumeWith(result: Result<Unit>) {
+                    completion = result
+                }
+            },
+        )
+
+        assertTrue(completion?.exceptionOrNull() is CancellationException)
+        assertEquals(AuthState.SignedOut(), auth.state.value)
     }
 
     @Test

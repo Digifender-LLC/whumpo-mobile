@@ -23,6 +23,8 @@ enum class AuthProblem {
 
     /** Credential Manager's response is over the contract's 8 KiB limit; nothing was sent. */
     CredentialTooLarge,
+    /** A signup hand-off could not start; retrying starts a fresh browser hand-off. */
+    InviteStartFailed,
     Generic,
 }
 
