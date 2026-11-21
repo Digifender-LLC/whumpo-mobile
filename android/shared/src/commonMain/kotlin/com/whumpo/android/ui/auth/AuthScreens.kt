@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Image
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -44,6 +45,9 @@ import com.whumpo.android.ui.theme.WhumpoSecondaryButton
 import com.whumpo.core.auth.AuthActions
 import com.whumpo.core.auth.AuthProblem
 import com.whumpo.core.auth.AuthState
+import com.whumpo.shared.resources.Res
+import com.whumpo.shared.resources.whumpo_horn_mark
+import org.jetbrains.compose.resources.painterResource
 
 private val Target = 56.dp
 private val QuietTarget = 48.dp
@@ -75,9 +79,13 @@ fun WelcomeScreen(state: AuthState.SignedOut, actions: AuthActions, modifier: Mo
     WhumpoEntryTheme(darkTheme = dark) {
         Surface(Modifier.fillMaxSize()) {
             AuthPage(modifier.testTag("auth-welcome")) {
-                Text("Whumpo", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                Title("Welcome back to Whumpo.", display = true)
-                Body("Use your passkey to return to your workspace.")
+                Image(
+                    painter = painterResource(Res.drawable.whumpo_horn_mark),
+                    contentDescription = null,
+                    modifier = Modifier.size(56.dp).testTag("auth-brand-mark"),
+                )
+                Title("Welcome to Whumpo.", display = true)
+                Body("Sign in with a passkey, or continue in your browser with an invite.")
                 state.problem?.let { ProblemCard(it) }
                 WhumpoPrimaryButton(
                     onClick = actions::signInWithPasskey,
@@ -110,7 +118,7 @@ fun WelcomeScreen(state: AuthState.SignedOut, actions: AuthActions, modifier: Mo
                     onClick = actions::startInvite,
                     enabled = !state.busy,
                     modifier = Modifier.heightIn(min = QuietTarget).testTag("auth-invite"),
-                ) { Text("New to Whumpo? Start with an invite") }
+                ) { Text("Have an invite? Continue in your browser") }
                 WhumpoQuietButton(onClick = actions::openHelp, modifier = Modifier.heightIn(min = QuietTarget).testTag("auth-help")) {
                     Text("Get help")
                 }
@@ -243,6 +251,7 @@ internal fun problemCopy(problem: AuthProblem): Pair<String, String> = when (pro
     AuthProblem.HandoffFailed -> "The browser sign-in didn't finish." to "Nothing was changed. Start again."
     AuthProblem.NoBrowser -> "No browser could open." to "Nothing was changed. Install or enable a browser, then try again."
     AuthProblem.CredentialTooLarge -> "This passkey's response was too large to send." to "Nothing was changed. Try another passkey, or sign in through the browser."
+    AuthProblem.InviteStartFailed -> "We couldn't start your invite." to "Your account is unchanged. Try again to continue in your browser."
     AuthProblem.Generic -> "Something went wrong." to "Nothing was changed. Try again."
 }
 

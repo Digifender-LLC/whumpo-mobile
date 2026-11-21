@@ -198,13 +198,26 @@ class AuthController(
 
     override fun startInvite() = launchStep {
         step.value = Step.Busy
-        startHandoff("signup")
+        startHandoff("signup", genericProblem = AuthProblem.InviteStartFailed)
     }
 
-    private suspend fun startHandoff(purpose: String) {
+    private suspend fun startHandoff(purpose: String, genericProblem: AuthProblem? = null) {
         val verifier = Pkce.newVerifier()
         val state = Pkce.newState()
-        val response = api.handoffStart(HandoffStartRequest(purpose, state, Pkce.challenge(verifier), RETURN_URI))
+        val response = try {
+            api.handoffStart(HandoffStartRequest(purpose, state, Pkce.challenge(verifier), RETURN_URI))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MobileApiException) {
+            if (genericProblem == null || e.isDistinctHandoffProblem()) throw e
+            step.value = Step.Problem(genericProblem)
+            return
+        } catch (e: Exception) {
+            if (genericProblem == null) throw e
+            currentCoroutineContext().ensureActive()
+            step.value = Step.Problem(genericProblem)
+            return
+        }
         currentCoroutineContext().ensureActive()
         val url = browserUrl(response.browserPath)
         if (url == null) {
@@ -389,6 +402,20 @@ class AuthController(
         is MobileApiException.Unavailable -> AuthProblem.ServiceUnavailable
         is MobileApiException.ProofRequired -> AuthProblem.Rejected
         else -> AuthProblem.Generic
+    }
+
+    /** Keep contract statuses that carry authentication, update, network, or service authority intact. */
+    private fun MobileApiException.isDistinctHandoffProblem(): Boolean = when (this) {
+        is MobileApiException.ClientUpdateRequired,
+        is MobileApiException.IdentityIncomplete,
+        is MobileApiException.OnboardingRequired,
+        is MobileApiException.IdentityChanged,
+        is MobileApiException.ProofRequired,
+        is MobileApiException.Transport,
+        is MobileApiException.RateLimited,
+        is MobileApiException.Unavailable,
+        -> true
+        else -> false
     }
 
     private fun tooLarge(json: String) = json.toByteArray(Charsets.UTF_8).size > MAX_CREDENTIAL_BYTES

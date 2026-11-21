@@ -56,13 +56,38 @@ class AuthScreensTest : RobolectricUiTest() {
     fun welcomeHasOneHeadingOnePrimaryAndQuietLinks() {
         val actions = RecordingActions()
         show(AuthState.SignedOut(), actions).use {
-            compose.onNode(isHeading() and hasText("Welcome back to Whumpo.")).assertIsDisplayed()
+            compose.onNodeWithTag("auth-brand-mark").assertIsDisplayed()
+            compose.onNode(isHeading() and hasText("Welcome to Whumpo.")).assertIsDisplayed()
+            compose.onNode(hasText("Sign in with a passkey, or continue in your browser with an invite.")).assertIsDisplayed()
             compose.onNodeWithTag("auth-sign-in").assertHeightIsAtLeast(48.dp).assertIsEnabled().performClick()
             compose.onNodeWithTag("auth-invite").assertHeightIsAtLeast(48.dp).performClick()
             compose.onNodeWithTag("auth-help").assertHeightIsAtLeast(48.dp).performClick()
             absent("auth-problem"); absent("auth-browser"); absent("auth-preview")
         }
         assertEquals(listOf("passkey", "invite", "help"), actions.calls)
+    }
+
+    @Test
+    fun inviteStartFailureExplainsTheBrowserRetryAndKeepsTheActionAvailable() {
+        val actions = RecordingActions()
+        show(AuthState.SignedOut(AuthProblem.InviteStartFailed), actions).use {
+            compose.onNodeWithTag("auth-problem").assert(polite).assertIsDisplayed()
+            compose.onNode(hasText("We couldn't start your invite.")).assertIsDisplayed()
+            compose.onNode(hasText("Your account is unchanged. Try again to continue in your browser.")).assertIsDisplayed()
+            compose.onNodeWithTag("auth-invite").assertIsEnabled().performClick()
+        }
+        assertEquals(listOf("invite"), actions.calls)
+    }
+
+    @Test
+    fun inviteRetryRemainsReachableAtLargeText() {
+        val actions = RecordingActions()
+        show(AuthState.SignedOut(AuthProblem.InviteStartFailed), actions, font = 2f).use {
+            compose.onNodeWithTag("auth-problem").assertIsDisplayed()
+            compose.onNodeWithTag("auth-invite").performScrollTo().assertHeightIsAtLeast(48.dp).assertIsEnabled().performClick()
+            compose.onNodeWithTag("auth-help").performScrollTo().assertHeightIsAtLeast(48.dp).assertIsDisplayed()
+        }
+        assertEquals(listOf("invite"), actions.calls)
     }
 
     @Test

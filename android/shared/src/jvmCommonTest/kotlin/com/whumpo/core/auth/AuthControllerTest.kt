@@ -649,6 +649,67 @@ class AuthControllerTest {
     }
 
     @Test
+    fun aGenericInviteStartFailureOffersAnExplicitFreshRetry() = test {
+        overrides["/session/handoff/start"] = 500 to err("gateway_failure")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.InviteStartFailed))
+        assertTrue(browser.opened.isEmpty())
+
+        val firstStart = body("/session/handoff/start")
+        overrides.remove("/session/handoff/start")
+        auth.startInvite()
+        await(AuthState.WaitingForBrowser())
+
+        val starts = calls.filter { it.path == "/session/handoff/start" }
+        assertEquals(2, starts.size)
+        val retry = Json.parseToJsonElement(starts.last().body).jsonObject
+        assertEquals("signup", retry["purpose"]!!.jsonPrimitive.content)
+        assertFalse(firstStart["state"] == retry["state"])
+        assertFalse(firstStart["codeChallenge"] == retry["codeChallenge"])
+        assertEquals(listOf("https://whumpo.com$browserPath"), browser.opened.toList())
+    }
+
+    @Test
+    fun aGenericSigninHandoffFailureKeepsTheExistingCopy() = test {
+        overrides["/session/handoff/start"] = 500 to err("gateway_failure")
+        auth.signInWithBrowser()
+        await(AuthState.SignedOut(AuthProblem.Generic))
+        assertTrue(browser.opened.isEmpty())
+    }
+
+    @Test
+    fun inviteStartKeepsKnownNetworkAndAuthorityFailuresDistinct() = test {
+        overrides["/session/handoff/start"] = null
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.Network))
+
+        overrides["/session/handoff/start"] = 429 to err("rate_limited", "\"retryAfterSeconds\":60")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.RateLimited))
+
+        overrides["/session/handoff/start"] = 503 to err("unavailable")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.ServiceUnavailable))
+
+        overrides["/session/handoff/start"] = 401 to err("proof_required", "\"proof\":\"signin\"")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.Rejected))
+
+        overrides["/session/handoff/start"] = 403 to err("identity_incomplete", "\"next\":\"browser\"")
+        auth.startInvite()
+        await(AuthState.FinishSetup(canOpen = true))
+
+        overrides["/session/handoff/start"] = 426 to err("client_update_required")
+        auth.startInvite()
+        await(AuthState.UpdateRequired)
+
+        overrides["/session/handoff/start"] = 409 to err("identity_changed")
+        auth.startInvite()
+        await(AuthState.SignedOut(AuthProblem.Generic))
+        assertTrue(browser.opened.isEmpty())
+    }
+
+    @Test
     fun aReturnWithTheWrongStateIsIgnoredAndTheHandoffKeepsWaiting() = test {
         auth.signInWithBrowser()
         await(AuthState.WaitingForBrowser())
