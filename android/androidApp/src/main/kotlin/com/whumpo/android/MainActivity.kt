@@ -18,6 +18,7 @@ import com.whumpo.android.ui.WhumpoApp
 import com.whumpo.android.ui.share.SharedItem
 import com.whumpo.android.ui.shell.DeepLink
 import com.whumpo.android.ui.theme.WhumpoTheme
+import com.whumpo.core.auth.CoreSharedDraftItem
 
 class MainActivity : ComponentActivity() {
     private var coreComposition: CorePhoneComposition? = null
@@ -32,6 +33,13 @@ class MainActivity : ComponentActivity() {
             window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
             val passkeys = NativeAccountPasskeys(app, container.activities)
             setContent { CoreLauncher(core, passkeys) }
+            if (intent.action == Intent.ACTION_SEND) {
+                if (savedInstanceState == null && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) {
+                    handleCoreShare(intent)
+                } else {
+                    setIntent(Intent(this, MainActivity::class.java))
+                }
+            }
             return
         }
         val openPreview: (() -> Unit)? = if (BuildConfig.DEBUG && BuildConfig.WHUMPO_ENVIRONMENT == "local") {
@@ -57,11 +65,18 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         container.activities.started(this)
         coreComposition?.refreshWearToday()
+        coreComposition?.observeShareForeground(resumed = true, focused = hasWindowFocus())
     }
 
     override fun onStop() {
+        coreComposition?.observeShareForeground(resumed = false, focused = false)
         container.activities.stopped(this)
         super.onStop()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        coreComposition?.observeShareForeground(resumed = !isFinishing && !isDestroyed, focused = hasFocus)
     }
 
     // The verified App Link https://whumpo.com/app/return comes back here (launchMode singleTask).
@@ -69,6 +84,22 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (coreComposition == null) handleIntent(intent)
+        else if (intent.action == Intent.ACTION_SEND) handleCoreShare(intent)
+    }
+
+    /** The Core handoff is ephemeral and accepted only by the process-owned current ready session. */
+    private fun handleCoreShare(intent: Intent) {
+        val item = try {
+            if (intent.action != Intent.ACTION_SEND || intent.type != "text/plain" ||
+                intent.data != null || intent.hasExtra(Intent.EXTRA_STREAM)) null
+            else intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.let(CoreSharedDraftItem::parse)
+        } catch (_: RuntimeException) {
+            null
+        }
+        val accepted = item?.let { coreComposition?.offerSharedDraft(it) } == true
+        // Don't leave untrusted share extras on the activity's base intent for later recreation/Recents replay.
+        setIntent(Intent(this, MainActivity::class.java))
+        if (!accepted) Toast.makeText(this, R.string.core_share_unavailable, Toast.LENGTH_LONG).show()
     }
 
     private fun handleIntent(intent: Intent?) {

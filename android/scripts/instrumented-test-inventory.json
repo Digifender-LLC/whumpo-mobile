@@ -21,6 +21,9 @@
       "fullBackupContentExcludesEveryDomain"
     ],
     "com.whumpo.android.CoreLauncherTest": [
+      "coreShareColdActivityCreateUsesTheExistingReadySession",
+      "coreShareOnColdSignedOutLaunchIsDroppedInsteadOfQueued",
+      "coreShareOnNewIntentIsReviewedOnceAndClearedWhenAuthorityChanges",
       "defaultLauncherKeepsLegacyEntry",
       "explicitCoreConfigSelectsCoreOutsideTheSyntheticEnvironmentGate",
       "syntheticLauncherDiscardsReadsWhenWorkspaceSessionIsRevoked",

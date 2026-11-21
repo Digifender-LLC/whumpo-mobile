@@ -32,6 +32,7 @@ internal fun CoreWorkSurface(
     sessions: CoreOrganizationSessionController,
     active: CoreOrganizationSessionController.State.Active,
     onBack: () -> Unit,
+    initialTask: CoreWorkTask? = null,
     openTask: ((CoreWorkTask, String?) -> Unit)? = null,
     onListVisible: (Boolean) -> Unit = {},
     onReadable: (Boolean) -> Unit = {},
@@ -41,7 +42,7 @@ internal fun CoreWorkSurface(
     beforeQueries: @Composable () -> Unit = {},
 ) {
     var filters by remember(active) { mutableStateOf(initialFilters) }
-    var detail by remember(active) { mutableStateOf<CoreWorkTask?>(null) }
+    var detail by remember(active, initialTask) { mutableStateOf(initialTask) }
     var history by remember(active) { mutableStateOf<CoreWorkTask?>(null) }
     var completion by remember(active) { mutableStateOf<CoreWorkCompletionController?>(null) }
     var showCompletion by remember(active) { mutableStateOf(false) }

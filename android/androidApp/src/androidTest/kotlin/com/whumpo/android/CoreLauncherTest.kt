@@ -25,6 +25,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.whumpo.android.core.CoreLauncher
 import com.whumpo.android.core.NativeAccountPasskeys
 import com.whumpo.core.api.CoreOrigin
+import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreClientSettings
 import com.whumpo.core.api.coreApiClient
 import com.whumpo.core.auth.CoreOrganizationSessionController
@@ -240,6 +241,161 @@ class CoreLauncherTest {
     }
 
     @Test
+    fun coreShareOnNewIntentIsReviewedOnceAndClearedWhenAuthorityChanges() {
+        val fixture = CoreLauncherFixture()
+        fixture.organizationRole = CoreRole.owner
+        fixture.readiness = CoreLauncherFixture.Readiness.Ready
+        app.coreApiOriginOverride = "https://api.core.example.test"
+        app.coreRpIdOverride = "core.example.test"
+        app.coreLauncherEngine = fixture::engine
+        try {
+            launch().use { scenario ->
+                click("Open Core sign-in")
+                click("Sign in with password and authenticator")
+                input("Username", CoreLauncherFixture.USERNAME)
+                input("Password", CoreLauncherFixture.PASSWORD)
+                click("Continue")
+                awaitText("Enter your authenticator code")
+                input("Authenticator code", CoreLauncherFixture.TOTP)
+                click("Sign in")
+                click("Load organizations")
+                click("fixture-org · owner")
+                awaitText("Fixture organization")
+
+                val requestsBeforeReceipt = fixture.requests.toList()
+                val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
+                    .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Review these notes before creating anything")
+                scenario.onActivity { it.startActivity(incoming) }
+                awaitText("Review shared text")
+                awaitText("Review these notes before creating anything")
+                assertEquals("receiving text does not make API requests", requestsBeforeReceipt, fixture.requests.toList())
+
+                click("Use in draft")
+                compose.waitUntil(10_000) {
+                    compose.onAllNodesWithText("Review these notes before creating anything").fetchSemanticsNodes().isNotEmpty() &&
+                        compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().isEmpty()
+                }
+                assertEquals("using the text fills a local draft without an API request", requestsBeforeReceipt, fixture.requests.toList())
+
+                scenario.onActivity { it.startActivity(incoming) }
+                compose.waitForIdle()
+                compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
+                assertEquals(requestsBeforeReceipt, fixture.requests.toList())
+
+                Fixtures.onMain { checkNotNull(app.corePhoneComposition()).accounts.clear() }
+                awaitText("Open Core sign-in")
+                compose.onAllNodesWithText("Review these notes before creating anything").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
+            }
+        } finally {
+            app.clearCorePhoneCompositionForTest()
+            app.coreLauncherEngine = null
+            app.coreApiOriginOverride = null
+            app.coreRpIdOverride = null
+        }
+    }
+
+    @Test
+    fun coreShareColdActivityCreateUsesTheExistingReadySession() {
+        val fixture = CoreLauncherFixture()
+        fixture.organizationRole = CoreRole.owner
+        fixture.readiness = CoreLauncherFixture.Readiness.Ready
+        app.coreApiOriginOverride = "https://api.core.example.test"
+        app.coreRpIdOverride = "core.example.test"
+        app.coreLauncherEngine = fixture::engine
+        var home: ActivityScenario<MainActivity>? = null
+        try {
+            val initialHome = launch()
+            home = initialHome
+            click("Open Core sign-in")
+            click("Sign in with password and authenticator")
+            input("Username", CoreLauncherFixture.USERNAME)
+            input("Password", CoreLauncherFixture.PASSWORD)
+            click("Continue")
+            awaitText("Enter your authenticator code")
+            input("Authenticator code", CoreLauncherFixture.TOTP)
+            click("Sign in")
+            click("Load organizations")
+            click("fixture-org · owner")
+            awaitText("Fixture organization")
+            val composition = checkNotNull(app.corePhoneComposition())
+            val current = composition.organizations.state.value
+            initialHome.close()
+            home = null
+
+            val beforeShareLaunch = fixture.requests.size
+            val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
+                .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "A note from another app")
+            launch(incoming).use {
+                assertSame(current, composition.organizations.state.value)
+                awaitText("Review shared text")
+                awaitText("A note from another app")
+                assertTrue(fixture.requests.drop(beforeShareLaunch).none {
+                    it.startsWith("POST ") || it.startsWith("PUT ") || it.startsWith("DELETE ") ||
+                        it.startsWith("GET /v1/work/")
+                })
+                click("Use in draft")
+                compose.waitUntil(10_000) {
+                    compose.onAllNodesWithText("A note from another app").fetchSemanticsNodes().isNotEmpty() &&
+                        compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().isEmpty()
+                }
+            }
+        } finally {
+            home?.close()
+            app.clearCorePhoneCompositionForTest()
+            app.coreLauncherEngine = null
+            app.coreApiOriginOverride = null
+            app.coreRpIdOverride = null
+        }
+    }
+
+    @Test
+    fun coreShareOnColdSignedOutLaunchIsDroppedInsteadOfQueued() {
+        val fixture = CoreLauncherFixture()
+        fixture.organizationRole = CoreRole.owner
+        fixture.readiness = CoreLauncherFixture.Readiness.Unready
+        app.coreApiOriginOverride = "https://api.core.example.test"
+        app.coreRpIdOverride = "core.example.test"
+        app.coreLauncherEngine = fixture::engine
+        try {
+            val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
+                .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Do not queue this while signed out")
+            launch(incoming).use {
+                awaitText("Open Core sign-in")
+                compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
+                assertTrue(fixture.requests.isEmpty())
+
+                click("Open Core sign-in")
+                click("Sign in with password and authenticator")
+                input("Username", CoreLauncherFixture.USERNAME)
+                input("Password", CoreLauncherFixture.PASSWORD)
+                click("Continue")
+                awaitText("Enter your authenticator code")
+                input("Authenticator code", CoreLauncherFixture.TOTP)
+                click("Sign in")
+                click("Load organizations")
+                click("fixture-org · owner")
+                awaitText("This organization has not finished setup. Continue in the web workspace.")
+                val unreadyShare = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
+                    .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Do not queue this while organization is unready")
+                it.onActivity { activity -> activity.startActivity(unreadyShare) }
+                compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
+
+                fixture.readiness = CoreLauncherFixture.Readiness.Ready
+                click("Check again")
+                awaitText("Fixture organization")
+                compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
+                compose.onAllNodesWithText("Do not queue this while signed out").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
+                compose.onAllNodesWithText("Do not queue this while organization is unready").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
+            }
+        } finally {
+            app.clearCorePhoneCompositionForTest()
+            app.coreLauncherEngine = null
+            app.coreApiOriginOverride = null
+            app.coreRpIdOverride = null
+        }
+    }
+
+    @Test
     fun syntheticLauncherSwitchesOnlyVerifiedMembershipsAndDiscardsOldScope() {
         val fixture = CoreLauncherFixture(multipleOrganizations = true)
         val localClient = if (BuildConfig.WHUMPO_ENVIRONMENT == "local") {
@@ -351,6 +507,8 @@ class CoreLauncherTest {
     private fun launch() = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java)
         .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER))
 
+    private fun launch(intent: Intent) = ActivityScenario.launch<MainActivity>(intent)
+
     private fun awaitLegacyEntry() {
         awaitText("Welcome to Whumpo.")
         compose.onNodeWithTag("auth-sign-in").assertIsDisplayed()
@@ -390,6 +548,7 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
     @Volatile var denySwitch = false
     @Volatile var readiness = Readiness.Unready
     @Volatile var todayResponsePhase = TodayResponsePhase.Fresh
+    @Volatile var organizationRole = CoreRole.viewer
     private val deadline = System.currentTimeMillis() + 300_000
     private val grant = "ag1." + "g".repeat(42) + "A"
     private val token = "t".repeat(42) + "A"
@@ -429,7 +588,7 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
             }
             "GET /v1/account-security/organizations" -> {
                 assertEquals("AccountGrant $grant", authorization)
-                """{"items":[{"orgId":"fixture-org","role":"viewer"}],"nextCursor":null}"""
+                """{"items":[{"orgId":"fixture-org","role":"${organizationRole.name.lowercase()}"}],"nextCursor":null}"""
             }
             "POST /v1/account-security/session" -> {
                 assertEquals("AccountGrant $grant", authorization)
@@ -440,14 +599,14 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
             "GET /v1/auth/session" -> {
                 assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
                 val session = if (switched) "other-session" else "fixture-session"
-                val role = if (switched) "operator" else "viewer"
+                val role = if (switched) "operator" else organizationRole.name.lowercase()
                 """{"sessionId":"$session","orgId":"$organization","userId":"fixture-account","role":"$role","expiresAt":$deadline}"""
             }
             "GET /v1/auth/organizations" -> {
                 assertTrue(multipleOrganizations)
                 val expected = if (requests.count { it == route } == 1) token else switchedToken
                 assertEquals("Bearer $expected", authorization)
-                """{"items":[{"orgId":"fixture-org","role":"viewer","active":${!switched}},
+                """{"items":[{"orgId":"fixture-org","role":"${organizationRole.name.lowercase()}","active":${!switched}},
                     {"orgId":"other-org","role":"operator","active":$switched}],"nextCursor":null}"""
             }
             "POST /v1/auth/session/switch" -> {

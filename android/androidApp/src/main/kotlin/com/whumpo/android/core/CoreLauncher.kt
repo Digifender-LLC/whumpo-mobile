@@ -53,12 +53,23 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
     val accounts = composition.accounts
     val session by sessions.state.collectAsStateWithLifecycle()
     val account by accounts.state.collectAsStateWithLifecycle()
+    val sharedDraft by composition.sharedDraft.collectAsStateWithLifecycle()
     var showSignIn by remember(composition) { mutableStateOf(false) }
     var switching by remember(composition) { mutableStateOf(false) }
     var switchUnconfirmed by remember(composition) { mutableStateOf(false) }
     var signOutUnconfirmed by remember(composition) { mutableStateOf(false) }
+    var sharedDraftOwner by remember(composition) { mutableStateOf<CoreOrganizationSessionController.State.Active?>(null) }
+    var sharedTask by remember(composition) { mutableStateOf<com.whumpo.core.api.CoreWorkTask?>(null) }
     val actions = rememberCoroutineScope()
     val active = session as? CoreOrganizationSessionController.State.Active
+    LaunchedEffect(sharedDraft) {
+        sharedDraft?.let { sharedDraftOwner = it.active }
+    }
+    LaunchedEffect(active) {
+        composition.discardStaleSharedDraft()
+        if (sharedDraftOwner !== active) sharedDraftOwner = null
+        if (active == null) sharedTask = null
+    }
     LaunchedEffect(active) {
         if (active != null) {
             showSignIn = false
@@ -80,36 +91,71 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
             Box(Modifier.fillMaxSize().safeDrawingPadding()) {
                 if (active != null) {
                     key(active.epoch) {
-                        CoreOrganizationEntry(active, sessions, onSwitch = { membership ->
-                            if (!switching && sessions.state.value === active) {
-                                switching = true
+                        when {
+                            sharedTask != null -> CoreWorkSurface(
+                                sessions, active, onBack = { sharedTask = null }, initialTask = sharedTask,
+                            )
+                            sharedDraft?.active === active || sharedDraftOwner === active -> CoreSharedDraftWorkSurface(
+                                sessions = sessions,
+                                active = active,
+                                store = composition.offlineWorkStore,
+                                offer = sharedDraft?.takeIf { it.active === active },
+                                accept = composition::acceptSharedDraft,
+                                dismiss = { sharedDraft?.let { composition.dismissSharedDraft(it.review) } },
+                                close = {
+                                    sharedDraft?.let { composition.dismissSharedDraft(it.review) }
+                                    sharedDraftOwner = null
+                                },
+                                signOut = {
+                                    sharedDraft?.let { composition.dismissSharedDraft(it.review) }
+                                    sharedDraftOwner = null
+                                    actions.launch(start = CoroutineStart.UNDISPATCHED) {
+                                        try {
+                                            accounts.signOutWorkspace()
+                                        } catch (error: CancellationException) {
+                                            throw error
+                                        } catch (_: Exception) {
+                                            if (!showSignIn) signOutUnconfirmed = true
+                                        }
+                                    }
+                                },
+                                openTask = { task ->
+                                    sharedDraft?.let { composition.dismissSharedDraft(it.review) }
+                                    sharedDraftOwner = null
+                                    sharedTask = task
+                                },
+                            )
+                            else -> CoreOrganizationEntry(active, sessions, composition, onSwitch = { membership ->
+                                if (!switching && sessions.state.value === active) {
+                                    switching = true
+                                    showSignIn = false
+                                    actions.launch(start = CoroutineStart.UNDISPATCHED) {
+                                        try {
+                                            sessions.switchOrganization(active, membership)
+                                        } catch (error: CancellationException) {
+                                            throw error
+                                        } catch (_: Exception) {
+                                            if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) {
+                                                switchUnconfirmed = true
+                                            }
+                                        } finally {
+                                            switching = false
+                                        }
+                                    }
+                                }
+                            }, signOut = {
                                 showSignIn = false
                                 actions.launch(start = CoroutineStart.UNDISPATCHED) {
                                     try {
-                                        sessions.switchOrganization(active, membership)
+                                        accounts.signOutWorkspace()
                                     } catch (error: CancellationException) {
                                         throw error
                                     } catch (_: Exception) {
-                                        if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) {
-                                            switchUnconfirmed = true
-                                        }
-                                    } finally {
-                                        switching = false
+                                        if (!showSignIn) signOutUnconfirmed = true
                                     }
                                 }
-                            }
-                        }, signOut = {
-                            showSignIn = false
-                            actions.launch(start = CoroutineStart.UNDISPATCHED) {
-                                try {
-                                    accounts.signOutWorkspace()
-                                } catch (error: CancellationException) {
-                                    throw error
-                                } catch (_: Exception) {
-                                    if (!showSignIn) signOutUnconfirmed = true
-                                }
-                            }
-                        })
+                            })
+                        }
                     }
                 } else if (switching) {
                     Text("Switching organization…", Modifier.padding(24.dp).semantics { liveRegion = LiveRegionMode.Polite })
@@ -167,6 +213,7 @@ private sealed interface OrganizationChoices {
 private fun CoreOrganizationEntry(
     active: CoreOrganizationSessionController.State.Active,
     sessions: CoreOrganizationSessionController,
+    composition: CorePhoneComposition,
     onSwitch: (CoreMembership) -> Unit,
     signOut: () -> Unit,
 ) {
@@ -208,12 +255,16 @@ private fun CoreOrganizationEntry(
             }
             sessions.commitIfCurrent(active.epoch) {
                 state = if (profile == null) OrganizationEntryState.Unready else OrganizationEntryState.Ready(profile, availability)
+                composition.publishShareReadiness(active.epoch, ready = profile != null)
             }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
             if (sessions.state.value != CoreOrganizationSessionController.State.SignedOut) {
-                sessions.commitIfCurrent(active.epoch) { state = OrganizationEntryState.Unavailable }
+                sessions.commitIfCurrent(active.epoch) {
+                    state = OrganizationEntryState.Unavailable
+                    composition.publishShareReadiness(active.epoch, ready = false)
+                }
             }
         }
     }
@@ -221,7 +272,7 @@ private fun CoreOrganizationEntry(
     if (attempt != null) {
         key(attempt) {
             if (attempt.page == OrganizationReadPage.Work) {
-                CoreWorkSurface(sessions, active, onBack = { read = null })
+                CoreWorkSurface(sessions, active, onBack = { read = null }, initialTask = attempt.initialTask)
             } else CoreOrganizationRead(
                 active, sessions, current = { read === attempt && sessions.state.value === active },
                 onBack = { read = null },
@@ -317,7 +368,7 @@ private enum class OrganizationReadPage(val title: String, val emptyLabel: Strin
     Work("Work", "No tasks here."),
 }
 
-private class OrganizationReadAttempt(val page: OrganizationReadPage)
+private class OrganizationReadAttempt(val page: OrganizationReadPage, val initialTask: com.whumpo.core.api.CoreWorkTask? = null)
 private data class OrganizationReadGroup(val heading: String, val rows: List<String>, val truncated: Boolean = false)
 
 private sealed interface OrganizationReadState {
