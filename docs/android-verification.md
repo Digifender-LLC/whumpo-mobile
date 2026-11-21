@@ -119,6 +119,38 @@ actions stay visible.
 
 Direct instrumentation is diagnostic evidence, not a replacement for this Gradle
 gate.
+
+### M6 macOS 27 local ADB workaround
+
+On Apple Silicon M6 with macOS 27, Android Platform-Tools 37.0.1 reproduced an
+ADB server abort while connecting an emulator transport (`libunwind` reported an
+invalid compact unwind encoding). Platform-Tools 37.0.3 release notes list a fix
+for an Apple Silicon/macOS 27 `_Unwind_Backtrace` abort in the ADB server. This
+host-specific match is evidence for using 37.0.3 on that host, not a general
+requirement for Android builds. See the [official Platform-Tools release notes](https://developer.android.com/tools/releases/platform-tools).
+
+For a local instrumentation run on this host, stage the official
+[macOS Platform-Tools 37.0.3 archive](https://dl.google.com/android/repository/platform-tools_r37.0.3-darwin.zip)
+in an owned temporary SDK overlay. The official SDK repository metadata listed
+the archive as 16,597,626 bytes with SHA-1
+`d48920e2650321710b4d15d3acd9e277d59cd55b`; verify those values before
+extraction. Point `ANDROID_HOME`, `ANDROID_SDK_ROOT` and `sdk.dir` at the overlay,
+whose `platform-tools` is staged 37.0.3 and whose emulator, platforms,
+system-images and build-tools refer to the installed SDK read-only. Keep the AVD
+home and the emulator itself in owned temporary paths. Start one foreground ADB
+server from the staged binary and use that same binary and endpoint for all ADB
+clients, the emulator's `-adb-path`, and Gradle (`ANDROID_SERIAL` should name
+only the owned emulator). This prevents AGP from selecting the older shared SDK
+ADB. Do not stop a shared server or user-owned emulator as part of this workaround.
+
+For a targeted Activity run, a successful Gradle exit is insufficient by itself:
+inspect fresh JUnit XML and require all five `CoreLauncherTest` methods to have
+completed with zero failures, errors or skips. Keep the XML, command log, source
+commit/tree, ADB and device versions, and debug signer identity together as the
+run receipt. Stop only the owned emulator and foreground server, then remove
+owned temporary SDK, AVD, APK and test output after qualification. Do not commit
+the staged SDK, AVD data or APKs.
+
 `AccountStateTest` uses the pinned Compose JUnit4 v2 rule's standard composition
 dispatcher. Its settings sign-out case registers an account-state observer before
 confirmation, observes off-main session erasure, and waits for a subsequent real

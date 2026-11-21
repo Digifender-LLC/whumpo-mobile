@@ -24,6 +24,7 @@ object Fixtures {
 
     /** Leaves the device signed out with no account state and no key. */
     fun reset() {
+        (app as? FixtureApplication)?.clearCorePhoneCompositionForTest()
         // Start-up restores the stored session asynchronously; let it finish so it cannot race the fixture.
         runBlocking { container.sessions.state.first { it !is SessionManager.State.Restoring } }
         onMain { container.auth.cancelHandoff() }

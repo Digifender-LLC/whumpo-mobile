@@ -25,7 +25,9 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.whumpo.android.core.CoreLauncher
 import com.whumpo.android.core.NativeAccountPasskeys
 import com.whumpo.core.api.CoreOrigin
+import com.whumpo.core.api.CoreClientSettings
 import com.whumpo.core.api.coreApiClient
+import com.whumpo.core.auth.CoreOrganizationSessionController
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
@@ -42,6 +44,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -61,6 +64,8 @@ class CoreLauncherTest {
     @After
     fun tearDown() {
         app.coreLauncherEngine = null
+        app.coreApiOriginOverride = null
+        app.coreRpIdOverride = null
         Fixtures.reset()
     }
 
@@ -191,19 +196,52 @@ class CoreLauncherTest {
     }
 
     @Test
+    fun explicitCoreConfigSelectsCoreOutsideTheSyntheticEnvironmentGate() {
+        val fixture = CoreLauncherFixture()
+        app.coreApiOriginOverride = "https://api.core.example.test"
+        app.coreRpIdOverride = "core.example.test"
+        app.coreLauncherEngine = fixture::engine
+        try {
+            launch().use {
+                awaitText("Open Core sign-in")
+                assertTrue(fixture.requests.isEmpty())
+                val composition = checkNotNull(app.corePhoneComposition())
+                it.recreate()
+                awaitText("Open Core sign-in")
+                assertSame(composition, app.corePhoneComposition())
+            }
+        } finally {
+            app.clearCorePhoneCompositionForTest()
+            app.coreLauncherEngine = null
+            app.coreApiOriginOverride = null
+            app.coreRpIdOverride = null
+        }
+    }
+
+    @Test
     fun syntheticLauncherSwitchesOnlyVerifiedMembershipsAndDiscardsOldScope() {
         val fixture = CoreLauncherFixture(multipleOrganizations = true)
         val localClient = if (BuildConfig.WHUMPO_ENVIRONMENT == "local") {
             // Exercise the same mounted launcher with a synthetic engine without enabling the default local entry.
             coreApiClient(CoreOrigin.allowlisted("https://core.example.test", setOf("https://core.example.test")), fixture.engine())
         } else null
+        val localComposition = localClient?.let {
+            CorePhoneComposition(
+                CoreClientSettings.allowlisted(
+                    "https://core.example.test",
+                    "core.example.test",
+                    setOf("https://core.example.test"),
+                ),
+                it,
+            )
+        }
         app.coreLauncherEngine = fixture::engine
         fixture.readiness = CoreLauncherFixture.Readiness.Ready
         try {
             launch().use { scenario ->
                 if (localClient != null) scenario.onActivity { activity ->
                     val passkeys = NativeAccountPasskeys(app, app.container.activities)
-                    activity.setContent { CoreLauncher(localClient, passkeys) }
+                    activity.setContent { CoreLauncher(checkNotNull(localComposition), passkeys) }
                 }
                 click("Open Core sign-in")
                 click("Sign in with password and authenticator")
@@ -243,6 +281,7 @@ class CoreLauncherTest {
                 click("Switch to fixture-org · viewer")
                 awaitText("Could not verify the organization switch. Sign in again.")
                 awaitText("Open Core sign-in")
+                compose.waitUntil(10_000) { app.corePhoneComposition()?.accounts?.state?.value == null }
                 compose.onNodeWithText("Other organization").assertDoesNotExist()
                 compose.onNodeWithText("Organization access has expired.").assertDoesNotExist()
                 assertEquals(2, fixture.requests.count { it == "POST /v1/auth/session/switch" })
@@ -252,7 +291,7 @@ class CoreLauncherTest {
         } finally {
             fixture.releaseSwitch.complete(Unit)
             fixture.releaseOldEntitlement.complete(Unit)
-            localClient?.close()
+            localComposition?.close()
         }
     }
 
@@ -277,6 +316,9 @@ class CoreLauncherTest {
             awaitText("Fixture organization")
             click("Open Work")
             awaitText("Open Core sign-in")
+            compose.waitUntil(10_000) { app.corePhoneComposition()?.accounts?.state?.value == null }
+            assertEquals(CoreOrganizationSessionController.State.SignedOut,
+                app.corePhoneComposition()?.organizations?.state?.value)
             compose.onNodeWithText("Fixture organization").assertDoesNotExist()
             compose.onNodeWithText("Work is unavailable. Refresh to try again.").assertDoesNotExist()
             compose.onNodeWithText("Current synthetic task").assertDoesNotExist()

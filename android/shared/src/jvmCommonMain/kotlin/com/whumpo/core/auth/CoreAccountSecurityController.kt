@@ -3,6 +3,7 @@ package com.whumpo.core.auth
 import com.whumpo.core.api.AccountSecurityState
 import com.whumpo.core.api.CORE_MAX_VERSION
 import com.whumpo.core.api.CoreApiClient
+import com.whumpo.core.api.CoreClientSettings
 import com.whumpo.core.api.CoreHttpException
 import com.whumpo.core.api.CoreProtocolException
 import com.whumpo.core.api.CoreRole
@@ -88,6 +89,9 @@ class OneTimeMaterialUnavailable : Exception("This response did not include one-
 class AccountSecurityProofRejected : Exception("The service rejected the credential proof")
 class AccountSecurityIdentityMismatch : Exception("Signed-in identity does not match the restricted setup")
 
+/** Opaque in-process reference used to invalidate only the account grant that minted a lost workspace session. */
+class CoreWorkspaceAuthorityLoss internal constructor(internal val accountAuthority: SecurityAuthority)
+
 class PendingTotp internal constructor(val factorId: String, val secret: String)
 class PendingRecoveryDocument internal constructor(val offerId: String, val generation: Long, val text: String)
 
@@ -103,11 +107,15 @@ sealed interface AccountSecurityRetryResult {
     class Material(val document: PendingRecoveryDocument) : AccountSecurityRetryResult
 }
 
-/** Owns account and restricted grants for this activity. Workspace bearers belong to the workspace controller. */
+/**
+ * Owns account and restricted grants for this activity. Workspace bearers belong to the workspace controller.
+ * [onWorkspaceAuthorityLost] must only enqueue or dispatch work; the callback may run under the workspace lock.
+ */
 class CoreAccountSecurityController(
     private val api: CoreApiClient,
     private val workspace: CoreOrganizationSessionController,
     private val rpId: String?,
+    private val onWorkspaceAuthorityLost: (CoreWorkspaceAuthorityLoss) -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val requests = Mutex()
@@ -243,8 +251,7 @@ class CoreAccountSecurityController(
     val state = mutableState.asStateFlow()
 
     init {
-        require(rpId == null || Regex("[a-z0-9]+(?:[-.][a-z0-9]+)+").matches(rpId))
-        require(!api.origin.value.startsWith("https://") || api.origin.value == "https://$rpId")
+        require(rpId == null || CoreClientSettings.isCanonicalRpId(rpId))
     }
 
     fun clear() {
@@ -252,6 +259,13 @@ class CoreAccountSecurityController(
             clearAccountLocked()
             workspace.clear()
         }
+    }
+
+    /** Clear only the account grant that was bound to the lost workspace session. */
+    fun clearIfWorkspaceAuthorityCurrent(expected: CoreWorkspaceAuthorityLoss): Boolean = synchronized(lock) {
+        if (grant !== expected.accountAuthority) return@synchronized false
+        clearAccountLocked()
+        true
     }
 
     private fun clearAccountLocked() {
@@ -898,7 +912,13 @@ class CoreAccountSecurityController(
         require(coreIdentifier.matches(membership.orgId))
         val scoped = api.accountSecurity<CoreSessionToken>("session", authority, body { put("orgId", membership.orgId) })
         verify(operation)
-        workspace.establishAccountSession(scoped, accountId, membership.orgId) { current(operation, authority) }
+        workspace.establishAccountSession(
+            scoped,
+            accountId,
+            membership.orgId,
+            validGrant = { current(operation, authority) },
+            onAuthorityLost = { onWorkspaceAuthorityLost(CoreWorkspaceAuthorityLoss(authority)) },
+        )
         verify(operation)
     }
 

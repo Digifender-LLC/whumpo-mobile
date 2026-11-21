@@ -84,7 +84,11 @@ class CoreOrganizationSessionController(
 
     internal val origin get() = api.origin
 
-    private class Credential(val state: State.Active, val token: String)
+    private class Credential(
+        val state: State.Active,
+        val token: String,
+        val onAuthorityLost: (() -> Unit)? = null,
+    )
 
     private val lock = Any()
     private var epoch = 0L
@@ -103,11 +107,14 @@ class CoreOrganizationSessionController(
         accountId: String,
         organizationId: String,
         validGrant: () -> Boolean,
+        onAuthorityLost: () -> Unit,
     ): State.Active {
         require(coreBearer.matches(scoped.token))
         if (!validGrant()) throw CancellationException("Account grant changed")
         val transition = synchronized(lock) { beginTransition() }
-        return verifyAndActivate(transition, scoped.token, accountId, organizationId, scoped.expiresAt, validGrant)
+        return verifyAndActivate(
+            transition, scoped.token, accountId, organizationId, scoped.expiresAt, validGrant, onAuthorityLost = onAuthorityLost,
+        )
     }
 
     /** Returns the platform outcome without exposing the assertion or bearer to presentation code. */
@@ -828,11 +835,15 @@ class CoreOrganizationSessionController(
     }
 
     private fun clearLocked(notifyLoss: Boolean = false) {
-        val previous = credential?.state?.session
+        val previousCredential = credential
+        val previous = previousCredential?.state?.session
         ++epoch
         credential = null
         mutableState.value = State.SignedOut
-        if (notifyLoss && previous != null) onAuthorityLost(previous)
+        if (notifyLoss && previous != null) {
+            onAuthorityLost(previous)
+            previousCredential.onAuthorityLost?.invoke()
+        }
     }
 
     private fun requireCredential(): Credential {
@@ -856,19 +867,25 @@ class CoreOrganizationSessionController(
             current to beginTransition()
         }
         val source = current.state.session
+        var accountLossNotified = false
         try {
             val replacement = exchange(current.token)
             if (!coreBearer.matches(replacement.token) || replacement.token == current.token ||
                 replacement.expiresAt != source.expiresAt) throw CoreProtocolException()
             return verifyAndActivate(transition, replacement.token, source.userId,
-                targetOrgId ?: source.orgId, replacement.expiresAt, role = role)
+                targetOrgId ?: source.orgId, replacement.expiresAt, role = role,
+                onAuthorityLost = current.onAuthorityLost, notifyAuthorityLossOnAbort = true)
         } catch (error: CoreHttpException) {
             if (error.status == 401) synchronized(lock) {
-                if (epoch == transition && mutableState.value == State.Transitioning) onAuthorityLost(source)
+                if (epoch == transition && mutableState.value == State.Transitioning) {
+                    onAuthorityLost(source)
+                    current.onAuthorityLost?.invoke()
+                    accountLossNotified = true
+                }
             }
             throw error
         } finally {
-            abortTransition(transition)
+            abortTransition(transition, current.onAuthorityLost.takeUnless { accountLossNotified })
         }
     }
 
@@ -880,6 +897,8 @@ class CoreOrganizationSessionController(
         expiresAt: Long? = null,
         validGrant: () -> Boolean = { true },
         role: CoreRole? = null,
+        onAuthorityLost: (() -> Unit)? = null,
+        notifyAuthorityLossOnAbort: Boolean = false,
     ): State.Active {
         try {
             val session = api.session(token)
@@ -893,19 +912,23 @@ class CoreOrganizationSessionController(
                 if (epoch != transition) throw CancellationException("Core session changed")
                 val scope = CoreAccountScope.of(api.origin, session.userId, session.orgId)
                 State.Active(transition, session, scope).also {
-                    credential = Credential(it, token)
+                    credential = Credential(it, token, onAuthorityLost)
                     mutableState.value = it
                 }
             }
         } finally {
-            abortTransition(transition)
+            abortTransition(transition, onAuthorityLost.takeIf { notifyAuthorityLossOnAbort })
         }
     }
 
-    private fun abortTransition(transition: Long) {
-        synchronized(lock) {
-            if (epoch == transition && mutableState.value == State.Transitioning) clearLocked()
+    private fun abortTransition(transition: Long, onAuthorityLost: (() -> Unit)? = null) {
+        val ended = synchronized(lock) {
+            if (epoch == transition && mutableState.value == State.Transitioning) {
+                clearLocked()
+                true
+            } else false
         }
+        if (ended) onAuthorityLost?.invoke()
     }
 
     private fun verifyOrganization(orgId: String, current: Credential) {

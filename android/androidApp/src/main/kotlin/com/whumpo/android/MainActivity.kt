@@ -15,26 +15,20 @@ import androidx.compose.runtime.getValue
 import com.whumpo.android.core.CoreLauncher
 import com.whumpo.android.core.NativeAccountPasskeys
 import com.whumpo.android.ui.WhumpoApp
-import com.whumpo.core.api.CoreApiClient
 import com.whumpo.android.ui.share.SharedItem
 import com.whumpo.android.ui.shell.DeepLink
 import com.whumpo.android.ui.theme.WhumpoTheme
 
 class MainActivity : ComponentActivity() {
-    private var coreClient: CoreApiClient? = null
-
-    override fun onDestroy() {
-        coreClient?.close()
-        super.onDestroy()
-    }
+    private var coreComposition: CorePhoneComposition? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val app = application as WhumpoApplication
-        val core = app.coreLauncherClient()
+        val core = app.corePhoneComposition()
         if (core != null) {
-            coreClient = core
+            coreComposition = core
             window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
             val passkeys = NativeAccountPasskeys(app, container.activities)
             setContent { CoreLauncher(core, passkeys) }
@@ -73,7 +67,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (coreClient == null) handleIntent(intent)
+        if (coreComposition == null) handleIntent(intent)
     }
 
     private fun handleIntent(intent: Intent?) {
