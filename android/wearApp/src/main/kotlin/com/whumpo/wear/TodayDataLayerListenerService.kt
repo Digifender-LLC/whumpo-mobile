@@ -8,6 +8,7 @@ import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import com.whumpo.core.wear.CoreWearTodaySnapshot
+import com.whumpo.core.wear.CoreWearTodaySnapshotStore
 import java.util.concurrent.TimeUnit
 
 /** Applies only current snapshots from a native phone-app capability node, then invalidates the tile. */
@@ -47,9 +48,13 @@ class TodayDataLayerListenerService : WearableListenerService() {
 
         val storage = WearTodaySnapshotStorage(this)
         val now = System.currentTimeMillis()
-        val accepted = updates.any { (sourceNodeId, payload) ->
-            storage.apply(sourceNodeId, allowedPhoneNodes, payload, now)
-        }
+        val accepted = storage.applyBatch(
+            updates.map { (sourceNodeId, payload) ->
+                CoreWearTodaySnapshotStore.Update(sourceNodeId, payload)
+            },
+            allowedPhoneNodes,
+            now,
+        )
         if (accepted) TileService.getUpdater(this).requestUpdate(TodayTileService::class.java)
     }
 }

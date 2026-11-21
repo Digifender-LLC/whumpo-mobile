@@ -2,34 +2,32 @@ package com.whumpo.wear
 
 import android.content.Context
 import com.whumpo.core.wear.CoreWearTodaySnapshot
-import com.whumpo.core.wear.acceptsCoreWearTodaySnapshot
+import com.whumpo.core.wear.CoreWearTodaySnapshotStore
 
 /** Keeps only one authenticated, short-lived aggregate snapshot in app-private, non-backed-up storage. */
 internal class WearTodaySnapshotStorage(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    private val store = CoreWearTodaySnapshotStore(
+        loadEncoded = { preferences.getString(SNAPSHOT_KEY, null)?.encodeToByteArray() },
+        saveEncoded = { encoded ->
+            preferences.edit().putString(SNAPSHOT_KEY, encoded.decodeToString()).commit()
+        },
+    )
 
-    fun read(nowMillis: Long): CoreWearTodaySnapshot? {
-        val encoded = preferences.getString(SNAPSHOT_KEY, null) ?: return null
-        val snapshot = runCatching { CoreWearTodaySnapshot.decode(encoded.encodeToByteArray()) }.getOrNull() ?: return null
-        return snapshot.takeIf { it.available && it.validAt(nowMillis) }
-    }
+    fun read(nowMillis: Long): CoreWearTodaySnapshot? = store.read(nowMillis)
 
     fun apply(
         sourceNodeId: String?,
         phoneCapabilityNodeIds: Set<String>,
         encodedSnapshot: ByteArray,
         nowMillis: Long,
-    ): Boolean {
-        if (sourceNodeId.isNullOrBlank() || sourceNodeId !in phoneCapabilityNodeIds) return false
-        val incoming = runCatching { CoreWearTodaySnapshot.decode(encodedSnapshot) }.getOrNull() ?: return false
-        val current = preferences.getString(SNAPSHOT_KEY, null)?.let { encoded ->
-            runCatching { CoreWearTodaySnapshot.decode(encoded.encodeToByteArray()) }.getOrNull()
-        }
-        if (!acceptsCoreWearTodaySnapshot(incoming, current, senderIsPhoneCapabilityNode = true, nowMillis)) return false
-        return preferences.edit()
-            .putString(SNAPSHOT_KEY, CoreWearTodaySnapshot.encode(incoming).decodeToString())
-            .commit()
-    }
+    ): Boolean = store.apply(sourceNodeId, phoneCapabilityNodeIds, encodedSnapshot, nowMillis)
+
+    fun applyBatch(
+        updates: Iterable<CoreWearTodaySnapshotStore.Update>,
+        phoneCapabilityNodeIds: Set<String>,
+        nowMillis: Long,
+    ): Boolean = store.applyBatch(updates, phoneCapabilityNodeIds, nowMillis)
 
     private companion object {
         const val PREFERENCES = "wear-today-snapshot"
