@@ -61,8 +61,8 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
     val active = session as? CoreOrganizationSessionController.State.Active
     LaunchedEffect(active) {
         if (active != null) {
-            try {
-                while (true) {
+            showSignIn = false
+            while (true) {
                 val remaining = active.session.expiresAt - System.currentTimeMillis()
                 if (remaining <= 0) {
                     if (sessions.state.value === active) {
@@ -71,15 +71,7 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
                     }
                     break
                 }
-                    delay(minOf(remaining, 60_000))
-                }
-            } finally {
-                // A current-session 401 clears account grants as well as the organization UI.
-                // Replacement/transitioning sessions must retain their own account flow.
-                if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) {
-                    accounts.clear()
-                    showSignIn = false
-                }
+                delay(minOf(remaining, 60_000))
             }
         }
     }
@@ -88,10 +80,7 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
             Box(Modifier.fillMaxSize().safeDrawingPadding()) {
                 if (active != null) {
                     key(active.epoch) {
-                        CoreOrganizationEntry(active, sessions, onSessionEnded = {
-                            accounts.clear()
-                            showSignIn = false
-                        }, onSwitch = { membership ->
+                        CoreOrganizationEntry(active, sessions, onSwitch = { membership ->
                             if (!switching && sessions.state.value === active) {
                                 switching = true
                                 showSignIn = false
@@ -102,7 +91,6 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
                                         throw error
                                     } catch (_: Exception) {
                                         if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) {
-                                            accounts.clear()
                                             switchUnconfirmed = true
                                         }
                                     } finally {
@@ -179,7 +167,6 @@ private sealed interface OrganizationChoices {
 private fun CoreOrganizationEntry(
     active: CoreOrganizationSessionController.State.Active,
     sessions: CoreOrganizationSessionController,
-    onSessionEnded: () -> Unit,
     onSwitch: (CoreMembership) -> Unit,
     signOut: () -> Unit,
 ) {
@@ -199,8 +186,9 @@ private fun CoreOrganizationEntry(
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
-                if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) onSessionEnded()
-                else sessions.commitIfCurrent(active.epoch) { choices = OrganizationChoices.Unavailable }
+                if (sessions.state.value != CoreOrganizationSessionController.State.SignedOut) {
+                    sessions.commitIfCurrent(active.epoch) { choices = OrganizationChoices.Unavailable }
+                }
             }
         }
     }
@@ -224,9 +212,7 @@ private fun CoreOrganizationEntry(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) {
-                onSessionEnded()
-            } else {
+            if (sessions.state.value != CoreOrganizationSessionController.State.SignedOut) {
                 sessions.commitIfCurrent(active.epoch) { state = OrganizationEntryState.Unavailable }
             }
         }
@@ -238,7 +224,6 @@ private fun CoreOrganizationEntry(
                 CoreWorkSurface(sessions, active, onBack = { read = null })
             } else CoreOrganizationRead(
                 active, sessions, current = { read === attempt && sessions.state.value === active },
-                onSessionEnded = onSessionEnded,
                 onBack = { read = null },
                 onRetry = { if (read === attempt) read = OrganizationReadAttempt(attempt.page) },
             )
@@ -346,7 +331,6 @@ private fun CoreOrganizationRead(
     active: CoreOrganizationSessionController.State.Active,
     sessions: CoreOrganizationSessionController,
     current: () -> Boolean,
-    onSessionEnded: () -> Unit,
     onBack: () -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -363,9 +347,10 @@ private fun CoreOrganizationRead(
             throw error
         } catch (_: Exception) {
             coroutineContext.ensureActive()
-            if (sessions.state.value == CoreOrganizationSessionController.State.SignedOut) onSessionEnded()
-            else sessions.commitIfCurrent(active.epoch) {
-                if (current()) state = OrganizationReadState.Unavailable
+            if (sessions.state.value != CoreOrganizationSessionController.State.SignedOut) {
+                sessions.commitIfCurrent(active.epoch) {
+                    if (current()) state = OrganizationReadState.Unavailable
+                }
             }
         }
     }

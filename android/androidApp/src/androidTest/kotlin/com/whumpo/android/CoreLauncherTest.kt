@@ -27,6 +27,7 @@ import com.whumpo.android.core.NativeAccountPasskeys
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreClientSettings
 import com.whumpo.core.api.coreApiClient
+import com.whumpo.core.auth.CoreOrganizationSessionController
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
@@ -280,6 +281,7 @@ class CoreLauncherTest {
                 click("Switch to fixture-org · viewer")
                 awaitText("Could not verify the organization switch. Sign in again.")
                 awaitText("Open Core sign-in")
+                compose.waitUntil(10_000) { app.corePhoneComposition()?.accounts?.state?.value == null }
                 compose.onNodeWithText("Other organization").assertDoesNotExist()
                 compose.onNodeWithText("Organization access has expired.").assertDoesNotExist()
                 assertEquals(2, fixture.requests.count { it == "POST /v1/auth/session/switch" })
@@ -314,6 +316,9 @@ class CoreLauncherTest {
             awaitText("Fixture organization")
             click("Open Work")
             awaitText("Open Core sign-in")
+            compose.waitUntil(10_000) { app.corePhoneComposition()?.accounts?.state?.value == null }
+            assertEquals(CoreOrganizationSessionController.State.SignedOut,
+                app.corePhoneComposition()?.organizations?.state?.value)
             compose.onNodeWithText("Fixture organization").assertDoesNotExist()
             compose.onNodeWithText("Work is unavailable. Refresh to try again.").assertDoesNotExist()
             compose.onNodeWithText("Current synthetic task").assertDoesNotExist()

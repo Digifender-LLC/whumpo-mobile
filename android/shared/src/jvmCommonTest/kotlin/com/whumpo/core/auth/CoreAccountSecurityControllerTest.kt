@@ -16,7 +16,9 @@ import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -360,6 +362,140 @@ class CoreAccountSecurityControllerTest {
             controller.loginTotp("123456")
             assertEquals(SecurityPurpose.Account, controller.state.value?.purpose)
             assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
+        }
+    }
+
+    @Test
+    fun workspaceLossIsBoundToItsAccountGrantAcrossSwitchAndRotation() = runTest {
+        val replacementAccountToken = "ag1." + "X".repeat(42) + "A"
+        val laterAccountToken = "ag1." + "Y".repeat(42) + "A"
+        val switchedWorkspaceToken = "S".repeat(42) + "A"
+        val rotatedWorkspaceToken = "R".repeat(42) + "A"
+        var issuedAccountToken = accountToken
+        var activeWorkspaceToken = workspaceToken
+        var activeOrg = "workspace-1"
+        var sessionReads = 0
+        var denyNextSwitch = false
+        var cancelCallerOnLoss = false
+        var callerToCancel: Job? = null
+        val lostAuthorities = mutableListOf<CoreWorkspaceAuthorityLoss>()
+        val engine = MockEngine { request ->
+            val body = request.body.toByteArray().decodeToString().takeIf(String::isNotBlank)
+                ?.let { Json.parseToJsonElement(it).jsonObject }
+            when (request.url.encodedPath) {
+                "/v1/account-security/password/login/start" -> respond("""{"challengeId":"login:1","expiresAt":9000}""")
+                "/v1/account-security/password/login/verify" -> respond(
+                    """{"authority":{"kind":"account_grant","token":"$issuedAccountToken","purpose":"account","expiresAt":9000},"state":${state(false)}}""",
+                )
+                "/v1/account-security/organizations" -> {
+                    assertEquals("AccountGrant $issuedAccountToken", request.headers["Authorization"])
+                    respond("""{"items":[{"orgId":"workspace-1","role":"operator"}],"nextCursor":null}""")
+                }
+                "/v1/account-security/session" -> {
+                    assertEquals("AccountGrant $issuedAccountToken", request.headers["Authorization"])
+                    assertEquals("workspace-1", body?.get("orgId")?.jsonPrimitive?.content)
+                    activeWorkspaceToken = workspaceToken
+                    activeOrg = "workspace-1"
+                    respond("""{"token":"$workspaceToken","expiresAt":9000}""")
+                }
+                "/v1/auth/session/switch" -> {
+                    assertEquals("Bearer $workspaceToken", request.headers["Authorization"])
+                    assertEquals("other-org", body?.get("orgId")?.jsonPrimitive?.content)
+                    if (denyNextSwitch) {
+                        denyNextSwitch = false
+                        respond("{}", HttpStatusCode.NotFound)
+                    } else {
+                        activeWorkspaceToken = switchedWorkspaceToken
+                        activeOrg = "other-org"
+                        respond("""{"token":"$switchedWorkspaceToken","expiresAt":9000}""")
+                    }
+                }
+                "/v1/auth/session/rotate" -> {
+                    assertEquals("Bearer $switchedWorkspaceToken", request.headers["Authorization"])
+                    activeWorkspaceToken = rotatedWorkspaceToken
+                    respond("""{"token":"$rotatedWorkspaceToken","expiresAt":9000}""")
+                }
+                "/v1/auth/session" -> {
+                    assertEquals("Bearer $activeWorkspaceToken", request.headers["Authorization"])
+                    sessionReads++
+                    respond("""{"sessionId":"session-$sessionReads","orgId":"$activeOrg","userId":"account-1","role":"operator","expiresAt":9000}""")
+                }
+                "/v1/organization" -> {
+                    assertEquals("Bearer $activeWorkspaceToken", request.headers["Authorization"])
+                    respond("{}", HttpStatusCode.Unauthorized)
+                }
+                else -> error("Unexpected route ${request.url.encodedPath}")
+            }
+        }
+        CoreApiClient(engine, origin).use { api ->
+            val workspace = CoreOrganizationSessionController(api) { 1 }
+            val controller = CoreAccountSecurityController(
+                api, workspace, rp,
+                onWorkspaceAuthorityLost = { loss ->
+                    lostAuthorities += loss
+                    if (cancelCallerOnLoss) {
+                        cancelCallerOnLoss = false
+                        callerToCancel?.cancel()
+                    }
+                },
+                now = { 1 },
+            )
+            controller.loginPassword("fixture", "synthetic")
+            controller.loginTotp("123456")
+            assertNotNull(controller.state.value)
+            assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
+
+            controller.chooseOrganization(selected)
+            workspace.switchOrganization("other-org")
+            workspace.rotate()
+            assertEquals("other-org", (workspace.state.value as CoreOrganizationSessionController.State.Active).session.orgId)
+            assertNotNull(controller.state.value, "a successful switch and rotation must preserve account-only authority")
+            cancelCallerOnLoss = true
+            val currentCaller = launch {
+                try {
+                    workspace.profile()
+                } catch (_: CancellationException) {
+                    // The independently delivered workspace loss cancels this caller after the 401 is accepted.
+                } catch (_: CoreHttpException) {
+                    // The controller has already made the session SignedOut before returning this error.
+                }
+            }
+            callerToCancel = currentCaller
+            currentCaller.join()
+            assertTrue(currentCaller.isCancelled, "loss delivery must survive cancellation of the request caller")
+            assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
+            assertEquals(1, lostAuthorities.size)
+
+            val oldAuthority = lostAuthorities.single()
+            assertTrue(controller.clearIfWorkspaceAuthorityCurrent(oldAuthority))
+            assertNull(controller.state.value)
+
+            issuedAccountToken = replacementAccountToken
+            controller.loginPassword("fixture", "synthetic")
+            controller.loginTotp("654321")
+            assertNotNull(controller.state.value)
+            assertFalse(controller.clearIfWorkspaceAuthorityCurrent(oldAuthority))
+            assertNotNull(controller.state.value, "a delayed loss for the prior grant must preserve a new sign-in")
+
+            controller.chooseOrganization(selected)
+            denyNextSwitch = true
+            assertFailsWith<CoreHttpException> { workspace.switchOrganization("other-org") }
+            assertEquals(CoreOrganizationSessionController.State.SignedOut, workspace.state.value)
+            assertEquals(2, lostAuthorities.size)
+            val currentAuthority = lostAuthorities.last()
+            assertFalse(controller.clearIfWorkspaceAuthorityCurrent(oldAuthority),
+                "an older queued loss must not clear a newer account grant")
+            assertTrue(controller.clearIfWorkspaceAuthorityCurrent(currentAuthority),
+                "the current loss must still clear after an older event is delivered first")
+            assertNull(controller.state.value)
+
+            issuedAccountToken = laterAccountToken
+            controller.loginPassword("fixture", "synthetic")
+            controller.loginTotp("111111")
+            assertNotNull(controller.state.value)
+            assertFalse(controller.clearIfWorkspaceAuthorityCurrent(currentAuthority),
+                "a delayed current event must not clear a later account-only sign-in")
+            assertNotNull(controller.state.value)
         }
     }
 
