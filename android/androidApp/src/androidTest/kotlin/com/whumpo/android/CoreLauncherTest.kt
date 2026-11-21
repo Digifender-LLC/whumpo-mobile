@@ -19,14 +19,18 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
+import androidx.lifecycle.Lifecycle
 import androidx.test.espresso.Espresso.pressBack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.whumpo.android.core.CoreLauncher
+import com.whumpo.android.core.CoreScopedSharedTask
 import com.whumpo.android.core.NativeAccountPasskeys
 import com.whumpo.core.api.CoreOrigin
 import com.whumpo.core.api.CoreRole
 import com.whumpo.core.api.CoreClientSettings
+import com.whumpo.core.api.CoreTaskStatus
+import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.api.coreApiClient
 import com.whumpo.core.auth.CoreOrganizationSessionController
 import io.ktor.client.engine.mock.MockEngine
@@ -45,6 +49,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -298,11 +303,13 @@ class CoreLauncherTest {
     fun coreShareColdActivityCreateUsesTheExistingReadySession() {
         val fixture = CoreLauncherFixture()
         fixture.organizationRole = CoreRole.owner
+        fixture.accountId = "share-save-${System.nanoTime().toString(36)}"
         fixture.readiness = CoreLauncherFixture.Readiness.Ready
         app.coreApiOriginOverride = "https://api.core.example.test"
         app.coreRpIdOverride = "core.example.test"
         app.coreLauncherEngine = fixture::engine
         var home: ActivityScenario<MainActivity>? = null
+        var filesBeforeTest: Set<String>? = null
         try {
             val initialHome = launch()
             home = initialHome
@@ -317,30 +324,117 @@ class CoreLauncherTest {
             click("Load organizations")
             click("fixture-org · owner")
             awaitText("Fixture organization")
+            awaitText("Organization access is active.")
+            compose.waitForIdle()
             val composition = checkNotNull(app.corePhoneComposition())
             val current = composition.organizations.state.value
             initialHome.close()
             home = null
 
             val beforeShareLaunch = fixture.requests.size
+            val draftDirectory = java.io.File(app.noBackupFilesDir, "core-offline-work")
+            val draftFilesBefore = draftDirectory.listFiles()?.map { it.name }?.toSet().orEmpty()
+            filesBeforeTest = draftFilesBefore
             val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                 .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "A note from another app")
             launch(incoming).use {
                 assertSame(current, composition.organizations.state.value)
                 awaitText("Review shared text")
                 awaitText("A note from another app")
-                assertTrue(fixture.requests.drop(beforeShareLaunch).none {
-                    it.startsWith("POST ") || it.startsWith("PUT ") || it.startsWith("DELETE ") ||
-                        it.startsWith("GET /v1/work/")
-                })
+                compose.waitForIdle()
+                assertEquals(fixture.requests.take(beforeShareLaunch), fixture.requests.toList())
                 click("Use in draft")
                 compose.waitUntil(10_000) {
                     compose.onAllNodesWithText("A note from another app").fetchSemanticsNodes().isNotEmpty() &&
                         compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().isEmpty()
                 }
+                assertEquals("Use keeps the text in memory until Save", draftFilesBefore,
+                    draftDirectory.listFiles()?.map { it.name }?.toSet().orEmpty())
+                assertEquals("Use makes no API request", fixture.requests.take(beforeShareLaunch), fixture.requests.toList())
+                input("Task title", "Shared notes follow-up")
+                click("Save on this device")
+                awaitText("Saved on this device.")
+                val newFiles = draftDirectory.listFiles()?.filter { it.name !in draftFilesBefore }.orEmpty()
+                assertEquals("explicit Save creates exactly one encrypted offline draft", 1, newFiles.size)
+                assertEquals("Save remains local", fixture.requests.take(beforeShareLaunch), fixture.requests.toList())
+                newFiles.single().delete()
+                if (draftDirectory.listFiles().isNullOrEmpty()) draftDirectory.delete()
             }
         } finally {
+            filesBeforeTest?.let { before ->
+                val draftDirectory = java.io.File(app.noBackupFilesDir, "core-offline-work")
+                draftDirectory.listFiles()?.filterNot { it.name in before }?.forEach { it.delete() }
+                if (draftDirectory.listFiles().isNullOrEmpty()) draftDirectory.delete()
+            }
             home?.close()
+            app.clearCorePhoneCompositionForTest()
+            app.coreLauncherEngine = null
+            app.coreApiOriginOverride = null
+            app.coreRpIdOverride = null
+        }
+    }
+
+    @Test
+    fun coreShareReviewExpiresAndPauseDiscardsTheTransientText() {
+        val fixture = CoreLauncherFixture()
+        fixture.organizationRole = CoreRole.owner
+        fixture.readiness = CoreLauncherFixture.Readiness.Ready
+        app.coreApiOriginOverride = "https://api.core.example.test"
+        app.coreRpIdOverride = "core.example.test"
+        app.coreLauncherEngine = fixture::engine
+        try {
+            launch().use { scenario ->
+                click("Open Core sign-in")
+                click("Sign in with password and authenticator")
+                input("Username", CoreLauncherFixture.USERNAME)
+                input("Password", CoreLauncherFixture.PASSWORD)
+                click("Continue")
+                awaitText("Enter your authenticator code")
+                input("Authenticator code", CoreLauncherFixture.TOTP)
+                click("Sign in")
+                click("Load organizations")
+                click("fixture-org · owner")
+                awaitText("Fixture organization")
+                awaitText("Organization access is active.")
+                compose.waitForIdle()
+                val composition = checkNotNull(app.corePhoneComposition())
+                val requestsBeforeShare = fixture.requests.toList()
+
+                val expiring = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
+                    .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Expires from this transient review")
+                scenario.onActivity { it.startActivity(expiring) }
+                awaitText("Expires from this transient review")
+                compose.mainClock.advanceTimeBy(60_100)
+                compose.waitForIdle()
+                compose.onAllNodesWithText("Expires from this transient review").fetchSemanticsNodes().let {
+                    assertTrue("expired raw share text is removed from the production surface", it.isEmpty())
+                }
+                assertNull(composition.sharedDraft.value)
+                assertEquals("expiry is local", requestsBeforeShare, fixture.requests.toList())
+
+                scenario.moveToState(Lifecycle.State.STARTED)
+                val arrivingWhilePaused = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
+                    .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Review after this activity resumes")
+                scenario.onActivity { it.startActivity(arrivingWhilePaused) }
+                compose.waitUntil(10_000) { composition.sharedDraft.value != null }
+                scenario.moveToState(Lifecycle.State.RESUMED)
+                awaitText("Review after this activity resumes")
+                click("Dismiss shared item")
+                compose.waitUntil(10_000) { composition.sharedDraft.value == null }
+                assertEquals("resuming and reviewing is local", requestsBeforeShare, fixture.requests.toList())
+
+                val paused = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
+                    .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Pause removes this transient review")
+                scenario.onActivity { it.startActivity(paused) }
+                awaitText("Pause removes this transient review")
+                scenario.moveToState(Lifecycle.State.STARTED)
+                compose.waitUntil(10_000) { composition.sharedDraft.value == null }
+                compose.onAllNodesWithText("Pause removes this transient review").fetchSemanticsNodes().let {
+                    assertTrue("onPause clears the unaccepted share", it.isEmpty())
+                }
+                assertEquals("pause is local", requestsBeforeShare, fixture.requests.toList())
+            }
+        } finally {
             app.clearCorePhoneCompositionForTest()
             app.coreLauncherEngine = null
             app.coreApiOriginOverride = null
@@ -432,6 +526,14 @@ class CoreLauncherTest {
                 click("Load organizations")
                 click("fixture-org · viewer")
                 compose.waitUntil(10_000) { fixture.oldEntitlementRequested.isCompleted }
+                val composition = localComposition ?: checkNotNull(app.corePhoneComposition())
+                val activeA = composition.organizations.state.value as CoreOrganizationSessionController.State.Active
+                val aTask = CoreWorkTask(
+                    id = "fixture-task-a", projectId = "fixture-project", title = "A scope task", description = null,
+                    parentTaskId = null, dueAt = null, status = CoreTaskStatus.Blocked, version = 1,
+                )
+                val aSelection = CoreScopedSharedTask(activeA, aTask)
+                assertSame(aTask, aSelection.forActive(activeA))
 
                 click("Switch organization")
                 awaitText("Switch to other-org · operator")
@@ -447,6 +549,9 @@ class CoreLauncherTest {
 
                 awaitText("Other organization")
                 compose.onNodeWithText("Role: operator").assertIsDisplayed()
+                val activeB = composition.organizations.state.value as CoreOrganizationSessionController.State.Active
+                assertNotSame("switch creates a distinct current authority", activeA, activeB)
+                assertNull("a selection from A cannot become the route target in B", aSelection.forActive(activeB))
                 awaitText("Organization access has expired.")
                 fixture.releaseOldEntitlement.complete(Unit)
                 compose.waitUntil(10_000) { fixture.oldEntitlementReleased.isCompleted }
@@ -549,6 +654,7 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
     @Volatile var readiness = Readiness.Unready
     @Volatile var todayResponsePhase = TodayResponsePhase.Fresh
     @Volatile var organizationRole = CoreRole.viewer
+    @Volatile var accountId = "fixture-account"
     private val deadline = System.currentTimeMillis() + 300_000
     private val grant = "ag1." + "g".repeat(42) + "A"
     private val token = "t".repeat(42) + "A"
@@ -600,7 +706,7 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
                 assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
                 val session = if (switched) "other-session" else "fixture-session"
                 val role = if (switched) "operator" else organizationRole.name.lowercase()
-                """{"sessionId":"$session","orgId":"$organization","userId":"fixture-account","role":"$role","expiresAt":$deadline}"""
+                """{"sessionId":"$session","orgId":"$organization","userId":"$accountId","role":"$role","expiresAt":$deadline}"""
             }
             "GET /v1/auth/organizations" -> {
                 assertTrue(multipleOrganizations)

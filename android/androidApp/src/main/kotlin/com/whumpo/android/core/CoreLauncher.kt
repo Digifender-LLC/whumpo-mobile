@@ -54,21 +54,21 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
     val session by sessions.state.collectAsStateWithLifecycle()
     val account by accounts.state.collectAsStateWithLifecycle()
     val sharedDraft by composition.sharedDraft.collectAsStateWithLifecycle()
+    val active = session as? CoreOrganizationSessionController.State.Active
     var showSignIn by remember(composition) { mutableStateOf(false) }
     var switching by remember(composition) { mutableStateOf(false) }
     var switchUnconfirmed by remember(composition) { mutableStateOf(false) }
     var signOutUnconfirmed by remember(composition) { mutableStateOf(false) }
     var sharedDraftOwner by remember(composition) { mutableStateOf<CoreOrganizationSessionController.State.Active?>(null) }
-    var sharedTask by remember(composition) { mutableStateOf<com.whumpo.core.api.CoreWorkTask?>(null) }
+    var sharedTask by remember(composition, active) { mutableStateOf<CoreScopedSharedTask?>(null) }
     val actions = rememberCoroutineScope()
-    val active = session as? CoreOrganizationSessionController.State.Active
+    val selectedTask = sharedTask?.forActive(active)
     LaunchedEffect(sharedDraft) {
         sharedDraft?.let { sharedDraftOwner = it.active }
     }
     LaunchedEffect(active) {
         composition.discardStaleSharedDraft()
         if (sharedDraftOwner !== active) sharedDraftOwner = null
-        if (active == null) sharedTask = null
     }
     LaunchedEffect(active) {
         if (active != null) {
@@ -92,8 +92,8 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
                 if (active != null) {
                     key(active.epoch) {
                         when {
-                            sharedTask != null -> CoreWorkSurface(
-                                sessions, active, onBack = { sharedTask = null }, initialTask = sharedTask,
+                            selectedTask != null -> CoreWorkSurface(
+                                sessions, active, onBack = { sharedTask = null }, initialTask = selectedTask,
                             )
                             sharedDraft?.active === active || sharedDraftOwner === active -> CoreSharedDraftWorkSurface(
                                 sessions = sessions,
@@ -122,7 +122,7 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
                                 openTask = { task ->
                                     sharedDraft?.let { composition.dismissSharedDraft(it.review) }
                                     sharedDraftOwner = null
-                                    sharedTask = task
+                                    sharedTask = CoreScopedSharedTask(active, task)
                                 },
                             )
                             else -> CoreOrganizationEntry(active, sessions, composition, onSwitch = { membership ->
@@ -173,6 +173,14 @@ internal fun CoreLauncher(composition: CorePhoneComposition, passkeys: AccountPa
             }
         }
     }
+}
+
+internal data class CoreScopedSharedTask(
+    val active: CoreOrganizationSessionController.State.Active,
+    val task: com.whumpo.core.api.CoreWorkTask,
+) {
+    fun forActive(current: CoreOrganizationSessionController.State.Active?) =
+        task.takeIf { active === current }
 }
 
 @Composable

@@ -22,6 +22,7 @@ import com.whumpo.core.auth.CoreSharedDraftItem
 
 class MainActivity : ComponentActivity() {
     private var coreComposition: CorePhoneComposition? = null
+    private var shareActivityResumed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -65,7 +66,19 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         container.activities.started(this)
         coreComposition?.refreshWearToday()
+        coreComposition?.observeShareForeground(resumed = shareActivityResumed, focused = hasWindowFocus())
+    }
+
+    override fun onResume() {
+        super.onResume()
+        shareActivityResumed = true
         coreComposition?.observeShareForeground(resumed = true, focused = hasWindowFocus())
+    }
+
+    override fun onPause() {
+        shareActivityResumed = false
+        coreComposition?.observeShareForeground(resumed = false, focused = hasWindowFocus())
+        super.onPause()
     }
 
     override fun onStop() {
@@ -76,7 +89,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        coreComposition?.observeShareForeground(resumed = !isFinishing && !isDestroyed, focused = hasFocus)
+        coreComposition?.observeShareForeground(resumed = shareActivityResumed, focused = hasFocus)
     }
 
     // The verified App Link https://whumpo.com/app/return comes back here (launchMode singleTask).

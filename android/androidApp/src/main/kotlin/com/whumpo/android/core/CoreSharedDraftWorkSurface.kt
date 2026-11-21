@@ -1,8 +1,10 @@
 package com.whumpo.android.core
 
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -17,6 +19,7 @@ import com.whumpo.core.account.CoreOfflineWorkStore
 import com.whumpo.core.api.CoreWorkTask
 import com.whumpo.core.auth.CoreOfflineWorkController
 import com.whumpo.core.auth.CoreOrganizationSessionController
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Reuses the encrypted, offline Work draft flow; the incoming item remains only in the transient review object. */
@@ -43,6 +46,11 @@ internal fun CoreSharedDraftWorkSurface(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(offer?.review) {
+        val review = offer?.review ?: return@LaunchedEffect
+        delay(review.remainingMillis(SystemClock.elapsedRealtime()))
+        if (offer?.review === review) dismiss()
     }
     val back: () -> Unit = {
         dismiss()
