@@ -83,6 +83,8 @@ function androidArtifactPathsMatch(android) {
         'android/shared/build/outputs/roborazzi/**',
         'android/wearApp/build/reports/**',
         'android/wearApp/build/test-results/**',
+        'android/build/diagnostics/compose-plugin-resolution/summary.txt',
+        'android/build/diagnostics/compose-plugin-resolution/probe.log',
         '!android/**/logcat*'
       ],
       retention: '7', missing: 'ignore', condition: 'always()', compression: undefined
@@ -95,6 +97,7 @@ function androidArtifactPathsMatch(android) {
         'android/androidApp/build/outputs/instrumented-diagnostics/anr-before.json',
         'android/androidApp/build/outputs/instrumented-diagnostics/anr-after.json',
         'android/androidApp/build/outputs/instrumented-diagnostics/device-state.txt',
+        'android/androidApp/build/outputs/instrumented-diagnostics/test-report-manifest.json',
         'android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt',
         'android/androidApp/build/outputs/instrumented-diagnostics/test-exit-code.txt',
         'android/wearApp/build/reports/androidTests/**',

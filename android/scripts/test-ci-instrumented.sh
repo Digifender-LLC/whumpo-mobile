@@ -8,6 +8,7 @@ trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/android/scripts" "$fixture/bin"
 cp "$script" "$fixture/android/scripts/ci-instrumented.sh"
 cp "$(dirname "$script")/anr-summary.py" "$fixture/android/scripts/anr-summary.py"
+cp "$(dirname "$script")/instrumented-report-manifest.py" "$fixture/android/scripts/instrumented-report-manifest.py"
 cp "$(dirname "$script")/verify-instrumented-results.py" "$fixture/android/scripts/verify-instrumented-results.py"
 cp "$(dirname "$script")/instrumented-test-inventory.json" "$fixture/android/scripts/instrumented-test-inventory.json"
 cp "$(dirname "$script")/verify-wear-instrumented-results.py" "$fixture/android/scripts/verify-wear-instrumented-results.py"
@@ -207,9 +208,34 @@ run() {
   [[ "$(grep -c '^unexpected-' "$CALLS" || true)" == 0 ]]
   ! grep -Fq dumpsys "$CALLS"
   [[ "$(grep -c '^journey$' "$CALLS" || true)" == 0 ]]
-  [[ "$(find "$out" -maxdepth 1 -type f -print | sed 's#^.*/##' | sort)" == $'anr-after.json\nanr-before.json\ndevice-state.txt\ntest-exit-code.txt\ntree-failures.txt' ]]
+  [[ "$(find "$out" -maxdepth 1 -type f -print | sed 's#^.*/##' | sort)" == $'anr-after.json\nanr-before.json\ndevice-state.txt\ntest-exit-code.txt\ntest-report-manifest.json\ntree-failures.txt' ]]
   [[ -s "$out/device-state.txt" && -s "$out/tree-failures.txt" ]]
   ! grep -r 'synthetic-private' "$out"
+  python3 - "$out/test-report-manifest.json" "$api" "$status" <<'PYMANIFEST'
+import json, sys
+from pathlib import Path
+path, api, status = Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+manifest = json.loads(path.read_text())
+assert manifest["version"] == 1
+assert manifest["api"] == api and manifest["serial"] == "emulator-5554"
+assert manifest["gradleExitCode"] == status
+expected_modules = {"androidApp": {"local", "deployed"}}
+if api == 36:
+    expected_modules["wearApp"] = {"local", "deployed"}
+assert {(entry["module"], entry["flavor"]) for entry in manifest["reports"]} == {
+    (module, flavor) for module, flavors in expected_modules.items() for flavor in flavors
+}
+for entry in manifest["reports"]:
+    for report in entry["junit"]:
+        assert report["path"].startswith(entry["module"] + "/build/outputs/androidTest-results/connected/debug/flavors/" + entry["flavor"] + "/TEST-")
+        if "counts" in report:
+            assert set(report["counts"]) == {"tests", "failures", "errors", "skipped"}
+        else:
+            assert report.get("parse") == "invalid-xml"
+    if entry["htmlReport"] is not None:
+        assert entry["htmlReport"]["path"] == entry["module"] + "/build/reports/androidTests/connected/debug/flavors/" + entry["flavor"] + "/index.html"
+assert not {"message", "stack", "logcat"} & set(manifest)
+PYMANIFEST
   for stage in before after; do
     if [[ "$ADB_STATUS" == 0 ]]; then
       [[ "$(cat "$out/anr-$stage.json")" == '{"version":1,"status":"captured","events":[{"process":"other","pid":1234,"reasonKind":"other"}]}' ]]

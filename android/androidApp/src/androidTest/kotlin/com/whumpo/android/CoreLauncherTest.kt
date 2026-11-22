@@ -466,10 +466,12 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
             }
             "GET /v1/organization/readiness" -> {
                 assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
+                val projectId = if (switched) "other-project" else "fixture-project"
+                val foreignOrgId = if (switched) "fixture-org" else "other-org"
                 when (readiness) {
-                    Readiness.Unready -> """{"orgId":"fixture-org","ready":false}"""
-                    Readiness.Foreign -> """{"orgId":"other-org","ready":true,"projectId":"fixture-project"}"""
-                    Readiness.Ready -> """{"orgId":"$organization","ready":true,"projectId":"fixture-project"}"""
+                    Readiness.Unready -> """{"orgId":"$organization","ready":false}"""
+                    Readiness.Foreign -> """{"orgId":"$foreignOrgId","ready":true,"projectId":"$projectId"}"""
+                    Readiness.Ready -> """{"orgId":"$organization","ready":true,"projectId":"$projectId"}"""
                 }
             }
             "GET /v1/organization" -> {
@@ -492,8 +494,10 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
                     "siteBuildAvailable":false,"revision":1,"effectiveFrom":1,"expiresAt":$deadline}"""
             }
             "GET /v1/briefing/today" -> {
-                assertEquals("Bearer $token", authorization)
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
                 assertEquals("Today cannot be read before this organization is ready", Readiness.Ready, readiness)
+                val todayTaskId = if (switched) "other-task" else "fixture-task"
+                val todayProjectId = if (switched) "other-project" else "fixture-project"
                 val title = if (todayResponsePhase == TodayResponsePhase.HoldStale) {
                     staleTodayRequested.complete(Unit)
                     withContext(NonCancellable) {
@@ -506,22 +510,26 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
                 """{"generatedAt":"2026-11-14T12:00:00.000Z","dueBefore":"2026-11-15T12:00:00.000Z",
                     "verifiedSince":"2026-11-13T12:00:00.000Z","empty":false,"sections":{"approvals":$emptySection,
                     "deadlines":$emptySection,"verified":$emptySection,"blocked":{"items":[{"provenance":"source_record",
-                    "observedAt":"2026-11-14T10:00:00.000Z","source":{"kind":"task","taskId":"fixture-task",
-                    "projectId":"fixture-project","version":1},"title":"$title","status":"blocked","dueAt":null}],"truncated":false}}}"""
+                    "observedAt":"2026-11-14T10:00:00.000Z","source":{"kind":"task","taskId":"$todayTaskId",
+                    "projectId":"$todayProjectId","version":1},"title":"$title","status":"blocked","dueAt":null}],"truncated":false}}}"""
             }
             "GET /v1/workspaces", "GET /v1/projects", "GET /v1/customers" -> {
-                assertEquals("Bearer $token", authorization)
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
                 """{"items":[]}"""
             }
             "GET /v1/work/tasks" -> {
-                assertEquals("Bearer $token", authorization)
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
                 if (revokeOnWork) return@MockEngine respond("{}", HttpStatusCode.Unauthorized)
                 if (denyWork) return@MockEngine respond("{}", HttpStatusCode.Forbidden)
                 val total = if (emptyWork) 0 else 1
-                val items = if (emptyWork) "" else """{"id":"fixture-task","projectId":"fixture-project","workspaceId":"fixture-workspace","title":"Current synthetic task","description":null,"parentTaskId":null,"dueAt":null,"status":"ready","version":1}"""
+                val taskId = if (switched) "other-task" else "fixture-task"
+                val projectId = if (switched) "other-project" else "fixture-project"
+                val workspaceId = if (switched) "other-workspace" else "fixture-workspace"
+                val items = if (emptyWork) "" else """{"id":"$taskId","projectId":"$projectId","workspaceId":"$workspaceId","title":"Current synthetic task","description":null,"parentTaskId":null,"dueAt":null,"status":"ready","version":1}"""
                 """{"items":[$items],"counts":{"total":$total,"overdue":0,"byStatus":{"backlog":0,"ready":$total,"in_progress":0,"blocked":0,"needs_approval":0,"done":0,"canceled":0}},"asOf":"2026-11-19T12:00:00Z"}"""
             }
             "DELETE /v1/auth/session" -> {
+                // Session cleanup is scoped to the captured old authority even after the UI switches.
                 assertEquals("Bearer $token", authorization)
                 requests += route
                 releaseRevocation.await()

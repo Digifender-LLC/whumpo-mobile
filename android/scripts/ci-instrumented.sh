@@ -30,6 +30,7 @@ capture() {
   timeout -k 2s 10s adb -s "$ANDROID_SERIAL" get-state >"$out/device-state.txt" 2>&1 || true
   timeout -k 2s 10s adb -s "$ANDROID_SERIAL" logcat -d -v threadtime WhumpoTreeDiagnostics:E '*:S' >"$out/tree-failures.txt" 2>&1 || true
   capture_anr "$out/anr-after.json" || true
+  python3 scripts/instrumented-report-manifest.py "$api" "$ANDROID_SERIAL" "$status" "$out/test-report-manifest.json" || true
   exit "$status"
 }
 trap capture EXIT

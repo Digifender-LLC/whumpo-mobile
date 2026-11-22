@@ -11,6 +11,11 @@ const inputs = {
 };
 
 assert.deepEqual(checkPolicy(inputs), [], 'current workflow policy should pass');
+assert.ok(inputs.android.includes('if (( status != 0 )) && grep -Fq "Plugin [id: \'org.jetbrains.kotlin.plugin.compose\'"'),
+  'Compose resolution probe runs only for the specific plugin-marker failure');
+assert.ok(inputs.android.includes('bash scripts/diagnose-compose-plugin-resolution.sh')
+  && inputs.android.includes('exit "$status"'),
+  'diagnostic must preserve the original Gradle result');
 
 function mutateActionReferences(base, action, replacement) {
   const escapedAction = action.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
