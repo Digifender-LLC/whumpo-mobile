@@ -53,7 +53,8 @@ if [[ "$api" == 36 ]]; then
   )
 fi
 for task in "${tasks[@]}"; do
-  ./gradlew "$task" -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
+  bash scripts/run-gradle-with-compose-diagnostics.sh ./gradlew "$task" \
+    -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
 done
 python3 scripts/verify-instrumented-results.py "$results" "$api" "$ANDROID_SERIAL"
 if [[ "$api" == 36 ]]; then

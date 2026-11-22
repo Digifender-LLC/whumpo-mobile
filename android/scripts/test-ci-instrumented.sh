@@ -7,12 +7,19 @@ fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/android/scripts" "$fixture/bin"
 cp "$script" "$fixture/android/scripts/ci-instrumented.sh"
+cp "$(dirname "$script")/run-gradle-with-compose-diagnostics.sh" "$fixture/android/scripts/run-gradle-with-compose-diagnostics.sh"
 cp "$(dirname "$script")/anr-summary.py" "$fixture/android/scripts/anr-summary.py"
 cp "$(dirname "$script")/instrumented-report-manifest.py" "$fixture/android/scripts/instrumented-report-manifest.py"
 cp "$(dirname "$script")/verify-instrumented-results.py" "$fixture/android/scripts/verify-instrumented-results.py"
 cp "$(dirname "$script")/instrumented-test-inventory.json" "$fixture/android/scripts/instrumented-test-inventory.json"
 cp "$(dirname "$script")/verify-wear-instrumented-results.py" "$fixture/android/scripts/verify-wear-instrumented-results.py"
 cp "$(dirname "$script")/wear-instrumented-test-inventory.json" "$fixture/android/scripts/wear-instrumented-test-inventory.json"
+cat >"$fixture/android/scripts/diagnose-compose-plugin-resolution.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'diagnostic|%s\n' "${DIAGNOSTIC_STATUS:-0}" >>"$CALLS"
+exit "${DIAGNOSTIC_STATUS:-0}"
+SH
+chmod +x "$fixture/android/scripts/diagnose-compose-plugin-resolution.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 "$(dirname "$script")/test-verify-instrumented-results.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$(dirname "$script")/test-verify-wear-instrumented-results.py"
 # Record actual validator arguments in the private fixture, not the public source.
@@ -104,6 +111,9 @@ status=$?
 if [[ "$status" == 0 ]]; then
   status="$GRADLE_STATUS"
 fi
+if [[ "$PLUGIN_MARKER_ERROR" == 1 ]]; then
+  echo "Plugin [id: 'org.jetbrains.kotlin.plugin.compose', version: '2.4.21', apply: false] was not found"
+fi
 printf 'gradle-finish|%s|%s\n' "$*" "$status" >>"$CALLS"
 exit "$status"
 SH
@@ -155,7 +165,7 @@ exec "$@"
 SH
 chmod +x "$fixture/android/gradlew" "$fixture/bin/"*
 export PATH="$fixture/bin:$PATH" ANDROID_SERIAL=emulator-5554
-export CALLS="$fixture/calls" GRADLE_STATUS=0 ADB_STATUS=0
+export CALLS="$fixture/calls" GRADLE_STATUS=0 ADB_STATUS=0 PLUGIN_MARKER_ERROR=0 DIAGNOSTIC_STATUS=0
 out="$fixture/android/androidApp/build/outputs/instrumented-diagnostics"
 run() {
   local api=$1 expected=$2 status=0
@@ -190,6 +200,11 @@ run() {
   fi
   [[ "$(grep '^gradle ' "$CALLS" || true)" == "$(printf '%s\n' "${expectedGradleLines[@]}")" ]]
   [[ "$(grep -E '^gradle-(start|finish)[|]' "$CALLS" || true)" == "$(printf '%s\n' "${expectedEvents[@]}")" ]]
+  if [[ "$GRADLE_STATUS" != 0 && "$PLUGIN_MARKER_ERROR" == 1 ]]; then
+    [[ "$(grep -c '^diagnostic|' "$CALLS" || true)" == 1 ]]
+  else
+    [[ "$(grep -c '^diagnostic|' "$CALLS" || true)" == 0 ]]
+  fi
   if [[ "$GRADLE_STATUS" == 0 ]]; then
     grep -Fxq "validator|androidApp/build/outputs/androidTest-results/connected|$api|emulator-5554" "$CALLS"
     if [[ "$api" == 36 && ( "$expected" == 0 || "${RESULT_MODE:-pass}" == missing-wear || "${RESULT_MODE:-pass}" == wear-skip ) ]]; then
@@ -247,7 +262,10 @@ PYMANIFEST
 }
 run 36 0
 run 28 0
+PLUGIN_MARKER_ERROR=1 run 36 0
 GRADLE_STATUS=42 run 36 42
+GRADLE_STATUS=42 PLUGIN_MARKER_ERROR=1 DIAGNOSTIC_STATUS=9 run 36 42
+GRADLE_STATUS=42 PLUGIN_MARKER_ERROR=0 DIAGNOSTIC_STATUS=9 run 36 42
 ADB_STATUS=9 run 36 0
 GRADLE_STATUS=42 ADB_STATUS=9 run 28 42
 RESULT_MODE=empty run 36 3
