@@ -1,6 +1,12 @@
 package com.whumpo.android
 
 import android.content.Intent
+import android.app.Activity
+import android.app.Application
+import android.content.ComponentName
+import android.os.Build
+import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.view.KeyEvent
 import androidx.activity.compose.setContent
 import androidx.compose.ui.input.key.Key
@@ -19,10 +25,11 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
-import androidx.lifecycle.Lifecycle
 import androidx.test.espresso.Espresso.pressBack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import com.whumpo.android.core.CoreLauncher
 import com.whumpo.android.core.CoreScopedSharedTask
 import com.whumpo.android.core.NativeAccountPasskeys
@@ -255,7 +262,10 @@ class CoreLauncherTest {
         app.coreRpIdOverride = "core.example.test"
         app.coreLauncherEngine = fixture::engine
         try {
-            launch().use { scenario ->
+            val hostIntent = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER)
+            launchTracked(hostIntent).use { tracked ->
+                val originalActivity = tracked.awaitFirstResumed()
                 click("Open Core sign-in")
                 click("Sign in with password and authenticator")
                 input("Username", CoreLauncherFixture.USERNAME)
@@ -276,6 +286,10 @@ class CoreLauncherTest {
                 sendExternalShare(incoming)
                 awaitText("Review shared text")
                 awaitText("Review these notes before creating anything")
+                assertScrubbedShareBaseIntent(originalActivity)
+                assertSame("singleTask delivery stays on the existing Activity instance", originalActivity,
+                    tracked.currentStartedActivity())
+                assertEquals("singleTask delivery creates no replacement Activity", 1, tracked.createdCount())
                 assertEquals("receiving text does not make API requests", requestsBeforeReceipt, fixture.requests.toList())
 
                 click("Use in draft")
@@ -324,6 +338,7 @@ class CoreLauncherTest {
             val current = composition.organizations.state.value
             assertEquals("the ready Core session is bound to the account grant", fixture.accountId,
                 (current as CoreOrganizationSessionController.State.Active).session.userId)
+            assertNoLiveMainActivity()
 
             val beforeShareLaunch = fixture.requests.size
             val draftDirectory = java.io.File(app.noBackupFilesDir, "core-offline-work")
@@ -331,10 +346,15 @@ class CoreLauncherTest {
             filesBeforeTest = draftFilesBefore
             val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                 .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "A note from another app")
-            launch(incoming).use {
+            launchTracked(incoming).use { tracked ->
+                val launchedActivity = tracked.awaitFirstResumed()
                 assertSame(current, composition.organizations.state.value)
+                assertSame("cold ACTION_SEND is displayed by its tracked target instance", launchedActivity,
+                    tracked.currentStartedActivity())
+                assertEquals("cold ACTION_SEND creates one new Activity", 1, tracked.createdCount())
                 awaitText("Review shared text")
                 awaitText("A note from another app")
+                assertScrubbedShareBaseIntent(launchedActivity)
                 compose.waitForIdle()
                 assertEquals(fixture.requests.take(beforeShareLaunch), fixture.requests.toList())
                 click("Use in draft")
@@ -378,7 +398,10 @@ class CoreLauncherTest {
         app.coreRpIdOverride = "core.example.test"
         app.coreLauncherEngine = fixture::engine
         try {
-            launch().use { scenario ->
+            val hostIntent = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER)
+            launchTracked(hostIntent).use { tracked ->
+                val activity = tracked.awaitFirstResumed()
                 click("Open Core sign-in")
                 click("Sign in with password and authenticator")
                 input("Username", CoreLauncherFixture.USERNAME)
@@ -410,12 +433,17 @@ class CoreLauncherTest {
                 assertNull(composition.sharedDraft.value)
                 assertEquals("expiry is local", requestsBeforeShare, fixture.requests.toList())
 
-                scenario.moveToState(Lifecycle.State.STARTED)
+                val pauseCount = tracked.eventCount(activity, ActivityEvent.PAUSED)
+                pressHomeFromActivity()
+                tracked.awaitEvent(activity, ActivityEvent.PAUSED, pauseCount)
                 val arrivingWhilePaused = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Review after this activity resumes")
+                val resumeCount = tracked.eventCount(activity, ActivityEvent.RESUMED)
                 sendExternalShare(arrivingWhilePaused)
                 compose.waitUntil(10_000) { composition.sharedDraft.value != null }
-                scenario.moveToState(Lifecycle.State.RESUMED)
+                tracked.awaitEvent(activity, ActivityEvent.RESUMED, resumeCount)
+                assertSame("background ACTION_SEND resumes the same singleTask Activity", activity,
+                    tracked.currentStartedActivity())
                 awaitText("Review after this activity resumes")
                 click("Dismiss shared item")
                 compose.waitUntil(10_000) { composition.sharedDraft.value == null }
@@ -426,7 +454,9 @@ class CoreLauncherTest {
                 sendExternalShare(paused)
                 awaitText("Pause removes this transient review")
                 val staleOffer = checkNotNull(composition.sharedDraft.value)
-                scenario.moveToState(Lifecycle.State.STARTED)
+                val stalePauseCount = tracked.eventCount(activity, ActivityEvent.PAUSED)
+                pressHomeFromActivity()
+                tracked.awaitEvent(activity, ActivityEvent.PAUSED, stalePauseCount)
                 compose.waitUntil(10_000) { composition.sharedDraft.value == null }
                 compose.onAllNodesWithText("Pause removes this transient review").fetchSemanticsNodes().let {
                     assertTrue("onPause clears the unaccepted share", it.isEmpty())
@@ -459,9 +489,13 @@ class CoreLauncherTest {
             val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, "Do not queue this while signed out")
+            assertNoLiveMainActivity()
             Fixtures.onMain { assertNull("cold share starts before any app Activity", app.container.activities.current) }
-            launch(incoming).use {
+            launchTracked(incoming).use { tracked ->
+                val activity = tracked.awaitFirstResumed()
+                assertEquals("signed-out cold ACTION_SEND creates one target Activity", 1, tracked.createdCount())
                 awaitText("Open Core sign-in")
+                assertScrubbedShareBaseIntent(activity)
                 compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
                 assertTrue(fixture.requests.isEmpty())
 
@@ -624,11 +658,169 @@ class CoreLauncherTest {
 
     private fun launch(intent: Intent) = ActivityScenario.launch<MainActivity>(intent)
 
+    /**
+     * Starts the real Activity without ActivityScenario's intent-filter-based lifecycle observer. MainActivity
+     * deliberately scrubs the original ACTION_SEND filter identity after consuming its untrusted payload.
+     */
+    private fun launchTracked(intent: Intent): MainActivityLifecycleProbe {
+        val probe = MainActivityLifecycleProbe(app)
+        try {
+            InstrumentationRegistry.getInstrumentation().context.startActivity(
+                Intent(intent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+            probe.awaitFirstResumed()
+            return probe
+        } catch (failure: Throwable) {
+            probe.close()
+            throw failure
+        }
+    }
+
     /** Start from the instrumentation APK so ACTION_SEND follows the same task/launchMode path as another app. */
     private fun sendExternalShare(intent: Intent) {
         InstrumentationRegistry.getInstrumentation().context.startActivity(
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
+    }
+
+    private fun pressHomeFromActivity() {
+        val output = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("input keyevent KEYCODE_HOME")
+        ParcelFileDescriptor.AutoCloseInputStream(output).use { it.readBytes() }
+    }
+
+    private fun assertNoLiveMainActivity() {
+        val nonDestroyedStages = listOf(
+            Stage.PRE_ON_CREATE,
+            Stage.CREATED,
+            Stage.STARTED,
+            Stage.RESUMED,
+            Stage.PAUSED,
+            Stage.STOPPED,
+            Stage.RESTARTED,
+        )
+        var liveActivities: List<MainActivity> = emptyList()
+        Fixtures.onMain {
+            val monitor = ActivityLifecycleMonitorRegistry.getInstance()
+            liveActivities = nonDestroyedStages.flatMap(monitor::getActivitiesInStage).filterIsInstance<MainActivity>()
+        }
+        assertTrue("cold share begins without a live MainActivity", liveActivities.isEmpty())
+    }
+
+    private fun assertScrubbedShareBaseIntent(activity: MainActivity) {
+        val base = activity.intent
+        assertNull("consumed share action is removed from the base intent", base.action)
+        assertNull("consumed share data is removed from the base intent", base.data)
+        assertNull("consumed share type is removed from the base intent", base.type)
+        assertTrue("consumed share categories are removed from the base intent", base.categories.isNullOrEmpty())
+        assertNull("consumed share clip data is removed from the base intent", base.clipData)
+        assertTrue("consumed share extras are removed from the base intent", base.extras?.isEmpty != false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            assertNull("consumed share identifier is removed from the base intent", base.identifier)
+        }
+        assertEquals(ComponentName(app, MainActivity::class.java), base.component)
+    }
+
+    private enum class ActivityEvent { CREATED, STARTED, RESUMED, PAUSED, STOPPED, DESTROYED }
+
+    /** Tracks exact Activity objects; unlike ActivityScenario it does not compare a scrubbed Intent to launch filter. */
+    private class MainActivityLifecycleProbe(private val application: Application) :
+        Application.ActivityLifecycleCallbacks, AutoCloseable {
+        private val lock = java.lang.Object()
+        private val history = java.util.IdentityHashMap<MainActivity, MutableList<ActivityEvent>>()
+        private val created = mutableListOf<MainActivity>()
+
+        init {
+            application.registerActivityLifecycleCallbacks(this)
+        }
+
+        fun awaitFirstResumed(timeoutMillis: Long = 10_000): MainActivity = await(timeoutMillis) {
+            created.firstOrNull { activity -> history[activity]?.contains(ActivityEvent.RESUMED) == true }
+        }
+
+        fun createdCount(): Int = synchronized(lock) { created.size }
+
+        fun currentStartedActivity(): MainActivity? = synchronized(lock) {
+            created.lastOrNull { activity -> history[activity]?.lastOrNull() in setOf(ActivityEvent.STARTED, ActivityEvent.RESUMED) }
+        }
+
+        fun eventCount(activity: MainActivity, event: ActivityEvent): Int = synchronized(lock) {
+            history[activity]?.count { it == event } ?: 0
+        }
+
+        fun awaitEvent(activity: MainActivity, event: ActivityEvent, afterCount: Int, timeoutMillis: Long = 10_000) {
+            await(timeoutMillis) {
+                val count = history[activity]?.count { it == event } ?: 0
+                activity.takeIf { count > afterCount }
+            }
+        }
+
+        private fun <T : Any> await(timeoutMillis: Long, value: () -> T?): T {
+            val deadline = System.nanoTime() + timeoutMillis * 1_000_000
+            synchronized(lock) {
+                while (true) {
+                    value()?.let { return it }
+                    val remainingNanos = deadline - System.nanoTime()
+                    if (remainingNanos <= 0) throw AssertionError("Timed out waiting for tracked MainActivity lifecycle")
+                    val millis = (remainingNanos / 1_000_000).coerceAtLeast(1)
+                    lock.wait(millis)
+                }
+            }
+        }
+
+        private fun recordCreated(activity: Activity) {
+            if (activity !is MainActivity) return
+            synchronized(lock) {
+                if (activity !in history) {
+                    created += activity
+                    history[activity] = mutableListOf()
+                }
+                history.getValue(activity) += ActivityEvent.CREATED
+                lock.notifyAll()
+            }
+        }
+
+        private fun record(activity: Activity, event: ActivityEvent) {
+            if (activity !is MainActivity) return
+            synchronized(lock) {
+                val events = history[activity] ?: return
+                events += event
+                lock.notifyAll()
+            }
+        }
+
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = recordCreated(activity)
+        override fun onActivityStarted(activity: Activity) = record(activity, ActivityEvent.STARTED)
+        override fun onActivityResumed(activity: Activity) = record(activity, ActivityEvent.RESUMED)
+        override fun onActivityPaused(activity: Activity) = record(activity, ActivityEvent.PAUSED)
+        override fun onActivityStopped(activity: Activity) = record(activity, ActivityEvent.STOPPED)
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+        override fun onActivityDestroyed(activity: Activity) = record(activity, ActivityEvent.DESTROYED)
+
+        override fun close() {
+            try {
+                val active = synchronized(lock) {
+                    created.filter { history[it]?.lastOrNull() != ActivityEvent.DESTROYED }
+                }
+                if (active.isNotEmpty()) {
+                    InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                        active.forEach { activity -> if (!activity.isFinishing) activity.finish() }
+                    }
+                    val deadline = System.nanoTime() + 10_000_000_000L
+                    synchronized(lock) {
+                        while (active.any { history[it]?.lastOrNull() != ActivityEvent.DESTROYED }) {
+                            val remainingNanos = deadline - System.nanoTime()
+                            if (remainingNanos <= 0) {
+                                throw AssertionError("Timed out waiting for all probe-owned MainActivity instances to be destroyed")
+                            }
+                            lock.wait((remainingNanos / 1_000_000).coerceAtLeast(1))
+                        }
+                    }
+                }
+            } finally {
+                application.unregisterActivityLifecycleCallbacks(this)
+            }
+        }
     }
 
     private fun establishReadyCoreComposition(): CorePhoneComposition {
