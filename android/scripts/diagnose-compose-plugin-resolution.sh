@@ -45,7 +45,7 @@ for name in marker module; do
   printf '%s HTTP=%s curl_exit=%s URL=%s\n' "$name" "${status:-none}" "$curl_status" "$url" >>"$out/summary.txt"
   if [[ -f "$probe/$name.body" ]]; then
     printf '%s ' "$name body SHA-256/bytes:" >>"$out/summary.txt"
-    shasum -a 256 "$probe/$name.body" >>"$out/summary.txt"
+    sha256sum "$probe/$name.body" >>"$out/summary.txt"
   fi
   if [[ -s "$probe/$name.curl-error" ]]; then
     sed -n '1,2p' "$probe/$name.curl-error" >>"$out/summary.txt"

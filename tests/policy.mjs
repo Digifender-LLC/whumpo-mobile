@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import {checkPolicy, checkTrackedPaths} from '../tools/check-policy.mjs';
 
@@ -6,16 +7,22 @@ const inputs = {
   android: readFileSync(new URL('../.github/workflows/android.yml', import.meta.url), 'utf8'),
   ci: readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'),
   instrumentation: readFileSync(new URL('../android/scripts/ci-instrumented.sh', import.meta.url), 'utf8'),
+  diagnosticRunner: readFileSync(new URL('../android/scripts/run-gradle-with-compose-diagnostics.sh', import.meta.url), 'utf8'),
   sdkInstaller: readFileSync(new URL('../android/scripts/ci-install-sdk.sh', import.meta.url), 'utf8'),
   dependabot: readFileSync(new URL('../.github/dependabot.yml', import.meta.url), 'utf8')
 };
 
 assert.deepEqual(checkPolicy(inputs), [], 'current workflow policy should pass');
-assert.ok(inputs.android.includes('if (( status != 0 )) && grep -Fq "Plugin [id: \'org.jetbrains.kotlin.plugin.compose\'"'),
+assert.ok(inputs.diagnosticRunner.includes('if (( gradle_status != 0 ))')
+  && inputs.diagnosticRunner.includes('grep -Fq "Plugin [id: \'org.jetbrains.kotlin.plugin.compose\'"'),
   'Compose resolution probe runs only for the specific plugin-marker failure');
-assert.ok(inputs.android.includes('bash scripts/diagnose-compose-plugin-resolution.sh')
-  && inputs.android.includes('exit "$status"'),
-  'diagnostic must preserve the original Gradle result');
+assert.ok(inputs.android.includes('run: bash android/scripts/run-gradle-with-compose-diagnostics.sh'),
+  'Android build must route through the Compose diagnostic wrapper');
+assert.ok(inputs.diagnosticRunner.includes('exit "$gradle_status"')
+  && inputs.diagnosticRunner.includes('org.jetbrains.kotlin.plugin.compose')
+  && inputs.diagnosticRunner.includes('bash scripts/diagnose-compose-plugin-resolution.sh'),
+  'diagnostic wrapper must preserve the original Gradle result and check the exact plugin');
+execFileSync('bash', ['android/scripts/test-gradle-compose-diagnostic-status.sh'], {stdio: 'inherit'});
 
 function mutateActionReferences(base, action, replacement) {
   const escapedAction = action.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

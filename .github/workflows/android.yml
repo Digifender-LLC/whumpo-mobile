@@ -33,17 +33,7 @@ jobs:
         run: bash android/scripts/ci-install-sdk.sh build
       - name: Assemble, lint and run unit and host tests
         working-directory: android
-        run: |
-          log="$(mktemp)"
-          set +e
-          ./gradlew assembleLocalDebug assembleDeployedDebug assembleLocalDebugAndroidTest assembleDeployedDebugAndroidTest lintLocalDebug lintDeployedDebug :shared:jvmTest :shared:compileKotlinJvm :shared:testAndroidHostTest testLocalDebugUnitTest testDeployedDebugUnitTest :wearApp:testLocalDebugUnitTest :wearApp:testDeployedDebugUnitTest :wearApp:assembleLocalDebug :wearApp:assembleDeployedDebug :wearApp:assembleLocalDebugAndroidTest :wearApp:assembleDeployedDebugAndroidTest :wearApp:assembleDeployedRelease :wearApp:lintDeployedRelease 2>&1 | tee "$log"
-          status=${PIPESTATUS[0]}
-          set -e
-          if (( status != 0 )) && grep -Fq "Plugin [id: 'org.jetbrains.kotlin.plugin.compose'" "$log"; then
-            bash scripts/diagnose-compose-plugin-resolution.sh
-          fi
-          rm -- "$log"
-          exit "$status"
+        run: bash android/scripts/run-gradle-with-compose-diagnostics.sh ./gradlew assembleLocalDebug assembleDeployedDebug assembleLocalDebugAndroidTest assembleDeployedDebugAndroidTest lintLocalDebug lintDeployedDebug :shared:jvmTest :shared:compileKotlinJvm :shared:testAndroidHostTest testLocalDebugUnitTest testDeployedDebugUnitTest :wearApp:testLocalDebugUnitTest :wearApp:testDeployedDebugUnitTest :wearApp:assembleLocalDebug :wearApp:assembleDeployedDebug :wearApp:assembleLocalDebugAndroidTest :wearApp:assembleDeployedDebugAndroidTest :wearApp:assembleDeployedRelease :wearApp:lintDeployedRelease
       - name: Prepare local debug APK evidence
         run: python3 android/scripts/export-debug-apks.py
       - name: Upload local debug APK evidence
