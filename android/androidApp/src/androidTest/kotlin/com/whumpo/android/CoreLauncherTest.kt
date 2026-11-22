@@ -250,6 +250,7 @@ class CoreLauncherTest {
         val fixture = CoreLauncherFixture()
         fixture.organizationRole = CoreRole.owner
         fixture.readiness = CoreLauncherFixture.Readiness.Ready
+        fixture.todayResponsePhase = CoreLauncherFixture.TodayResponsePhase.HoldPublisher
         app.coreApiOriginOverride = "https://api.core.example.test"
         app.coreRpIdOverride = "core.example.test"
         app.coreLauncherEngine = fixture::engine
@@ -266,6 +267,8 @@ class CoreLauncherTest {
                 click("Load organizations")
                 click("fixture-org · owner")
                 awaitText("Fixture organization")
+                awaitText("Organization access is active.")
+                compose.waitUntil(10_000) { fixture.publisherTodayRequested.isCompleted }
 
                 val requestsBeforeReceipt = fixture.requests.toList()
                 val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
@@ -292,6 +295,7 @@ class CoreLauncherTest {
                 compose.onAllNodesWithText("Review these notes before creating anything").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
             }
         } finally {
+            fixture.releasePublisherToday.complete(Unit)
             app.clearCorePhoneCompositionForTest()
             app.coreLauncherEngine = null
             app.coreApiOriginOverride = null
@@ -305,31 +309,19 @@ class CoreLauncherTest {
         fixture.organizationRole = CoreRole.owner
         fixture.accountId = "share-save-${System.nanoTime().toString(36)}"
         fixture.readiness = CoreLauncherFixture.Readiness.Ready
+        fixture.todayResponsePhase = CoreLauncherFixture.TodayResponsePhase.HoldPublisher
         app.coreApiOriginOverride = "https://api.core.example.test"
         app.coreRpIdOverride = "core.example.test"
         app.coreLauncherEngine = fixture::engine
-        var home: ActivityScenario<MainActivity>? = null
         var filesBeforeTest: Set<String>? = null
         try {
-            val initialHome = launch()
-            home = initialHome
-            click("Open Core sign-in")
-            click("Sign in with password and authenticator")
-            input("Username", CoreLauncherFixture.USERNAME)
-            input("Password", CoreLauncherFixture.PASSWORD)
-            click("Continue")
-            awaitText("Enter your authenticator code")
-            input("Authenticator code", CoreLauncherFixture.TOTP)
-            click("Sign in")
-            click("Load organizations")
-            click("fixture-org · owner")
-            awaitText("Fixture organization")
-            awaitText("Organization access is active.")
-            compose.waitForIdle()
-            val composition = checkNotNull(app.corePhoneComposition())
+            // Establish a genuine current account/org session before the first Activity, keeping this ACTION_SEND
+            // Activity launch cold while the process-owned publisher is independently held at its Today read.
+            val composition = establishReadyCoreComposition()
+            kotlinx.coroutines.runBlocking {
+                kotlinx.coroutines.withTimeout(10_000) { fixture.publisherTodayRequested.await() }
+            }
             val current = composition.organizations.state.value
-            initialHome.close()
-            home = null
 
             val beforeShareLaunch = fixture.requests.size
             val draftDirectory = java.io.File(app.noBackupFilesDir, "core-offline-work")
@@ -361,12 +353,12 @@ class CoreLauncherTest {
                 if (draftDirectory.listFiles().isNullOrEmpty()) draftDirectory.delete()
             }
         } finally {
+            fixture.releasePublisherToday.complete(Unit)
             filesBeforeTest?.let { before ->
                 val draftDirectory = java.io.File(app.noBackupFilesDir, "core-offline-work")
                 draftDirectory.listFiles()?.filterNot { it.name in before }?.forEach { it.delete() }
                 if (draftDirectory.listFiles().isNullOrEmpty()) draftDirectory.delete()
             }
-            home?.close()
             app.clearCorePhoneCompositionForTest()
             app.coreLauncherEngine = null
             app.coreApiOriginOverride = null
@@ -379,6 +371,7 @@ class CoreLauncherTest {
         val fixture = CoreLauncherFixture()
         fixture.organizationRole = CoreRole.owner
         fixture.readiness = CoreLauncherFixture.Readiness.Ready
+        fixture.todayResponsePhase = CoreLauncherFixture.TodayResponsePhase.HoldPublisher
         app.coreApiOriginOverride = "https://api.core.example.test"
         app.coreRpIdOverride = "core.example.test"
         app.coreLauncherEngine = fixture::engine
@@ -396,6 +389,7 @@ class CoreLauncherTest {
                 click("fixture-org · owner")
                 awaitText("Fixture organization")
                 awaitText("Organization access is active.")
+                compose.waitUntil(10_000) { fixture.publisherTodayRequested.isCompleted }
                 compose.waitForIdle()
                 val composition = checkNotNull(app.corePhoneComposition())
                 val requestsBeforeShare = fixture.requests.toList()
@@ -443,6 +437,7 @@ class CoreLauncherTest {
                 assertEquals("pause is local", requestsBeforeShare, fixture.requests.toList())
             }
         } finally {
+            fixture.releasePublisherToday.complete(Unit)
             app.clearCorePhoneCompositionForTest()
             app.coreLauncherEngine = null
             app.coreApiOriginOverride = null
@@ -626,6 +621,23 @@ class CoreLauncherTest {
 
     private fun launch(intent: Intent) = ActivityScenario.launch<MainActivity>(intent)
 
+    private fun establishReadyCoreComposition(): CorePhoneComposition {
+        var created: CorePhoneComposition? = null
+        Fixtures.onMain { created = app.corePhoneComposition() }
+        val composition = checkNotNull(created)
+        val active = kotlinx.coroutines.runBlocking {
+            composition.accounts.loginPassword(CoreLauncherFixture.USERNAME, CoreLauncherFixture.PASSWORD)
+            composition.accounts.loginTotp(CoreLauncherFixture.TOTP)
+            val membership = composition.accounts.organizations().items.single()
+            composition.accounts.chooseOrganization(membership)
+            composition.organizations.state.value as CoreOrganizationSessionController.State.Active
+        }
+        val ready = kotlinx.coroutines.runBlocking { composition.organizations.organizationWhenReady(active) != null }
+        assertTrue("the existing fixture session passed the production readiness check", ready)
+        Fixtures.onMain { composition.publishShareReadiness(active.epoch, ready) }
+        return composition
+    }
+
     private fun awaitLegacyEntry() {
         awaitText("Welcome to Whumpo.")
         compose.onNodeWithTag("auth-sign-in").assertIsDisplayed()
@@ -651,7 +663,7 @@ private class CoreLauncherFixture(
     private val expectedHost: String = "api.core.example.test",
 ) {
     enum class Readiness { Unready, Foreign, Ready }
-    enum class TodayResponsePhase { Fresh, HoldStale }
+    enum class TodayResponsePhase { Fresh, HoldStale, HoldPublisher }
 
     val requests = CopyOnWriteArrayList<String>()
     val releaseRevocation = CompletableDeferred<Unit>()
@@ -662,6 +674,9 @@ private class CoreLauncherFixture(
     val staleTodayRequested = CompletableDeferred<Unit>()
     val releaseStaleToday = CompletableDeferred<Unit>()
     val staleTodayReleased = CompletableDeferred<Unit>()
+    val publisherTodayRequested = CompletableDeferred<Unit>()
+    val releasePublisherToday = CompletableDeferred<Unit>()
+    val publisherTodayReleased = CompletableDeferred<Unit>()
     @Volatile var revokeOnWork = false
     @Volatile var denyWork = false
     @Volatile var emptyWork = false
@@ -778,6 +793,13 @@ private class CoreLauncherFixture(
                 assertEquals("Today cannot be read before this organization is ready", Readiness.Ready, readiness)
                 val todayTaskId = if (switched) "other-task" else "fixture-task"
                 val todayProjectId = if (switched) "other-project" else "fixture-project"
+                if (todayResponsePhase == TodayResponsePhase.HoldPublisher) {
+                    publisherTodayRequested.complete(Unit)
+                    withContext(NonCancellable) {
+                        releasePublisherToday.await()
+                        publisherTodayReleased.complete(Unit)
+                    }
+                }
                 val title = if (todayResponsePhase == TodayResponsePhase.HoldStale) {
                     staleTodayRequested.complete(Unit)
                     withContext(NonCancellable) {
