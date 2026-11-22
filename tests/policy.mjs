@@ -16,8 +16,8 @@ assert.deepEqual(checkPolicy(inputs), [], 'current workflow policy should pass')
 assert.ok(inputs.diagnosticRunner.includes('if (( gradle_status != 0 ))')
   && inputs.diagnosticRunner.includes('grep -Fq "Plugin [id: \'org.jetbrains.kotlin.plugin.compose\'"'),
   'Compose resolution probe runs only for the specific plugin-marker failure');
-assert.ok(inputs.android.includes('run: bash android/scripts/run-gradle-with-compose-diagnostics.sh'),
-  'Android build must route through the Compose diagnostic wrapper');
+assert.ok(inputs.android.includes('working-directory: android\n        run: bash scripts/run-gradle-with-compose-diagnostics.sh'),
+  'Android build must invoke the diagnostic wrapper relative to its working directory');
 assert.ok(inputs.diagnosticRunner.includes('exit "$gradle_status"')
   && inputs.diagnosticRunner.includes('org.jetbrains.kotlin.plugin.compose')
   && inputs.diagnosticRunner.includes('bash scripts/diagnose-compose-plugin-resolution.sh'),
