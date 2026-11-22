@@ -9,6 +9,12 @@ excludes a production release and a self-hosted backend.
 The hosted service requires separate access. The private backend, official
 signing keys, and provider credentials are outside this repository.
 
+## Roadmap and handoff
+
+MVP stage 1 is backend and web only; native mobile/share-sheet work is deferred
+to stage 2. Resume from the canonical [Whumpo handoff](https://github.com/Digifender-LLC/FounderAI-monorepo/blob/main/docs/HANDOFF.md)
+before changing native source.
+
 ## Build and test
 
 Use JDK 21. Install the Android SDK with platform 37.

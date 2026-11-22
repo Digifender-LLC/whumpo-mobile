@@ -4,6 +4,12 @@ These instructions apply to contributors to this public Android client. See
 [Android verification](docs/android-verification.md) for workflow definitions and
 required checks. Examine GitHub settings separately for enforcement.
 
+## Current roadmap scope
+
+MVP stage 1 is backend and web only. Native mobile/share-sheet work is deferred
+to stage 2. Read the [canonical Whumpo handoff](https://github.com/Digifender-LLC/FounderAI-monorepo/blob/main/docs/HANDOFF.md)
+before changing native source.
+
 ## Project and toolchain
 
 - Use the installed Devin CLI (`devin`) with `--model fusion` by default for
