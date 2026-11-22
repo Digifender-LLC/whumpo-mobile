@@ -273,7 +273,7 @@ class CoreLauncherTest {
                 val requestsBeforeReceipt = fixture.requests.toList()
                 val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Review these notes before creating anything")
-                scenario.onActivity { it.startActivity(incoming) }
+                sendExternalShare(incoming)
                 awaitText("Review shared text")
                 awaitText("Review these notes before creating anything")
                 assertEquals("receiving text does not make API requests", requestsBeforeReceipt, fixture.requests.toList())
@@ -285,7 +285,7 @@ class CoreLauncherTest {
                 }
                 assertEquals("using the text fills a local draft without an API request", requestsBeforeReceipt, fixture.requests.toList())
 
-                scenario.onActivity { it.startActivity(incoming) }
+                sendExternalShare(incoming)
                 compose.waitForIdle()
                 compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
                 assertEquals(requestsBeforeReceipt, fixture.requests.toList())
@@ -322,6 +322,8 @@ class CoreLauncherTest {
                 kotlinx.coroutines.withTimeout(10_000) { fixture.publisherTodayRequested.await() }
             }
             val current = composition.organizations.state.value
+            assertEquals("the ready Core session is bound to the account grant", fixture.accountId,
+                (current as CoreOrganizationSessionController.State.Active).session.userId)
 
             val beforeShareLaunch = fixture.requests.size
             val draftDirectory = java.io.File(app.noBackupFilesDir, "core-offline-work")
@@ -398,7 +400,7 @@ class CoreLauncherTest {
 
                 val expiring = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Expires from this transient review")
-                scenario.onActivity { it.startActivity(expiring) }
+                sendExternalShare(expiring)
                 awaitText("Expires from this transient review")
                 compose.mainClock.advanceTimeBy(60_100)
                 compose.waitForIdle()
@@ -411,7 +413,7 @@ class CoreLauncherTest {
                 scenario.moveToState(Lifecycle.State.STARTED)
                 val arrivingWhilePaused = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Review after this activity resumes")
-                scenario.onActivity { it.startActivity(arrivingWhilePaused) }
+                sendExternalShare(arrivingWhilePaused)
                 compose.waitUntil(10_000) { composition.sharedDraft.value != null }
                 scenario.moveToState(Lifecycle.State.RESUMED)
                 awaitText("Review after this activity resumes")
@@ -421,7 +423,7 @@ class CoreLauncherTest {
 
                 val paused = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Pause removes this transient review")
-                scenario.onActivity { it.startActivity(paused) }
+                sendExternalShare(paused)
                 awaitText("Pause removes this transient review")
                 val staleOffer = checkNotNull(composition.sharedDraft.value)
                 scenario.moveToState(Lifecycle.State.STARTED)
@@ -455,8 +457,9 @@ class CoreLauncherTest {
         app.coreLauncherEngine = fixture::engine
         try {
             val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
-                .setType("text/plain").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                .setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, "Do not queue this while signed out")
+            Fixtures.onMain { assertNull("cold share starts before any app Activity", app.container.activities.current) }
             launch(incoming).use {
                 awaitText("Open Core sign-in")
                 compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
@@ -475,7 +478,7 @@ class CoreLauncherTest {
                 awaitText("This organization has not finished setup. Continue in the web workspace.")
                 val unreadyShare = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Do not queue this while organization is unready")
-                it.onActivity { activity -> activity.startActivity(unreadyShare) }
+                sendExternalShare(unreadyShare)
                 compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
 
                 fixture.readiness = CoreLauncherFixture.Readiness.Ready
@@ -620,6 +623,13 @@ class CoreLauncherTest {
         .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER))
 
     private fun launch(intent: Intent) = ActivityScenario.launch<MainActivity>(intent)
+
+    /** Start from the instrumentation APK so ACTION_SEND follows the same task/launchMode path as another app. */
+    private fun sendExternalShare(intent: Intent) {
+        InstrumentationRegistry.getInstrumentation().context.startActivity(
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
 
     private fun establishReadyCoreComposition(): CorePhoneComposition {
         var created: CorePhoneComposition? = null
@@ -848,7 +858,7 @@ private class CoreLauncherFixture(
 
     private fun grantBody() = """{
         "authority":{"kind":"account_grant","token":"$grant","purpose":"account","expiresAt":$deadline},
-        "state":{"version":1,"accountId":"fixture-account","candidateId":null,"purpose":"account","phase":"ready",
+        "state":{"version":1,"accountId":"$accountId","candidateId":null,"purpose":"account","phase":"ready",
         "generation":1,"inventoryRevision":1,"attemptId":null,"attemptRevision":null,"intentRevision":null,"methods":[],
         "recovery":{"kind":"none","generation":0,"remainingCodes":null,"offer":null},
         "approvedMethod":null,"freshUntil":null,"expiresAt":$deadline,"workspaceAccess":"available","setupProfile":null}
