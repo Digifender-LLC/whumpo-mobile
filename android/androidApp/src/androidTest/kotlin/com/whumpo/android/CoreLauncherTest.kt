@@ -399,6 +399,8 @@ class CoreLauncherTest {
                 compose.waitForIdle()
                 val composition = checkNotNull(app.corePhoneComposition())
                 val requestsBeforeShare = fixture.requests.toList()
+                val draftDirectory = java.io.File(app.noBackupFilesDir, "core-offline-work")
+                val draftFilesBefore = draftDirectory.listFiles()?.map { it.name }?.toSet().orEmpty()
 
                 val expiring = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Expires from this transient review")
@@ -427,11 +429,17 @@ class CoreLauncherTest {
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Pause removes this transient review")
                 scenario.onActivity { it.startActivity(paused) }
                 awaitText("Pause removes this transient review")
+                val staleOffer = checkNotNull(composition.sharedDraft.value)
                 scenario.moveToState(Lifecycle.State.STARTED)
                 compose.waitUntil(10_000) { composition.sharedDraft.value == null }
                 compose.onAllNodesWithText("Pause removes this transient review").fetchSemanticsNodes().let {
                     assertTrue("onPause clears the unaccepted share", it.isEmpty())
                 }
+                var staleUseResult: String? = "not-invoked"
+                Fixtures.onMain { staleUseResult = composition.acceptSharedDraft(staleOffer) }
+                assertNull("a stale Use callback cannot accept an offer after onPause", staleUseResult)
+                assertEquals("pause does not persist the shared text", draftFilesBefore,
+                    draftDirectory.listFiles()?.map { it.name }?.toSet().orEmpty())
                 assertEquals("pause is local", requestsBeforeShare, fixture.requests.toList())
             }
         } finally {
@@ -452,7 +460,8 @@ class CoreLauncherTest {
         app.coreLauncherEngine = fixture::engine
         try {
             val incoming = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
-                .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Do not queue this while signed out")
+                .setType("text/plain").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                .putExtra(Intent.EXTRA_TEXT, "Do not queue this while signed out")
             launch(incoming).use {
                 awaitText("Open Core sign-in")
                 compose.onAllNodesWithText("Review shared text").fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
@@ -491,7 +500,10 @@ class CoreLauncherTest {
 
     @Test
     fun syntheticLauncherSwitchesOnlyVerifiedMembershipsAndDiscardsOldScope() {
-        val fixture = CoreLauncherFixture(multipleOrganizations = true)
+        val fixture = CoreLauncherFixture(
+            multipleOrganizations = true,
+            expectedHost = if (BuildConfig.WHUMPO_ENVIRONMENT == "local") "core.example.test" else "api.core.example.test",
+        )
         val localClient = if (BuildConfig.WHUMPO_ENVIRONMENT == "local") {
             // Exercise the same mounted launcher with a synthetic engine without enabling the default local entry.
             coreApiClient(CoreOrigin.allowlisted("https://core.example.test", setOf("https://core.example.test")), fixture.engine())
@@ -634,7 +646,10 @@ class CoreLauncherTest {
     }
 }
 
-private class CoreLauncherFixture(private val multipleOrganizations: Boolean = false) {
+private class CoreLauncherFixture(
+    private val multipleOrganizations: Boolean = false,
+    private val expectedHost: String = "api.core.example.test",
+) {
     enum class Readiness { Unready, Foreign, Ready }
     enum class TodayResponsePhase { Fresh, HoldStale }
 
@@ -662,7 +677,7 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
 
     fun engine() = MockEngine { request ->
         assertEquals("https", request.url.protocol.name)
-        assertEquals("core.example.test", request.url.host)
+        assertEquals(expectedHost, request.url.host)
         assertEquals(443, request.url.port)
         val route = "${request.method.value} ${request.url.encodedPath}"
         if (route == "GET /v1/auth/organizations") assertEquals("25", request.url.parameters["limit"])
