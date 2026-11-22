@@ -458,15 +458,25 @@ class CoreLauncherTest {
                 pressHomeFromActivity()
                 tracked.awaitEvent(activity, ActivityEvent.PAUSED, stalePauseCount)
                 compose.waitUntil(10_000) { composition.sharedDraft.value == null }
-                compose.onAllNodesWithText("Pause removes this transient review").fetchSemanticsNodes().let {
-                    assertTrue("onPause clears the unaccepted share", it.isEmpty())
-                }
                 var staleUseResult: String? = "not-invoked"
                 Fixtures.onMain { staleUseResult = composition.acceptSharedDraft(staleOffer) }
                 assertNull("a stale Use callback cannot accept an offer after onPause", staleUseResult)
                 assertEquals("pause does not persist the shared text", draftFilesBefore,
                     draftDirectory.listFiles()?.map { it.name }?.toSet().orEmpty())
                 assertEquals("pause is local", requestsBeforeShare, fixture.requests.toList())
+
+                val foregroundResumeCount = tracked.eventCount(activity, ActivityEvent.RESUMED)
+                resumeExistingMainActivity()
+                tracked.awaitEvent(activity, ActivityEvent.RESUMED, foregroundResumeCount)
+                assertSame("bringing the app back does not replace the paused singleTask Activity", activity,
+                    tracked.currentStartedActivity())
+                awaitText("Organization access is active.")
+                compose.onAllNodesWithText("Pause removes this transient review").fetchSemanticsNodes().let {
+                    assertTrue("the paused share remains absent after the real Compose hierarchy resumes", it.isEmpty())
+                }
+                val resumedRoutes = fixture.requests.drop(requestsBeforeShare.size)
+                assertTrue("foreground refresh is limited to the exact ready-session Today reads",
+                    resumedRoutes.all { it in TODAY_REFRESH_ROUTES })
             }
         } finally {
             fixture.releasePublisherToday.complete(Unit)
@@ -683,6 +693,14 @@ class CoreLauncherTest {
         )
     }
 
+    private fun resumeExistingMainActivity() {
+        val intent = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+        InstrumentationRegistry.getInstrumentation().context.startActivity(
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+
     private fun pressHomeFromActivity() {
         val output = InstrumentationRegistry.getInstrumentation().uiAutomation
             .executeShellCommand("input keyevent KEYCODE_HOME")
@@ -722,6 +740,14 @@ class CoreLauncherTest {
     }
 
     private enum class ActivityEvent { CREATED, STARTED, RESUMED, PAUSED, STOPPED, DESTROYED }
+
+    private companion object {
+        val TODAY_REFRESH_ROUTES = setOf(
+            "GET /v1/organization/readiness",
+            "GET /v1/organization",
+            "GET /v1/briefing/today",
+        )
+    }
 
     /** Tracks exact Activity objects; unlike ActivityScenario it does not compare a scrubbed Intent to launch filter. */
     private class MainActivityLifecycleProbe(private val application: Application) :
