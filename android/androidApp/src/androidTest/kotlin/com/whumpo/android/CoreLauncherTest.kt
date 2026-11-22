@@ -434,8 +434,15 @@ class CoreLauncherTest {
                 assertEquals("expiry is local", requestsBeforeShare, fixture.requests.toList())
 
                 val pauseCount = tracked.eventCount(activity, ActivityEvent.PAUSED)
+                val stoppedCount = tracked.eventCount(activity, ActivityEvent.STOPPED)
                 pressHomeFromActivity()
                 tracked.awaitEvent(activity, ActivityEvent.PAUSED, pauseCount)
+                tracked.awaitEvent(activity, ActivityEvent.STOPPED, stoppedCount)
+                compose.waitUntil(10_000) {
+                    var unfocused = false
+                    Fixtures.onMain { unfocused = !activity.hasWindowFocus() }
+                    unfocused
+                }
                 val arrivingWhilePaused = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND)
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Review after this activity resumes")
                 val resumeCount = tracked.eventCount(activity, ActivityEvent.RESUMED)
@@ -455,8 +462,10 @@ class CoreLauncherTest {
                 awaitText("Pause removes this transient review")
                 val staleOffer = checkNotNull(composition.sharedDraft.value)
                 val stalePauseCount = tracked.eventCount(activity, ActivityEvent.PAUSED)
+                val staleStoppedCount = tracked.eventCount(activity, ActivityEvent.STOPPED)
                 pressHomeFromActivity()
                 tracked.awaitEvent(activity, ActivityEvent.PAUSED, stalePauseCount)
+                tracked.awaitEvent(activity, ActivityEvent.STOPPED, staleStoppedCount)
                 compose.waitUntil(10_000) { composition.sharedDraft.value == null }
                 var staleUseResult: String? = "not-invoked"
                 Fixtures.onMain { staleUseResult = composition.acceptSharedDraft(staleOffer) }
@@ -470,7 +479,22 @@ class CoreLauncherTest {
                 tracked.awaitEvent(activity, ActivityEvent.RESUMED, foregroundResumeCount)
                 assertSame("bringing the app back does not replace the paused singleTask Activity", activity,
                     tracked.currentStartedActivity())
-                awaitText("Organization access is active.")
+                compose.waitUntil(10_000) {
+                    var currentAndFocused = false
+                    Fixtures.onMain { currentAndFocused = app.container.activities.current === activity && activity.hasWindowFocus() }
+                    currentAndFocused
+                }
+                val resumedOrganizationState = composition.organizations.state.value
+                assertTrue("foregrounding keeps the current Core organization session active",
+                    resumedOrganizationState is CoreOrganizationSessionController.State.Active)
+                if (resumedOrganizationState is CoreOrganizationSessionController.State.Active) {
+                    assertEquals(fixture.accountId, resumedOrganizationState.session.userId)
+                    assertEquals("fixture-org", resumedOrganizationState.session.orgId)
+                }
+                // The accepted share leaves its offline Work draft surface open after the transient item is cleared.
+                awaitText("Task draft")
+                awaitText("Task title")
+                compose.waitForIdle()
                 compose.onAllNodesWithText("Pause removes this transient review").fetchSemanticsNodes().let {
                     assertTrue("the paused share remains absent after the real Compose hierarchy resumes", it.isEmpty())
                 }
