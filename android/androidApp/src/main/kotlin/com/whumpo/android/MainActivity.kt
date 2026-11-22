@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         container.activities.started(this)
+        coreComposition?.refreshWearToday()
     }
 
     override fun onStop() {

@@ -7,10 +7,21 @@ fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/android/scripts" "$fixture/bin"
 cp "$script" "$fixture/android/scripts/ci-instrumented.sh"
+cp "$(dirname "$script")/run-gradle-with-compose-diagnostics.sh" "$fixture/android/scripts/run-gradle-with-compose-diagnostics.sh"
 cp "$(dirname "$script")/anr-summary.py" "$fixture/android/scripts/anr-summary.py"
+cp "$(dirname "$script")/instrumented-report-manifest.py" "$fixture/android/scripts/instrumented-report-manifest.py"
 cp "$(dirname "$script")/verify-instrumented-results.py" "$fixture/android/scripts/verify-instrumented-results.py"
 cp "$(dirname "$script")/instrumented-test-inventory.json" "$fixture/android/scripts/instrumented-test-inventory.json"
+cp "$(dirname "$script")/verify-wear-instrumented-results.py" "$fixture/android/scripts/verify-wear-instrumented-results.py"
+cp "$(dirname "$script")/wear-instrumented-test-inventory.json" "$fixture/android/scripts/wear-instrumented-test-inventory.json"
+cat >"$fixture/android/scripts/diagnose-compose-plugin-resolution.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'diagnostic|%s\n' "${DIAGNOSTIC_STATUS:-0}" >>"$CALLS"
+exit "${DIAGNOSTIC_STATUS:-0}"
+SH
+chmod +x "$fixture/android/scripts/diagnose-compose-plugin-resolution.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 "$(dirname "$script")/test-verify-instrumented-results.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$(dirname "$script")/test-verify-wear-instrumented-results.py"
 # Record actual validator arguments in the private fixture, not the public source.
 python3 - "$fixture/android/scripts/verify-instrumented-results.py" <<'PYMARK'
 import sys
@@ -18,13 +29,27 @@ from pathlib import Path
 p = Path(sys.argv[1])
 p.write_text("import os, sys\nwith open(os.environ['CALLS'], 'a') as f: f.write('validator|' + '|'.join(sys.argv[1:]) + '\\n')\n" + p.read_text())
 PYMARK
+python3 - "$fixture/android/scripts/verify-wear-instrumented-results.py" <<'PYMARK'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+p.write_text("import os, sys\nwith open(os.environ['CALLS'], 'a') as f: f.write('wear-validator|' + '|'.join(sys.argv[1:]) + '\\n')\n" + p.read_text())
+PYMARK
 cat >"$fixture/android/scripts/mock-results.py" <<'PYMOCK'
 import json, os
 from pathlib import Path
+import sys
 import xml.etree.ElementTree as E
 inventory = json.loads(Path('scripts/instrumented-test-inventory.json').read_text())
+wear_inventory = json.loads(Path('scripts/wear-instrumented-test-inventory.json').read_text())
 mode = os.environ.get('RESULT_MODE', 'pass')
-for flavor in ('local', 'deployed'):
+command = ' '.join(sys.argv[1:])
+phone_flavors = []
+if ':androidApp:connectedLocalDebugAndroidTest' in command:
+    phone_flavors.append('local')
+if ':androidApp:connectedDeployedDebugAndroidTest' in command:
+    phone_flavors.append('deployed')
+for flavor in phone_flavors:
     folder = Path('androidApp/build/outputs/androidTest-results/connected/debug/flavors') / flavor
     folder.mkdir(parents=True, exist_ok=True)
     if mode == 'missing' or (mode == 'local-only' and flavor != 'local'):
@@ -51,13 +76,46 @@ for flavor in ('local', 'deployed'):
     suite.set('tests', str(len(cases) + (mode == 'inconsistent')))
     report = folder / 'TEST-device.xml'
     report.write_text('<testsuites' if mode == 'malformed' else E.tostring(suite, encoding='unicode'))
+wear_flavors = []
+if ':wearApp:connectedLocalDebugAndroidTest' in command:
+    wear_flavors.append('local')
+if ':wearApp:connectedDeployedDebugAndroidTest' in command:
+    wear_flavors.append('deployed')
+for flavor in wear_flavors:
+    folder = Path('wearApp/build/outputs/androidTest-results/connected/debug/flavors') / flavor
+    folder.mkdir(parents=True, exist_ok=True)
+    if mode == 'missing-wear' or (mode == 'wear-local-only' and flavor != 'local'):
+        continue
+    suite = E.Element('testsuites', tests='0', failures='0', errors='0', skipped='0')
+    for cls, names in wear_inventory['classes'].items():
+        for name in names:
+            E.SubElement(suite, 'testcase', classname=cls, name=name)
+    if mode == 'wear-skip':
+        for case in suite:
+            E.SubElement(case, 'skipped').text = 'synthetic skip'
+        suite.set('skipped', str(len(suite)))
+    cases = list(suite.iter('testcase'))
+    props = E.SubElement(suite, 'properties')
+    E.SubElement(props, 'property', name='device', value=os.environ['ANDROID_SERIAL'])
+    suite.set('tests', str(len(cases)))
+    report = folder / 'TEST-wear-device.xml'
+    report.write_text(E.tostring(suite, encoding='unicode'))
 PYMOCK
 cat >"$fixture/android/gradlew" <<'SH'
 #!/usr/bin/env bash
 printf 'gradle %s\n' "$*" >>"$CALLS"
+printf 'gradle-start|%s\n' "$*" >>"$CALLS"
 printf 'selector|%s\n' "$ANDROID_SERIAL" >>"$CALLS"
-python3 scripts/mock-results.py
-exit "$GRADLE_STATUS"
+python3 scripts/mock-results.py "$@"
+status=$?
+if [[ "$status" == 0 ]]; then
+  status="$GRADLE_STATUS"
+fi
+if [[ "$PLUGIN_MARKER_ERROR" == 1 ]]; then
+  echo "Plugin [id: 'org.jetbrains.kotlin.plugin.compose', version: '2.4.21', apply: false] was not found"
+fi
+printf 'gradle-finish|%s|%s\n' "$*" "$status" >>"$CALLS"
+exit "$status"
 SH
 cat >"$fixture/android/scripts/test-worker-journey.sh" <<'SH'
 #!/usr/bin/env bash
@@ -107,7 +165,7 @@ exec "$@"
 SH
 chmod +x "$fixture/android/gradlew" "$fixture/bin/"*
 export PATH="$fixture/bin:$PATH" ANDROID_SERIAL=emulator-5554
-export CALLS="$fixture/calls" GRADLE_STATUS=0 ADB_STATUS=0
+export CALLS="$fixture/calls" GRADLE_STATUS=0 ADB_STATUS=0 PLUGIN_MARKER_ERROR=0 DIAGNOSTIC_STATUS=0
 out="$fixture/android/androidApp/build/outputs/instrumented-diagnostics"
 run() {
   local api=$1 expected=$2 status=0
@@ -115,14 +173,49 @@ run() {
   export DEVICE_API="$api"
   bash "$fixture/android/scripts/ci-instrumented.sh" "$api" || status=$?
   [[ "$status" == "$expected" && "$(cat "$out/test-exit-code.txt")" == "$expected" ]]
-  [[ "$(grep -c '^gradle ' "$CALLS")" == 1 ]]
   grep -Fxq 'selector|emulator-5554' "$CALLS"
+  local tasks=(
+    :androidApp:connectedLocalDebugAndroidTest
+    :androidApp:connectedDeployedDebugAndroidTest
+  )
+  if [[ "$api" == 36 ]]; then
+    tasks+=(
+      :wearApp:connectedLocalDebugAndroidTest
+      :wearApp:connectedDeployedDebugAndroidTest
+    )
+  fi
+  local expectedGradleLines=() expectedEvents=() taskArgs statusForTask
+  for task in "${tasks[@]}"; do
+    taskArgs="$task -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest"
+    expectedGradleLines+=("gradle $taskArgs")
+    statusForTask=0
+    if [[ "${GRADLE_STATUS:-0}" != 0 && "${#expectedGradleLines[@]}" == 1 ]]; then
+      statusForTask="$GRADLE_STATUS"
+    fi
+    expectedEvents+=("gradle-start|$taskArgs" "gradle-finish|$taskArgs|$statusForTask")
+  done
+  if [[ "${GRADLE_STATUS:-0}" != 0 ]]; then
+    expectedGradleLines=("${expectedGradleLines[0]}")
+    expectedEvents=("${expectedEvents[0]}" "${expectedEvents[1]}")
+  fi
+  [[ "$(grep '^gradle ' "$CALLS" || true)" == "$(printf '%s\n' "${expectedGradleLines[@]}")" ]]
+  [[ "$(grep -E '^gradle-(start|finish)[|]' "$CALLS" || true)" == "$(printf '%s\n' "${expectedEvents[@]}")" ]]
+  if [[ "$GRADLE_STATUS" != 0 && "$PLUGIN_MARKER_ERROR" == 1 ]]; then
+    [[ "$(grep -c '^diagnostic|' "$CALLS" || true)" == 1 ]]
+  else
+    [[ "$(grep -c '^diagnostic|' "$CALLS" || true)" == 0 ]]
+  fi
   if [[ "$GRADLE_STATUS" == 0 ]]; then
     grep -Fxq "validator|androidApp/build/outputs/androidTest-results/connected|$api|emulator-5554" "$CALLS"
+    if [[ "$api" == 36 && ( "$expected" == 0 || "${RESULT_MODE:-pass}" == missing-wear || "${RESULT_MODE:-pass}" == wear-skip ) ]]; then
+      grep -Fxq 'wear-validator|wearApp/build/outputs/androidTest-results/connected|emulator-5554' "$CALLS"
+    elif [[ "$api" == 28 || "$expected" != 0 ]]; then
+      [[ "$(grep -c '^wear-validator|' "$CALLS" || true)" == 0 ]]
+    fi
   else
     [[ "$(grep -c '^validator|' "$CALLS" || true)" == 0 ]]
+    [[ "$(grep -c '^wear-validator|' "$CALLS" || true)" == 0 ]]
   fi
-  grep -Fxq 'gradle connectedLocalDebugAndroidTest connectedDeployedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest' "$CALLS"
   local anrCall='adb|-s|emulator-5554|logcat|-b|events|-d|-v|raw|am_anr:I|*:S'
   local expectedAdb=$'adb|-s|emulator-5554|shell|getprop|ro.build.version.sdk\n'"$anrCall"$'\nadb|-s|emulator-5554|get-state\nadb|-s|emulator-5554|logcat|-d|-v|threadtime|WhumpoTreeDiagnostics:E|*:S\n'"$anrCall"
   [[ "$(grep -c '^adb|' "$CALLS")" == 5 ]]
@@ -130,9 +223,34 @@ run() {
   [[ "$(grep -c '^unexpected-' "$CALLS" || true)" == 0 ]]
   ! grep -Fq dumpsys "$CALLS"
   [[ "$(grep -c '^journey$' "$CALLS" || true)" == 0 ]]
-  [[ "$(find "$out" -maxdepth 1 -type f -printf '%f\n' | sort)" == $'anr-after.json\nanr-before.json\ndevice-state.txt\ntest-exit-code.txt\ntree-failures.txt' ]]
+  [[ "$(find "$out" -maxdepth 1 -type f -print | sed 's#^.*/##' | sort)" == $'anr-after.json\nanr-before.json\ndevice-state.txt\ntest-exit-code.txt\ntest-report-manifest.json\ntree-failures.txt' ]]
   [[ -s "$out/device-state.txt" && -s "$out/tree-failures.txt" ]]
   ! grep -r 'synthetic-private' "$out"
+  python3 - "$out/test-report-manifest.json" "$api" "$status" <<'PYMANIFEST'
+import json, sys
+from pathlib import Path
+path, api, status = Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+manifest = json.loads(path.read_text())
+assert manifest["version"] == 1
+assert manifest["api"] == api and manifest["serial"] == "emulator-5554"
+assert manifest["gradleExitCode"] == status
+expected_modules = {"androidApp": {"local", "deployed"}}
+if api == 36:
+    expected_modules["wearApp"] = {"local", "deployed"}
+assert {(entry["module"], entry["flavor"]) for entry in manifest["reports"]} == {
+    (module, flavor) for module, flavors in expected_modules.items() for flavor in flavors
+}
+for entry in manifest["reports"]:
+    for report in entry["junit"]:
+        assert report["path"].startswith(entry["module"] + "/build/outputs/androidTest-results/connected/debug/flavors/" + entry["flavor"] + "/TEST-")
+        if "counts" in report:
+            assert set(report["counts"]) == {"tests", "failures", "errors", "skipped"}
+        else:
+            assert report.get("parse") == "invalid-xml"
+    if entry["htmlReport"] is not None:
+        assert entry["htmlReport"]["path"] == entry["module"] + "/build/reports/androidTests/connected/debug/flavors/" + entry["flavor"] + "/index.html"
+assert not {"message", "stack", "logcat"} & set(manifest)
+PYMANIFEST
   for stage in before after; do
     if [[ "$ADB_STATUS" == 0 ]]; then
       [[ "$(cat "$out/anr-$stage.json")" == '{"version":1,"status":"captured","events":[{"process":"other","pid":1234,"reasonKind":"other"}]}' ]]
@@ -144,7 +262,10 @@ run() {
 }
 run 36 0
 run 28 0
+PLUGIN_MARKER_ERROR=1 run 36 0
 GRADLE_STATUS=42 run 36 42
+GRADLE_STATUS=42 PLUGIN_MARKER_ERROR=1 DIAGNOSTIC_STATUS=9 run 36 42
+GRADLE_STATUS=42 PLUGIN_MARKER_ERROR=0 DIAGNOSTIC_STATUS=9 run 36 42
 ADB_STATUS=9 run 36 0
 GRADLE_STATUS=42 ADB_STATUS=9 run 28 42
 RESULT_MODE=empty run 36 3
@@ -159,6 +280,8 @@ RESULT_MODE=duplicate-device run 36 3
 # The preceding reports must be removed; a false adapter success cannot reuse them.
 run 36 0
 RESULT_MODE=missing run 36 3
+RESULT_MODE=missing-wear run 36 3
+RESULT_MODE=wear-skip run 36 3
 
 reject() {
   local status=0

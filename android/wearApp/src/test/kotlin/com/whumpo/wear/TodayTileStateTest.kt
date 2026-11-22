@@ -40,4 +40,17 @@ class TodayTileStateTest {
         ).counts.deadlines.display())
         assertEquals("10", TodayCount(TODAY_SECTION_LIMIT).display())
     }
+
+    @Test
+    fun verifiedWireExpiryControlsRecoveryEvenWhenBriefingTimestampIsNewer() {
+        val snapshot = TodayTileSnapshot(
+            generatedAt = Instant.ofEpochMilli(now - 1_000),
+            counts = empty.copy(approvals = TodayCount(3)),
+            expiresAtMillis = now + 1,
+        )
+
+        val fresh = assertIs<TodayTileState.Available>(todayTileState(snapshot, now))
+        assertEquals(now + 1, fresh.expiresAtMillis)
+        assertEquals(TodayTileState.Unavailable, todayTileState(snapshot, now + 1))
+    }
 }

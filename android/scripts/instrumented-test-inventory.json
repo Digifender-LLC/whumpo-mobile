@@ -27,6 +27,9 @@
       "syntheticLauncherSwitchesOnlyVerifiedMembershipsAndDiscardsOldScope",
       "syntheticLauncherVerifiesReadinessAndRevokesTheExactSession"
     ],
+    "com.whumpo.android.CoreWearTodayTransportTest": [
+      "nativePutDataRequestBytesAreTheReceiverJsonPayload"
+    ],
     "com.whumpo.android.CredentialHygieneTest": [
       "aSignedInSessionNeverReachesTheDeviceLogOrAPlainFile",
       "theBackupManagerRefusesThePackageWhileProtectedStateExists"

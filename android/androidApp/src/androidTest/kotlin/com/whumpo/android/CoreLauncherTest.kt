@@ -116,6 +116,7 @@ class CoreLauncherTest {
                 assertTrue("GET /v1/organization" !in fixture.requests)
                 compose.onNodeWithText("Open Today").assertDoesNotExist()
                 compose.onNodeWithText("Open Work").assertDoesNotExist()
+                assertTrue(fixture.requests.none { it.endsWith("/briefing/today") || it.endsWith("/work/tasks") })
 
                 fixture.readiness = CoreLauncherFixture.Readiness.Foreign
                 click("Check again")
@@ -123,18 +124,31 @@ class CoreLauncherTest {
                 assertTrue("GET /v1/organization" !in fixture.requests)
                 compose.onNodeWithText("Open Today").assertDoesNotExist()
                 compose.onNodeWithText("Open Work").assertDoesNotExist()
+                assertTrue(fixture.requests.none { it.endsWith("/briefing/today") || it.endsWith("/work/tasks") })
 
                 fixture.readiness = CoreLauncherFixture.Readiness.Ready
                 click("Check again")
                 awaitText("Fixture organization")
                 compose.onNodeWithText("Role: viewer").assertIsDisplayed()
                 awaitText("Organization access is active.")
-                assertTrue(fixture.requests.none { it.endsWith("/briefing/today") || it.endsWith("/work/tasks") })
+                val backgroundTodayReads = fixture.requests.count { it == "GET /v1/briefing/today" }
+                assertTrue("only the session-scoped background Today read is allowed: ${fixture.requests}", backgroundTodayReads <= 1)
+                assertTrue("Work waits for explicit user navigation", fixture.requests.none { it.endsWith("/work/tasks") })
+                val todayBaseline = fixture.requests.count { it == "GET /v1/briefing/today" }
+                fixture.todayResponsePhase = CoreLauncherFixture.TodayResponsePhase.HoldStale
                 click("Open Today")
                 awaitText("Loading Today…")
-                compose.waitUntil(10_000) { fixture.staleTodayRequested.isCompleted }
+                compose.waitUntil(10_000) {
+                    fixture.staleTodayRequested.isCompleted &&
+                        fixture.requests.count { it == "GET /v1/briefing/today" } > todayBaseline
+                }
+                assertTrue(
+                    "the manual Today action must start a request beyond the ready-background baseline",
+                    fixture.requests.count { it == "GET /v1/briefing/today" } > todayBaseline,
+                )
                 pressBack()
                 awaitText("Fixture organization")
+                fixture.todayResponsePhase = CoreLauncherFixture.TodayResponsePhase.Fresh
                 click("Open Today")
                 awaitText("Needs attention")
                 awaitText("Review synthetic checklist")
@@ -165,27 +179,34 @@ class CoreLauncherTest {
                 assertTrue("POST /v1/account-security/sign-out" !in fixture.requests)
                 fixture.releaseRevocation.complete(Unit)
                 compose.waitUntil(10_000) { "POST /v1/account-security/sign-out" in fixture.requests }
-                assertEquals(
-                    listOf(
+                val expectedManualRequests = listOf(
                         "POST /v1/account-security/password/login/start",
                         "POST /v1/account-security/password/login/verify",
                         "GET /v1/account-security/organizations",
                         "POST /v1/account-security/session",
                         "GET /v1/auth/session",
-                        "GET /v1/organization/readiness",
-                        "GET /v1/organization/readiness",
-                        "GET /v1/organization/readiness",
                         "GET /v1/organization",
                         "GET /v1/organization/entitlements",
-                        "GET /v1/briefing/today",
-                        "GET /v1/briefing/today",
                         "GET /v1/work/tasks",
                         "GET /v1/work/tasks",
                         "GET /v1/work/tasks",
                         "DELETE /v1/auth/session",
                         "POST /v1/account-security/sign-out",
-                    ),
-                    fixture.requests.filterNot { it in setOf("GET /v1/workspaces", "GET /v1/projects", "GET /v1/customers") },
+                )
+                assertTrue(
+                    "two explicit Today openings plus at most one scoped background read",
+                    fixture.requests.count { it == "GET /v1/briefing/today" } in 2..3,
+                )
+                assertTrue(
+                    "three UI readiness checks plus at most two process-owned checks (initial and one retry)",
+                    fixture.requests.count { it == "GET /v1/organization/readiness" } in 3..5,
+                )
+                assertEquals(
+                    expectedManualRequests,
+                    fixture.requests.filterNot {
+                        it == "GET /v1/briefing/today" || it == "GET /v1/organization/readiness" ||
+                            it in setOf("GET /v1/workspaces", "GET /v1/projects", "GET /v1/customers")
+                    },
                 )
                 for (path in listOf("workspaces", "projects", "customers")) assertEquals(2, fixture.requests.count { it == "GET /v1/$path" })
             }
@@ -233,6 +254,7 @@ class CoreLauncherTest {
                     setOf("https://core.example.test"),
                 ),
                 it,
+                app,
             )
         }
         app.coreLauncherEngine = fixture::engine
@@ -351,6 +373,7 @@ class CoreLauncherTest {
 
 private class CoreLauncherFixture(private val multipleOrganizations: Boolean = false) {
     enum class Readiness { Unready, Foreign, Ready }
+    enum class TodayResponsePhase { Fresh, HoldStale }
 
     val requests = CopyOnWriteArrayList<String>()
     val releaseRevocation = CompletableDeferred<Unit>()
@@ -366,6 +389,7 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
     @Volatile var emptyWork = false
     @Volatile var denySwitch = false
     @Volatile var readiness = Readiness.Unready
+    @Volatile var todayResponsePhase = TodayResponsePhase.Fresh
     private val deadline = System.currentTimeMillis() + 300_000
     private val grant = "ag1." + "g".repeat(42) + "A"
     private val token = "t".repeat(42) + "A"
@@ -442,10 +466,12 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
             }
             "GET /v1/organization/readiness" -> {
                 assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
+                val projectId = if (switched) "other-project" else "fixture-project"
+                val foreignOrgId = if (switched) "fixture-org" else "other-org"
                 when (readiness) {
-                    Readiness.Unready -> """{"orgId":"fixture-org","ready":false}"""
-                    Readiness.Foreign -> """{"orgId":"other-org","ready":true,"projectId":"fixture-project"}"""
-                    Readiness.Ready -> """{"orgId":"$organization","ready":true,"projectId":"fixture-project"}"""
+                    Readiness.Unready -> """{"orgId":"$organization","ready":false}"""
+                    Readiness.Foreign -> """{"orgId":"$foreignOrgId","ready":true,"projectId":"$projectId"}"""
+                    Readiness.Ready -> """{"orgId":"$organization","ready":true,"projectId":"$projectId"}"""
                 }
             }
             "GET /v1/organization" -> {
@@ -468,8 +494,11 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
                     "siteBuildAvailable":false,"revision":1,"effectiveFrom":1,"expiresAt":$deadline}"""
             }
             "GET /v1/briefing/today" -> {
-                assertEquals("Bearer $token", authorization)
-                val title = if (requests.count { it == route } == 1) {
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
+                assertEquals("Today cannot be read before this organization is ready", Readiness.Ready, readiness)
+                val todayTaskId = if (switched) "other-task" else "fixture-task"
+                val todayProjectId = if (switched) "other-project" else "fixture-project"
+                val title = if (todayResponsePhase == TodayResponsePhase.HoldStale) {
                     staleTodayRequested.complete(Unit)
                     withContext(NonCancellable) {
                         releaseStaleToday.await()
@@ -481,22 +510,26 @@ private class CoreLauncherFixture(private val multipleOrganizations: Boolean = f
                 """{"generatedAt":"2026-11-14T12:00:00.000Z","dueBefore":"2026-11-15T12:00:00.000Z",
                     "verifiedSince":"2026-11-13T12:00:00.000Z","empty":false,"sections":{"approvals":$emptySection,
                     "deadlines":$emptySection,"verified":$emptySection,"blocked":{"items":[{"provenance":"source_record",
-                    "observedAt":"2026-11-14T10:00:00.000Z","source":{"kind":"task","taskId":"fixture-task",
-                    "projectId":"fixture-project","version":1},"title":"$title","status":"blocked","dueAt":null}],"truncated":false}}}"""
+                    "observedAt":"2026-11-14T10:00:00.000Z","source":{"kind":"task","taskId":"$todayTaskId",
+                    "projectId":"$todayProjectId","version":1},"title":"$title","status":"blocked","dueAt":null}],"truncated":false}}}"""
             }
             "GET /v1/workspaces", "GET /v1/projects", "GET /v1/customers" -> {
-                assertEquals("Bearer $token", authorization)
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
                 """{"items":[]}"""
             }
             "GET /v1/work/tasks" -> {
-                assertEquals("Bearer $token", authorization)
+                assertEquals(if (switched) "Bearer $switchedToken" else "Bearer $token", authorization)
                 if (revokeOnWork) return@MockEngine respond("{}", HttpStatusCode.Unauthorized)
                 if (denyWork) return@MockEngine respond("{}", HttpStatusCode.Forbidden)
                 val total = if (emptyWork) 0 else 1
-                val items = if (emptyWork) "" else """{"id":"fixture-task","projectId":"fixture-project","workspaceId":"fixture-workspace","title":"Current synthetic task","description":null,"parentTaskId":null,"dueAt":null,"status":"ready","version":1}"""
+                val taskId = if (switched) "other-task" else "fixture-task"
+                val projectId = if (switched) "other-project" else "fixture-project"
+                val workspaceId = if (switched) "other-workspace" else "fixture-workspace"
+                val items = if (emptyWork) "" else """{"id":"$taskId","projectId":"$projectId","workspaceId":"$workspaceId","title":"Current synthetic task","description":null,"parentTaskId":null,"dueAt":null,"status":"ready","version":1}"""
                 """{"items":[$items],"counts":{"total":$total,"overdue":0,"byStatus":{"backlog":0,"ready":$total,"in_progress":0,"blocked":0,"needs_approval":0,"done":0,"canceled":0}},"asOf":"2026-11-19T12:00:00Z"}"""
             }
             "DELETE /v1/auth/session" -> {
+                // Session cleanup is scoped to the captured old authority even after the UI switches.
                 assertEquals("Bearer $token", authorization)
                 requests += route
                 releaseRevocation.await()

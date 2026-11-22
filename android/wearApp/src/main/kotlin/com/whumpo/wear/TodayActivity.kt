@@ -20,7 +20,7 @@ class TodayActivity : Activity() {
         }
         content.addView(text(getString(R.string.tile_name), 22f, heading = true), spaced())
 
-        when (val state = todayTileState(TodayTileSource.snapshot(), System.currentTimeMillis())) {
+        when (val state = todayTileState(TodayTileSource.snapshot(this), System.currentTimeMillis())) {
             TodayTileState.Unavailable -> content.addView(
                 text(getString(R.string.today_unavailable_detail), 16f), spaced(),
             )

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import {checkPolicy, checkTrackedPaths} from '../tools/check-policy.mjs';
 
@@ -6,11 +7,22 @@ const inputs = {
   android: readFileSync(new URL('../.github/workflows/android.yml', import.meta.url), 'utf8'),
   ci: readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'),
   instrumentation: readFileSync(new URL('../android/scripts/ci-instrumented.sh', import.meta.url), 'utf8'),
+  diagnosticRunner: readFileSync(new URL('../android/scripts/run-gradle-with-compose-diagnostics.sh', import.meta.url), 'utf8'),
   sdkInstaller: readFileSync(new URL('../android/scripts/ci-install-sdk.sh', import.meta.url), 'utf8'),
   dependabot: readFileSync(new URL('../.github/dependabot.yml', import.meta.url), 'utf8')
 };
 
 assert.deepEqual(checkPolicy(inputs), [], 'current workflow policy should pass');
+assert.ok(inputs.diagnosticRunner.includes('if (( gradle_status != 0 ))')
+  && inputs.diagnosticRunner.includes('grep -Fq "Plugin [id: \'org.jetbrains.kotlin.plugin.compose\'"'),
+  'Compose resolution probe runs only for the specific plugin-marker failure');
+assert.ok(inputs.android.includes('working-directory: android\n        run: bash scripts/run-gradle-with-compose-diagnostics.sh'),
+  'Android build must invoke the diagnostic wrapper relative to its working directory');
+assert.ok(inputs.diagnosticRunner.includes('exit "$gradle_status"')
+  && inputs.diagnosticRunner.includes('org.jetbrains.kotlin.plugin.compose')
+  && inputs.diagnosticRunner.includes('bash scripts/diagnose-compose-plugin-resolution.sh'),
+  'diagnostic wrapper must preserve the original Gradle result and check the exact plugin');
+execFileSync('bash', ['android/scripts/test-gradle-compose-diagnostic-status.sh'], {stdio: 'inherit'});
 
 function mutateActionReferences(base, action, replacement) {
   const escapedAction = action.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -79,7 +91,13 @@ rejects({dependabot: inputs.dependabot.replace('directory: /android', 'directory
   'Gradle dependency updates', 'Gradle updates must use the Android project directory');
 rejects({instrumentation: inputs.instrumentation.replace(
   '-Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest', '')},
-  'client instrumentation command and exclusion', 'missing WorkerJourneyTest exclusion must fail');
+  'API-specific phone and Wear instrumentation tasks and exclusion', 'missing WorkerJourneyTest exclusion must fail');
+rejects({instrumentation: inputs.instrumentation.replace(
+  ':wearApp:connectedLocalDebugAndroidTest', '')},
+  'API-specific phone and Wear instrumentation tasks and exclusion', 'missing API 36 Wear task must fail');
+rejects({instrumentation: inputs.instrumentation.replace(
+  'if [[ "$api" == 36 ]]; then', 'if [[ "$api" == 28 ]]; then')},
+  'API-specific phone and Wear instrumentation tasks and exclusion', 'Wear instrumentation must remain API 36-only');
 rejects({ci: inputs.ci.replace('          bash android/scripts/test-ci-install-sdk.sh\n', '')},
   'policy command bash android/scripts/test-ci-install-sdk.sh',
   'SDK installer regression must remain in the policy job');
@@ -122,6 +140,8 @@ rejects({android: misplacedExclusion}, 'Android artifact upload paths', 'two exc
 for (const [before, after, label] of [
   [logcatExclusion, '            !android/**/unrelated*\n', 'an unrelated exclusion must not protect logcat'],
   ['            android/androidApp/build/outputs/androidTest-results/**\n', '', 'JUnit outputs must remain uploaded'],
+  ['            android/wearApp/build/outputs/androidTest-results/**\n', '', 'Wear JUnit outputs must remain uploaded'],
+  ['            android/wearApp/build/reports/androidTests/**\n', '', 'Wear test reports must remain uploaded'],
   ['            android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt\n', '', 'allowlisted tree diagnostics must remain uploaded'],
   ['            android/androidApp/build/outputs/androidTest-results/**\n', '            android/androidApp/build/outputs/**\n', 'a broader output path must fail'],
   [logcatExclusion, `${logcatExclusion}            !android/**/*.xml\n`, 'a report-removing exclusion must fail'],

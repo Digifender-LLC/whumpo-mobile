@@ -33,7 +33,7 @@ jobs:
         run: bash android/scripts/ci-install-sdk.sh build
       - name: Assemble, lint and run unit and host tests
         working-directory: android
-        run: ./gradlew assembleLocalDebug assembleDeployedDebug assembleLocalDebugAndroidTest assembleDeployedDebugAndroidTest lintLocalDebug lintDeployedDebug :shared:jvmTest :shared:compileKotlinJvm :shared:testAndroidHostTest testLocalDebugUnitTest testDeployedDebugUnitTest :wearApp:testDebugUnitTest :wearApp:assembleDebug :wearApp:assembleRelease :wearApp:lintRelease
+        run: bash scripts/run-gradle-with-compose-diagnostics.sh ./gradlew assembleLocalDebug assembleDeployedDebug assembleLocalDebugAndroidTest assembleDeployedDebugAndroidTest lintLocalDebug lintDeployedDebug :shared:jvmTest :shared:compileKotlinJvm :shared:testAndroidHostTest testLocalDebugUnitTest testDeployedDebugUnitTest :wearApp:testLocalDebugUnitTest :wearApp:testDeployedDebugUnitTest :wearApp:assembleLocalDebug :wearApp:assembleDeployedDebug :wearApp:assembleLocalDebugAndroidTest :wearApp:assembleDeployedDebugAndroidTest :wearApp:assembleDeployedRelease :wearApp:lintDeployedRelease
       - name: Prepare local debug APK evidence
         run: python3 android/scripts/export-debug-apks.py
       - name: Upload local debug APK evidence
@@ -60,6 +60,8 @@ jobs:
             android/shared/build/outputs/roborazzi/**
             android/wearApp/build/reports/**
             android/wearApp/build/test-results/**
+            android/build/diagnostics/compose-plugin-resolution/summary.txt
+            android/build/diagnostics/compose-plugin-resolution/probe.log
             !android/**/logcat*
           if-no-files-found: ignore
           retention-days: 7
@@ -113,8 +115,11 @@ jobs:
             android/androidApp/build/outputs/instrumented-diagnostics/anr-before.json
             android/androidApp/build/outputs/instrumented-diagnostics/anr-after.json
             android/androidApp/build/outputs/instrumented-diagnostics/device-state.txt
+            android/androidApp/build/outputs/instrumented-diagnostics/test-report-manifest.json
             android/androidApp/build/outputs/instrumented-diagnostics/tree-failures.txt
             android/androidApp/build/outputs/instrumented-diagnostics/test-exit-code.txt
+            android/wearApp/build/reports/androidTests/**
+            android/wearApp/build/outputs/androidTest-results/**
             !android/**/logcat*
           if-no-files-found: ignore
           retention-days: 7

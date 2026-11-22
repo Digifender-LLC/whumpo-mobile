@@ -30,6 +30,7 @@ capture() {
   timeout -k 2s 10s adb -s "$ANDROID_SERIAL" get-state >"$out/device-state.txt" 2>&1 || true
   timeout -k 2s 10s adb -s "$ANDROID_SERIAL" logcat -d -v threadtime WhumpoTreeDiagnostics:E '*:S' >"$out/tree-failures.txt" 2>&1 || true
   capture_anr "$out/anr-after.json" || true
+  python3 scripts/instrumented-report-manifest.py "$api" "$ANDROID_SERIAL" "$status" "$out/test-report-manifest.json" || true
   exit "$status"
 }
 trap capture EXIT
@@ -39,5 +40,23 @@ capture_anr "$out/anr-before.json" || true
 # A previous run's reports cannot establish that this invocation executed tests.
 results=androidApp/build/outputs/androidTest-results/connected
 rm -rf "$results"
-./gradlew connectedLocalDebugAndroidTest connectedDeployedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
+tasks=(
+  :androidApp:connectedLocalDebugAndroidTest
+  :androidApp:connectedDeployedDebugAndroidTest
+)
+if [[ "$api" == 36 ]]; then
+  wear_results=wearApp/build/outputs/androidTest-results/connected
+  rm -rf "$wear_results"
+  tasks+=(
+    :wearApp:connectedLocalDebugAndroidTest
+    :wearApp:connectedDeployedDebugAndroidTest
+  )
+fi
+for task in "${tasks[@]}"; do
+  bash scripts/run-gradle-with-compose-diagnostics.sh ./gradlew "$task" \
+    -Pandroid.testInstrumentationRunnerArguments.notClass=com.whumpo.android.WorkerJourneyTest
+done
 python3 scripts/verify-instrumented-results.py "$results" "$api" "$ANDROID_SERIAL"
+if [[ "$api" == 36 ]]; then
+  python3 scripts/verify-wear-instrumented-results.py "$wear_results" "$ANDROID_SERIAL"
+fi
