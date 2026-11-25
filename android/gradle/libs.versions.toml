@@ -13,7 +13,7 @@ minSdk = "28"
 # 1.12+ makes ComponentActivity a NavigationEventDispatcherOwner, which Compose Multiplatform back handling needs.
 androidxActivity = "1.13.0"
 androidxBrowser = "1.10.0"
-androidxComposeBom = "2026.09.00"
+androidxComposeBom = "2026.11.01"
 androidxCore = "1.19.1"
 androidxExifinterface = "1.4.1"
 androidxCredentials = "1.6.0"
