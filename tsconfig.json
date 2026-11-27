@@ -1,0 +1,20 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true
+  },
+  "exclude": [
+    "node_modules",
+    "v6-snapshot",
+    "v7-snapshot",
+    ".native-cache",
+    ".native-build",
+    "artifacts",
+    "v8-snapshot",
+    "v9-snapshot",
+    "v10-snapshot",
+    "v11-snapshot",
+    "v12-snapshot",
+    "v13-snapshot"
+  ]
+}

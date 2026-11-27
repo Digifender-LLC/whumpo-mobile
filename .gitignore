@@ -1,15 +1,45 @@
+# Dependencies, virtualenvs and local development state
+node_modules/
+.venv/
+.expo/
+.native-cache/
+.native-build/
+.gradle/
+.kotlin/
+.cxx/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+.metro-health-check*
+
+# Generated native projects (regenerate from app.json with Expo prebuild)
+/android/
+/ios/
+# Build products at any nesting level; keep delivered artifacts/ explicitly.
+build/
+DerivedData/
+Pods/
+dist/
+web-build/
+screenshots/temp/
+expo-env.d.ts
+
+# Local credentials and machine settings
+.DS_Store
 .env
 .env.*
 !.env.example
-.dev.vars
-.secrets/
 *.jks
 *.keystore
+*.p8
 *.p12
-google-services.json
-local.properties
-.gradle/
-.kotlin/
-**/build/
-.idea/
-*.iml
+*.key
+*.mobileprovision
+*.pem
+.claude/settings.local.json
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.orig.*
+
+# Source, immutable snapshots, artifacts/, screenshots/ and compare/ are tracked.

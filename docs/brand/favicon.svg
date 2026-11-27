@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="favicon-title">
-  <title id="favicon-title">Whumpo</title>
-  <rect width="64" height="64" rx="14" fill="#20373A"/>
-  <path fill="#F4F4EC" transform="translate(6 5) scale(.82)" d="M5 51 8 34q4-11 15-15l-1-9q7 0 12 10l4 2q7 4 9 11 8-3 13-9 0 9-5 15l4 2-2 9-12 5-10-3-7-7-8 10H7Z"/>
-  <path fill="#70A69D" transform="translate(6 5) scale(.82)" d="m47 33 13-9q0 9-5 15Z"/>
-</svg>

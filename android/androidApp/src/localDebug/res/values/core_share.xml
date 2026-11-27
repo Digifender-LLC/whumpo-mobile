@@ -1,5 +1,0 @@
-<resources>
-    <string name="core_share_label">Whumpo Work draft</string>
-    <string name="core_share_unsupported">Share one plain-text item or HTTPS link.</string>
-    <string name="core_share_unavailable">Open a ready organization or its Work list, then share again.</string>
-</resources>

@@ -1,6 +1,0 @@
-<resources>
-    <string name="core_today_shortcut">Open Today</string>
-    <string name="core_work_shortcut">Open Work</string>
-    <string name="core_new_task_draft_shortcut">New task draft</string>
-    <string name="core_pending_approvals_shortcut">Pending approvals</string>
-</resources>
