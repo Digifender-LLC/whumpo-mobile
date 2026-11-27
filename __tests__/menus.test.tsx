@@ -1,0 +1,35 @@
+import {test,expect,jest} from '@jest/globals';
+import {render,screen,fireEvent} from '@testing-library/react-native';
+import {Details,PartnerScreen} from '../src/details';
+import {HistoryPane} from '../src/HistoryPane';
+import {StateMessage} from '../src/product-ui';
+import {initialState,reducer} from '../src/model';
+jest.mock('react-native-safe-area-context',()=>({useSafeAreaInsets:()=>({top:0,right:0,bottom:0,left:0})}));
+const base={state:initialState,dispatch:jest.fn(),go:jest.fn(),sheet:jest.fn(),approvalId:'intro' as const,listMode:'ready' as const,reload:jest.fn(),setListMode:jest.fn(),prompt:jest.fn()};
+test('settings opens real second-level routes including the visible pinned chooser',async()=>{await render(<Details {...base} page="Settings"/>);await fireEvent.press(screen.getByRole('button',{name:'Pinned tab'}));expect(base.go).toHaveBeenCalledWith('Pinned tab');expect(screen.getByRole('button',{name:'Privacy & data'})).toBeTruthy()});
+test('pinned chooser exposes radio selection and a live tab preview',async()=>{await render(<Details {...base} page="Pinned tab"/>);expect(screen.getByRole('radio',{name:'Work'}).props.accessibilityState.checked).toBe(true);await fireEvent.press(screen.getByRole('radio',{name:'Reviews'}));expect(base.dispatch).toHaveBeenCalledWith({type:'pin',destination:'Reviews'});expect(screen.getByLabelText('Tab preview: Today, Partner, Work, More')).toBeTruthy()});
+test('review details require confirmation and never offer a publish action',async()=>{await render(<Details {...base} page="Approval detail"/>);expect(screen.getByText('Sample check')).toBeTruthy();await fireEvent.press(screen.getByRole('button',{name:'Approve change'}));expect(base.sheet).toHaveBeenCalledWith('Approve:intro');expect(screen.queryByRole('button',{name:'Publish'})).toBeNull()});
+test('approved record is explicit about awaiting the next publish step',async()=>{const state=reducer(initialState,{type:'approve',id:'intro'});await render(<Details {...base} state={state} page="Reviews"/>);expect(screen.getByText('Approved, awaiting publish step')).toBeTruthy();expect(screen.getByText('1 decision needs you')).toBeTruthy()});
+test('loading and error lists provide useful states and Retry',async()=>{const r=await render(<Details {...base} listMode="loading" page="Reviews"/>);expect(screen.getByText('Loading your reviews')).toBeTruthy();await r.rerender(<Details {...base} listMode="error" page="Reviews"/>);await fireEvent.press(screen.getByRole('button',{name:'Try again'}));expect(base.reload).toHaveBeenCalled()});
+test('help expands an answer without leaving the list',async()=>{await render(<Details {...base} page="Help"/>);await fireEvent.press(screen.getByRole('button',{name:'Does approval publish my website?'}));expect(screen.getByText(/Publishing is a separate step/)).toBeTruthy()});
+test('new conversation has three draft prompts and no prototype footer',async()=>{const state=reducer(initialState,{type:'conversation',title:'New conversation'});await render(<PartnerScreen state={state} go={base.go} prompt={base.prompt}/>);await fireEvent.press(screen.getByRole('button',{name:'Review my website draft'}));expect(base.prompt).toHaveBeenCalledWith('Review my website draft');expect(screen.queryByText('Synthetic conversation · no external actions')).toBeNull()});
+test('history removes visual headings but exposes accessible groups, inline organization picker and dismissal',async()=>{const close=jest.fn(),org=jest.fn(),dropdown=jest.fn();const props={state:initialState,onClose:close,onSelect:jest.fn(),onNew:jest.fn(),onSettings:jest.fn(),onOrg:org,onAddOrganization:jest.fn(),dropdown:false,setDropdown:dropdown};const r=await render(<HistoryPane {...props}/>);for(const t of ['Organization','Partner history','Pinned','Recent','Switch organization'])expect(screen.queryByText(t)).toBeNull();expect(screen.getByRole('header',{name:'Pinned conversations'})).toBeTruthy();expect(screen.getByRole('header',{name:'Recent conversations'})).toBeTruthy();await fireEvent(screen.getByRole('button',{name:'Website launch'}),'accessibilityAction',{nativeEvent:{actionName:'closeHistory'}});expect(close).toHaveBeenCalled();await fireEvent.press(screen.getByRole('button',{name:'Switch organization, Studio North'}));expect(dropdown).toHaveBeenCalledWith(true);await r.rerender(<HistoryPane {...props} dropdown/>);await fireEvent.press(screen.getByRole('button',{name:'Field & Form'}));expect(org).toHaveBeenCalledWith('Field & Form')});
+test('empty history search offers recovery',async()=>{await render(<HistoryPane state={initialState} onClose={()=>{}} onSelect={()=>{}} onNew={()=>{}} onSettings={()=>{}} onOrg={()=>{}} onAddOrganization={()=>{}} dropdown={false} setDropdown={()=>{}}/>);await fireEvent.press(screen.getByRole('button',{name:'Search Studio North conversations'}));await fireEvent.changeText(screen.getByLabelText('Search organization conversations'),'not a conversation');expect(screen.getByText('No conversations found')).toBeTruthy();await fireEvent.press(screen.getByRole('button',{name:'Clear search'}));expect(screen.getByRole('button',{name:'Website launch'})).toBeTruthy()});
+test('offline state explains local data without implying a send',async()=>{await render(<StateMessage kind="offline" title="Working locally" detail="Your drafts stay on this device."/>);expect(screen.getByText('Your drafts stay on this device.')).toBeTruthy()});
+
+test('the inline organization picker collapses on selection or Add organization',async()=>{
+ const onAddOrganization=jest.fn(),onOrg=jest.fn(),setDropdown=jest.fn();
+ const props={state:initialState,onClose:jest.fn(),onSelect:jest.fn(),onNew:jest.fn(),onSettings:jest.fn(),onOrg,onAddOrganization,dropdown:true,setDropdown};
+ const result=await render(<HistoryPane {...props}/>);
+ const active=screen.getByRole('button',{name:'Studio North, active'});
+ expect(active.props.accessibilityState.selected).toBe(true);
+ await fireEvent.press(active);
+ expect(onOrg).toHaveBeenCalledWith('Studio North');
+ expect(setDropdown).toHaveBeenLastCalledWith(false);
+ await fireEvent.press(screen.getByRole('button',{name:'Add organization'}));
+ expect(onAddOrganization).toHaveBeenCalledTimes(1);
+ expect(setDropdown).toHaveBeenLastCalledWith(false);
+ await result.rerender(<HistoryPane {...props} dropdown={false}/>);
+ expect(screen.queryByRole('button',{name:'Add organization'})).toBeNull();
+ expect(screen.getByRole('button',{name:'Website launch'})).toBeTruthy();
+});
